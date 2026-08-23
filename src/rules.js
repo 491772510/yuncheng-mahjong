@@ -202,6 +202,27 @@ function isTing(hand) {
   return res;
 }
 
+/** 是否碰碰胡（考虑明牌区）：手牌部分每张牌数量为 3 的倍数或恰一个对子作将 */
+function isPengPengHuWithMelds(hand, melds) {
+  const cnt = countTiles(hand);
+  let pairUsed = false;
+  for (const c of cnt.values()) {
+    const r = c % 3;
+    if (r === 1) return false;
+    if (r === 2) {
+      if (pairUsed) return false;
+      pairUsed = true;
+    }
+  }
+  // 明牌区所有副露都是刻子（peng/gang/angang/bugang），天然满足碰碰胡
+  for (const m of melds || []) {
+    if (m.type !== 'peng' && m.type !== 'gang' && m.type !== 'angang' && m.type !== 'bugang') {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * 计算胡牌番数
  * @param {string[]} hand 胡牌时的 14 张手牌（不含明牌区）
@@ -211,9 +232,10 @@ function isTing(hand) {
  *   haiDi: boolean 海底捞月
  *   qiangGang: boolean 抢杠胡
  *   melds: [{type:'peng'|'gang'|'angang'|'bugang', tile, tiles}] 明牌区
- * @returns {number} 番数
+ * @param {boolean} [detail] 为 true 时返回 { fan, names }
+ * @returns {number | {fan:number, names:string[]}} 番数（detail 时为对象）
  */
-function calcFan(hand, info = {}) {
+function calcFan(hand, info = {}, detail = false) {
   const melds = info.melds || [];
   const winType = info.winType || 'zimo';
   const allTiles = hand.slice();
@@ -224,20 +246,42 @@ function calcFan(hand, info = {}) {
     allTiles.length > 0 && allTiles.every((t) => suitOf(t) === suitOf(allTiles[0]));
 
   let fan = 0;
+  const names = [];
   const isQD = melds.length === 0 && isQiDui(hand);
   if (isQD) {
     fan = isLuxuryQiDui(hand) ? 4 : 2;
-    if (allSuit) fan += 2; // 清七对
+    names.push(isLuxuryQiDui(hand) ? '豪华七对' : '七对');
+    if (allSuit) {
+      fan += 2; // 清七对
+      names.push('清一色');
+    }
   } else {
-    if (isPengPengHu(hand)) fan += 1; // 碰碰胡
-    if (allSuit) fan += 2; // 清一色
+    const pp = melds.length === 0 ? isPengPengHu(hand) : isPengPengHuWithMelds(hand, melds);
+    if (pp) {
+      fan += 1; // 碰碰胡
+      names.push('碰碰胡');
+    }
+    if (allSuit) {
+      fan += 2; // 清一色
+      names.push('清一色');
+    }
     fan += 1; // 平胡基础番
+    if (names.length === 0) names.push('平胡');
   }
-  if (info.gangShang) fan += 1;
-  if (info.qiangGang) fan += 1;
-  if (info.haiDi) fan += 1;
+  if (info.gangShang) {
+    fan += 1;
+    names.push('杠上开花');
+  }
+  if (info.qiangGang) {
+    fan += 1;
+    names.push('抢杠胡');
+  }
+  if (info.haiDi) {
+    fan += 1;
+    names.push('海底捞月');
+  }
   void winType;
-  return fan;
+  return detail ? { fan, names } : fan;
 }
 
 /**
@@ -270,6 +314,7 @@ module.exports = {
   isQiDui,
   isLuxuryQiDui,
   isPengPengHu,
+  isPengPengHuWithMelds,
   calcFan,
   calcScore,
 };
