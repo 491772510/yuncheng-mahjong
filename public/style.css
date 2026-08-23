@@ -159,6 +159,14 @@ body {
 .tile.wan .n { color: #111; }
 .tile.tiao .n { color: #1e8449; }
 .tile.tong .n { color: #2471a3; }
+/* 字牌（东南西北中发白）：风牌红字，中/发/白分别着色 */
+.tile.honor .n { font-size: 15px; color: #c0392b; font-weight: 700; }
+.tile.honor[data-tile="z"] .n { color: #c0392b; }
+.tile.honor[data-tile="f"] .n { color: #1e8449; }
+.tile.honor[data-tile="p"] .n { color: #333; }
+.tile.small.honor .n { font-size: 12px; }
+.tile.tiny.honor .n { font-size: 10px; }
+.tile.honor .s { display: none; }
 .tile.small { width: 22px; height: 31px; font-size: 10px; border-radius: 4px; }
 .tile.small .n { font-size: 11px; }
 .tile.small .s { font-size: 7px; }
@@ -209,6 +217,10 @@ body {
   color: #555; cursor: pointer; font-size: 14px;
 }
 .seg-item.active { background: #1e9e63; border-color: #1e9e63; color: #fff; font-weight: 700; }
+.seg-select {
+  flex: 1; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; background: #fff;
+  color: #333; font-size: 13px; max-width: 240px;
+}
 .switch { position: relative; display: inline-block; width: 52px; height: 28px; cursor: pointer; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch span {

@@ -372,7 +372,7 @@ class GameServer {
 
   _dealRound(room) {
     room.roundNo = (room.roundNo || 0) + 1;
-    const wall = rules.shuffle(rules.createTiles());
+    const wall = rules.shuffle(rules.createTiles(room.settings.tileSet));
     const g = (room.game = {
       roundNo: room.roundNo,
       wall,
@@ -421,7 +421,9 @@ class GameServer {
     g.drawnTile = tile;
     g.lastDiscard = null;
     g.lastAction = null;
-    this._log(room, `${this._pName(room, seat)} 摸牌`);
+    this._log(room, `${this._pName(room, seat)} 摸到 ${rules.tileName(tile)}`);
+    const cur = room.players[seat];
+    if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     // 听口玩家：摸牌即打（不能换牌、不能碰杠），系统自动打出刚摸的牌
     if (g.tingSeats.includes(seat)) {
       this._autoTingDiscard(room, seat, tile);
@@ -478,7 +480,9 @@ class GameServer {
     g.drawnTile = tile;
     g.lastDiscard = null;
     g.lastAction = { type: 'gang' }; // 保持杠标记 → 杠上开花
-    this._log(room, `${this._pName(room, seat)} 杠后补牌`);
+    this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`);
+    const cur = room.players[seat];
+    if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     this._afterTurnStart(room, seat);
   }
 
@@ -601,7 +605,7 @@ class GameServer {
     g.turn = seat;
     g.stage = 'draw';
     g.drawnTile = null; // 碰后只能出牌，不能胡/杠
-    this._log(room, `${this._pName(room, seat)} 碰 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 碰了 ${rules.tileName(tile)}`);
     this._afterTurnStart(room, seat);
   }
 
@@ -620,7 +624,7 @@ class GameServer {
     g.lastDiscard = null;
     g.lastAction = { type: 'gang' };
     g.turn = seat;
-    this._log(room, `${this._pName(room, seat)} 明杠 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 明杠了 ${rules.tileName(tile)}`);
     this._drawAfterGang(room, seat);
   }
 
@@ -637,7 +641,7 @@ class GameServer {
     }
     g.melds[seat].push({ type: 'angang', tile, tiles: [tile, tile, tile, tile] });
     g.lastAction = { type: 'gang' };
-    this._log(room, `${this._pName(room, seat)} 暗杠 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}`);
     this._drawAfterGang(room, seat);
   }
 
@@ -664,7 +668,7 @@ class GameServer {
           choice: null,
         })),
       };
-      this._log(room, `${this._pName(room, seat)} 补杠 ${rules.tileName(tile)}，触发抢杠胡判定`);
+      this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}，触发抢杠胡判定`);
       this._broadcastGameState(room);
       for (const r of g.pending.responders) {
         this._prompt(room, r.seat, this._buildResponsePrompt(room, r));
@@ -690,7 +694,7 @@ class GameServer {
       m.tiles.push(tile);
     }
     g.lastAction = { type: 'gang' };
-    this._log(room, `${this._pName(room, seat)} 补杠 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}`);
     this._drawAfterGang(room, seat);
   }
 
@@ -763,7 +767,7 @@ class GameServer {
     g.stage = 'over';
     const tingSeats = [];
     for (let s = 0; s < 4; s++) {
-      if (room.players[s] && rules.isTing(g.hands[s]).length > 0) tingSeats.push(s);
+      if (room.players[s] && rules.isTing(g.hands[s], room.settings.tileSet).length > 0) tingSeats.push(s);
     }
     const notTing = [];
     for (let s = 0; s < 4; s++) {
@@ -826,7 +830,7 @@ class GameServer {
     if (g.stage !== 'draw') return this._err(p, '当前不能出牌');
     if (g.turn !== p.seat) return this._err(p, '不是您的回合');
     const tile = String((msg && msg.tile) || '');
-    if (!rules.ALL_TILE_TYPES.includes(tile)) return this._err(p, '非法的牌');
+    if (!rules.getTileTypes(room.settings.tileSet).includes(tile)) return this._err(p, '非法的牌');
     const hand = g.hands[p.seat];
     const idx = hand.indexOf(tile);
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
@@ -853,13 +857,13 @@ class GameServer {
     if (!room.settings.allowTing) return this._err(p, '房间未开启听口玩法');
     if (g.tingSeats.includes(p.seat)) return this._err(p, '您已经报听');
     const tile = String((msg && msg.tile) || '');
-    if (!rules.ALL_TILE_TYPES.includes(tile)) return this._err(p, '非法的牌');
+    if (!rules.getTileTypes(room.settings.tileSet).includes(tile)) return this._err(p, '非法的牌');
     const hand = g.hands[p.seat];
     const idx = hand.indexOf(tile);
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
     const rest = hand.slice();
     rest.splice(idx, 1);
-    if (rules.isTing(rest).length === 0) return this._err(p, '当前手牌不能报听');
+    if (rules.isTing(rest, room.settings.tileSet).length === 0) return this._err(p, '当前手牌不能报听');
 
     hand.splice(idx, 1);
     g.discards[p.seat].push(tile);
@@ -916,7 +920,7 @@ class GameServer {
     if (g.stage === 'draw' && g.turn === p.seat) {
       if (g.drawnTile === null) return this._err(p, '当前不能杠');
       const tile = String((msg && msg.tile) || '');
-      if (!rules.ALL_TILE_TYPES.includes(tile)) return this._err(p, '非法的牌');
+      if (!rules.getTileTypes(room.settings.tileSet).includes(tile)) return this._err(p, '非法的牌');
       const gangType = msg && msg.gangType === 'bugang' ? 'bugang' : 'angang';
       if (gangType === 'angang') {
         if (!rules.canAnGang(g.hands[p.seat], tile)) return this._err(p, '不能暗杠');
@@ -1134,7 +1138,7 @@ class GameServer {
       for (const t of [...new Set(hand)]) {
         const rest = hand.slice();
         rest.splice(rest.indexOf(t), 1);
-        const ting = rules.isTing(rest);
+        const ting = rules.isTing(rest, room.settings.tileSet);
         if (ting.length > 0) hints[t] = ting.length;
       }
       view.tingHints = hints;
@@ -1159,7 +1163,7 @@ class GameServer {
         }
       }
       if (gangOptions.length) actions.push('gang');
-      if (room.settings.allowTing && !g.tingSeats.includes(seat) && rules.canDeclareTing(hand)) {
+      if (room.settings.allowTing && !g.tingSeats.includes(seat) && rules.canDeclareTing(hand, room.settings.tileSet)) {
         actions.push('ting');
       }
     }
@@ -1251,6 +1255,7 @@ class GameServer {
       totalRounds,
       aiFill: !!s.aiFill,
       allowTing: s.allowTing !== false,
+      tileSet: s.tileSet === '136' ? '136' : '108',
     };
   }
 

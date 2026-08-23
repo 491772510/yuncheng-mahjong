@@ -16,19 +16,28 @@ const SUITS = ['w', 't', 'b']; // 万、条、筒
 const SUIT_NAMES = { w: '万', t: '条', b: '筒' };
 const SUIT_ORDER = { w: 0, t: 1, b: 2 };
 
-/** 全部 27 种牌型（每种 4 张共 108 张） */
+/** 字牌（风牌 + 箭牌）：东南西北中发白。只能组成刻子或将牌，不能组成顺子 */
+const HONOR_TILES = ['e', 's', 'x', 'n', 'z', 'f', 'p']; // 东 南 西 北 中 发 白
+const HONOR_NAMES = { e: '东', s: '南', x: '西', n: '北', z: '中', f: '发', p: '白' };
+const HONOR_ORDER = { e: 0, s: 1, x: 2, n: 3, z: 4, f: 5, p: 6 };
+
+/** 全部 27 种数牌（每种 4 张共 108 张）；字牌见 HONOR_TILES */
 const ALL_TILE_TYPES = [];
 for (const s of SUITS) {
   for (let n = 1; n <= 9; n++) ALL_TILE_TYPES.push(s + n);
 }
 
-/** 生成完整 108 张牌 */
-function createTiles() {
+/** 按牌型返回全部牌型编码：'108' = 万条筒 27 种；'136' = 万条筒 + 东南西北中发白 34 种 */
+function getTileTypes(tileSet = '108') {
+  return tileSet === '136' ? ALL_TILE_TYPES.concat(HONOR_TILES) : ALL_TILE_TYPES.slice();
+}
+
+/** 生成完整牌墙：tileSet='108' 生成 108 张；'136' 生成 136 张（含字牌各 4 张） */
+function createTiles(tileSet = '108') {
   const tiles = [];
-  for (const s of SUITS) {
-    for (let n = 1; n <= 9; n++) {
-      for (let k = 0; k < 4; k++) tiles.push(s + n);
-    }
+  const types = getTileTypes(tileSet);
+  for (const t of types) {
+    for (let k = 0; k < 4; k++) tiles.push(t);
   }
   return tiles;
 }
@@ -45,17 +54,23 @@ function shuffle(tiles, rng = Math.random) {
   return a;
 }
 
-/** 手牌排序（万 < 条 < 筒，数字升序） */
+/** 牌排序键：万 < 条 < 筒（数字升序），字牌排最后（东南西北中发白） */
+function rankOf(t) {
+  if (HONOR_ORDER[t] !== undefined) return 30 + HONOR_ORDER[t];
+  return SUIT_ORDER[t[0]] * 10 + numOf(t);
+}
+
+/** 手牌排序（万 < 条 < 筒，数字升序；字牌按东南西北中发白） */
 function sortTiles(hand) {
-  return hand.slice().sort((a, b) => {
-    const d = SUIT_ORDER[a[0]] - SUIT_ORDER[b[0]];
-    return d !== 0 ? d : numOf(a) - numOf(b);
-  });
+  return hand.slice().sort((a, b) => rankOf(a) - rankOf(b));
 }
 
 function suitOf(t) { return t[0]; }
 function numOf(t) { return Number(t[1]); }
-function tileName(t) { return numOf(t) + SUIT_NAMES[suitOf(t)]; }
+function tileName(t) {
+  if (HONOR_NAMES[t]) return HONOR_NAMES[t];
+  return numOf(t) + SUIT_NAMES[suitOf(t)];
+}
 
 /** 统计每种牌的张数，返回 Map（牌 -> 数量） */
 function countTiles(hand) {
@@ -193,10 +208,10 @@ function canBuGang(hand, melds, tile) {
   return melds.some((m) => m.type === 'peng' && m.tile === tile);
 }
 
-/** 听牌检测：13 张手牌，返回能胡的牌列表（空数组 = 未听） */
-function isTing(hand) {
+/** 听牌检测：13 张手牌，返回能胡的牌列表（空数组 = 未听）。tileSet 决定候选牌范围（108/136） */
+function isTing(hand, tileSet = '108') {
   const res = [];
-  for (const t of ALL_TILE_TYPES) {
+  for (const t of getTileTypes(tileSet)) {
     if (checkHu([...hand, t])) res.push(t);
   }
   return res;
@@ -206,11 +221,11 @@ function isTing(hand) {
  * 可否报听：手牌（通常 14 张，摸牌后）中是否存在一张牌，打出后仍听牌。
  * 用于「听口」玩法的报听资格判定。
  */
-function canDeclareTing(hand) {
+function canDeclareTing(hand, tileSet = '108') {
   for (const t of [...new Set(hand)]) {
     const rest = hand.slice();
     rest.splice(rest.indexOf(t), 1);
-    if (isTing(rest).length > 0) return true;
+    if (isTing(rest, tileSet).length > 0) return true;
   }
   return false;
 }
@@ -255,8 +270,11 @@ function calcFan(hand, info = {}, detail = false) {
   for (const m of melds) {
     for (const t of m.tiles) allTiles.push(t);
   }
+  // 清一色：仅当全部为同一数牌花色（万/条/筒）且不含字牌；字牌属风/箭，不计入清一色
   const allSuit =
-    allTiles.length > 0 && allTiles.every((t) => suitOf(t) === suitOf(allTiles[0]));
+    allTiles.length > 0 &&
+    allTiles.every((t) => !HONOR_NAMES[t]) &&
+    allTiles.every((t) => suitOf(t) === suitOf(allTiles[0]));
 
   let fan = 0;
   const names = [];
@@ -314,6 +332,9 @@ module.exports = {
   SUITS,
   SUIT_NAMES,
   ALL_TILE_TYPES,
+  HONOR_TILES,
+  HONOR_NAMES,
+  getTileTypes,
   createTiles,
   shuffle,
   sortTiles,

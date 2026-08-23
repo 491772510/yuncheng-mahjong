@@ -110,6 +110,10 @@
         state.lastSettlementShown = (state.game && state.game.roundNo) || 0;
         showSettlement(msg.result);
         break;
+      case 'draw_notice':
+        // 摸牌提示：显示摸到的具体牌（含字牌）
+        toast('摸到 ' + tileText(msg.tile), false);
+        break;
       case 'chat':
         renderChat(msg.chat);
         break;
@@ -146,6 +150,7 @@
           <span>${r.settings.allowDianpao ? '可点炮' : '仅自摸'}</span>
           <span>${r.settings.aiFill ? 'AI补位' : '无AI'}</span>
           <span>${r.settings.allowTing ? '听口开' : '听口关'}</span>
+          <span>${r.settings.tileSet === '136' ? '136张·带风带箭' : '108张·标准'}</span>
           <span>${roundsText(r.settings.totalRounds)}</span>
           <span>${fanLimitText(r.settings.fanLimit)}</span>
         </div>
@@ -347,26 +352,32 @@
     }).join('');
   }
 
+  const HONOR_NAMES = { e: '东', s: '南', x: '西', n: '北', z: '中', f: '发', p: '白' };
+
   function tileHtml(tile, size, ting, discardable) {
     if (!tile) return '';
     const txt = tileText(tile);
     const suit = tile[0];
     const num = tile.slice(1);
+    const isHonor = HONOR_NAMES[tile];
     const cls = `tile ${size} ${suitClass(suit)}` +
+      (isHonor ? ' honor' : '') +
       (discardable ? ' discardable' : '') +
       (ting ? ' ting-mark' : '');
     const attr = ting ? ` data-ting="${ting}张"` : '';
-    return `<span class="${cls}" data-tile="${tile}"${attr}><span class="n">${num}</span><span class="s">${txt}</span></span>`;
+    return `<span class="${cls}" data-tile="${tile}"${attr}><span class="n">${isHonor ? HONOR_NAMES[tile] : num}</span><span class="s">${isHonor ? '' : txt}</span></span>`;
   }
 
   function suitClass(s) {
     if (s === 'w') return 'wan';
     if (s === 't') return 'tiao';
-    return 'tong';
+    if (s === 'b') return 'tong';
+    return 'honor';
   }
 
   function tileText(t) {
     if (!t) return '';
+    if (HONOR_NAMES[t]) return HONOR_NAMES[t];
     const num = t.slice(1);
     const s = t[0];
     const suit = s === 'w' ? '万' : s === 't' ? '条' : '筒';
@@ -610,7 +621,8 @@
       const allowDianpao = $('#opt-dianpao').checked;
       const aiFill = $('#opt-aifill').checked;
       const allowTing = !$('#opt-ting') || $('#opt-ting').checked;
-      send({ type: 'create_room', settings: { baseScore, allowDianpao, fanLimit, totalRounds, aiFill, allowTing } });
+      const tileSet = $('#opt-tileset') ? $('#opt-tileset').value : '108';
+      send({ type: 'create_room', settings: { baseScore, allowDianpao, fanLimit, totalRounds, aiFill, allowTing, tileSet } });
       hideModal('create-modal');
     };
   }

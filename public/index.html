@@ -84,10 +84,17 @@
         <label class="switch"><input type="checkbox" id="opt-aifill" checked><span></span></label>
       </div>
       <div class="setting-row">
+        <label>牌型</label>
+        <select id="opt-tileset" class="seg-select">
+          <option value="108" selected>标准扣点点（108 张，万条筒）</option>
+          <option value="136">带风带箭（136 张，+东南西北中发白）</option>
+        </select>
+      </div>
+      <div class="setting-row">
         <label>允许听口</label>
         <label class="switch"><input type="checkbox" id="opt-ting" checked><span></span></label>
       </div>
-      <p class="tip">未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。听口：报听后锁定手牌摸打，只能自摸胡，自摸番 +1。</p>
+      <p class="tip">未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。听口：报听后锁定手牌摸打，只能自摸胡，自摸番 +1。牌型开局后不可更改。</p>
       <div class="modal-actions">
         <button id="create-cancel" class="btn">取消</button>
         <button id="create-confirm" class="btn primary">创建</button>
