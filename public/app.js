@@ -95,6 +95,7 @@
         state.game = msg.game;
         state.prompt = null;
         state.tingPick = false;
+        if (msg.game.logs && state.room) state.room.logs = msg.game.logs;
         if (state.room && state.room.state === 'playing') {
           renderTable();
           renderSidePanel();

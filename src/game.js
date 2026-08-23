@@ -1130,6 +1130,7 @@ class GameServer {
         : null,
       winners: g.winners,
       settings: room.settings,
+      logs: room.logs,
     };
     if (isDrawTurn && g.drawnTile !== null) {
       // 听牌提示：打出某张后听牌数
