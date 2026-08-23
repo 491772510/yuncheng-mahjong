@@ -71,6 +71,7 @@ class GameServer {
         case 'add_ai': return this._addAIByPlayer(p);
         case 'dissolve': return this._dissolve(p);
         case 'play_tile': return this._playTile(p, msg);
+        case 'ting': return this._ting(p, msg);
         case 'peng': return this._peng(p);
         case 'gang': return this._gang(p, msg);
         case 'hu': return this._hu(p);
@@ -387,6 +388,7 @@ class GameServer {
       pending: null,
       dealer: -1,
       winners: null,
+      tingSeats: [], // 已报听（听口）的玩家 seat 列表
       startAt: Date.now(),
     });
     for (let i = 0; i < 13; i++) {
@@ -420,7 +422,26 @@ class GameServer {
     g.lastDiscard = null;
     g.lastAction = null;
     this._log(room, `${this._pName(room, seat)} 摸牌`);
+    // 听口玩家：摸牌即打（不能换牌、不能碰杠），系统自动打出刚摸的牌
+    if (g.tingSeats.includes(seat)) {
+      this._autoTingDiscard(room, seat, tile);
+      return;
+    }
     this._afterTurnStart(room, seat);
+  }
+
+  /** 听口玩家摸牌即打：将刚摸的牌立即打出，并进入响应判定 */
+  _autoTingDiscard(room, seat, tile) {
+    const g = room.game;
+    const idx = g.hands[seat].lastIndexOf(tile);
+    if (idx >= 0) g.hands[seat].splice(idx, 1);
+    g.discards[seat].push(tile);
+    g.lastDiscard = { tile, seat };
+    g.drawnTile = null;
+    g.lastAction = null;
+    this._clearTimer(room, 'draw:' + seat);
+    this._log(room, `${this._pName(room, seat)} 摸牌即打 ${rules.tileName(tile)}（听口）`);
+    this._afterDiscard(room, seat);
   }
 
   /** 碰后 / 摸牌后 / 杠后补牌后：统一进入行动阶段 */
@@ -478,6 +499,7 @@ class GameServer {
     const responders = [];
     for (let s = 0; s < 4; s++) {
       if (!room.players[s] || s === discarder) continue;
+      if (g.tingSeats.includes(s)) continue; // 听口玩家只能自摸，不参与碰/杠/点炮
       const canHu = room.settings.allowDianpao && rules.canHuWith(g.hands[s], tile);
       const canGang = rules.canGang(g.hands[s], tile);
       const canPeng = rules.canPeng(g.hands[s], tile);
@@ -625,6 +647,7 @@ class GameServer {
     const grabbers = [];
     for (let s = 0; s < 4; s++) {
       if (s === seat || !room.players[s]) continue;
+      if (g.tingSeats.includes(s)) continue; // 听口玩家不参与抢杠胡
       if (rules.canHuWith(g.hands[s], tile)) grabbers.push(s);
     }
     if (grabbers.length > 0) {
@@ -683,6 +706,7 @@ class GameServer {
         gangShang,
         haiDi,
         qiangGang: !!info.qiangGang,
+        tingKou: info.winType === 'zimo' && g.tingSeats.includes(winnerSeat),
         melds: g.melds[winnerSeat],
       },
       true
@@ -798,6 +822,7 @@ class GameServer {
     if (!room) return this._err(p, '您不在房间中');
     const g = room.game;
     if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
+    if (g.tingSeats.includes(p.seat)) return this._err(p, '听口状态由系统自动摸打，不能出牌');
     if (g.stage !== 'draw') return this._err(p, '当前不能出牌');
     if (g.turn !== p.seat) return this._err(p, '不是您的回合');
     const tile = String((msg && msg.tile) || '');
@@ -811,6 +836,39 @@ class GameServer {
     g.lastDiscard = { tile, seat: p.seat };
     this._clearTimer(room, 'draw:' + p.seat);
     this._log(room, `${this._pName(room, p.seat)} 打出 ${rules.tileName(tile)}`);
+    this._afterDiscard(room, p.seat);
+  }
+
+  /** 报听（听口）：摸牌后存在可打的听牌牌型时，打出指定牌并锁定手牌 */
+  _ting(p, msg) {
+    if (p._auto > 0) this._markAutoActing(p);
+    else this._restoreControl(p);
+    const room = p.roomId ? this.rooms.get(p.roomId) : null;
+    if (!room) return this._err(p, '您不在房间中');
+    const g = room.game;
+    if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
+    if (g.stage !== 'draw') return this._err(p, '当前不能报听');
+    if (g.turn !== p.seat) return this._err(p, '不是您的回合');
+    if (g.drawnTile === null) return this._err(p, '未摸牌不能报听');
+    if (!room.settings.allowTing) return this._err(p, '房间未开启听口玩法');
+    if (g.tingSeats.includes(p.seat)) return this._err(p, '您已经报听');
+    const tile = String((msg && msg.tile) || '');
+    if (!rules.ALL_TILE_TYPES.includes(tile)) return this._err(p, '非法的牌');
+    const hand = g.hands[p.seat];
+    const idx = hand.indexOf(tile);
+    if (idx < 0) return this._err(p, '手牌中没有这张牌');
+    const rest = hand.slice();
+    rest.splice(idx, 1);
+    if (rules.isTing(rest).length === 0) return this._err(p, '当前手牌不能报听');
+
+    hand.splice(idx, 1);
+    g.discards[p.seat].push(tile);
+    g.lastDiscard = { tile, seat: p.seat };
+    g.tingSeats.push(p.seat);
+    g.drawnTile = null;
+    g.lastAction = null;
+    this._clearTimer(room, 'draw:' + p.seat);
+    this._log(room, `${this._pName(room, p.seat)} 报听，打出 ${rules.tileName(tile)}（听口）`);
     this._afterDiscard(room, p.seat);
   }
 
@@ -839,6 +897,7 @@ class GameServer {
     if (!room) return this._err(p, '您不在房间中');
     const g = room.game;
     if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
+    if (g.tingSeats.includes(p.seat)) return this._err(p, '听口状态不能杠');
 
     // 响应阶段：明杠（别人打出的牌）
     if (g.stage === 'response' && g.pending) {
@@ -881,6 +940,7 @@ class GameServer {
 
     // 响应阶段：点炮 / 抢杠胡
     if (g.stage === 'response' && g.pending) {
+      if (g.tingSeats.includes(p.seat)) return this._err(p, '听口状态只能自摸胡');
       const r = g.pending.responders.find((x) => x.seat === p.seat);
       if (!r) return this._err(p, '您没有可响应的操作');
       if (r.choice !== null) return this._err(p, '您已响应过');
@@ -963,6 +1023,7 @@ class GameServer {
         if (g.stage === 'draw' && g.turn === seat) {
           const decision = ai.decideDrawAction(g, room, seat);
           if (decision.type === 'hu') this._hu(pl, {});
+          else if (decision.type === 'ting') this._ting(pl, { tile: decision.tile });
           else if (decision.type === 'gang') this._gang(pl, { tile: decision.tile, gangType: decision.gangType });
           else this._playTile(pl, { tile: decision.tile });
         } else if (g.stage === 'response' && g.pending) {
@@ -1034,6 +1095,7 @@ class GameServer {
         melds: g.melds[s],
         discards: g.discards[s],
         isDealer: s === g.dealer,
+        ting: g.tingSeats.includes(s),
       });
     }
     const isDrawTurn = g.stage === 'draw' && g.turn === viewerSeat;
@@ -1097,8 +1159,18 @@ class GameServer {
         }
       }
       if (gangOptions.length) actions.push('gang');
+      if (room.settings.allowTing && !g.tingSeats.includes(seat) && rules.canDeclareTing(hand)) {
+        actions.push('ting');
+      }
     }
-    return { type: 'draw', actions, gangOptions, canHu: actions.includes('hu'), timeoutMs: HUMAN_TIMEOUT_MS };
+    return {
+      type: 'draw',
+      actions,
+      gangOptions,
+      canHu: actions.includes('hu'),
+      canDeclareTing: actions.includes('ting'),
+      timeoutMs: HUMAN_TIMEOUT_MS,
+    };
   }
 
   _buildResponsePrompt(room, r) {
@@ -1178,6 +1250,7 @@ class GameServer {
       fanLimit,
       totalRounds,
       aiFill: !!s.aiFill,
+      allowTing: s.allowTing !== false,
     };
   }
 

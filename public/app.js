@@ -12,6 +12,7 @@
     room: null,
     game: null,
     prompt: null,
+    tingPick: false, // 听口选牌状态：点击手牌表示报听
     reconnectAttempts: 0,
     countdownTimer: null,
     countdownEnd: 0,
@@ -93,6 +94,7 @@
       case 'game_state':
         state.game = msg.game;
         state.prompt = null;
+        state.tingPick = false;
         if (state.room && state.room.state === 'playing') {
           renderTable();
           renderSidePanel();
@@ -100,6 +102,7 @@
         break;
       case 'action_prompt':
         state.prompt = msg.prompt;
+        state.tingPick = false;
         renderActions();
         break;
       case 'settlement':
@@ -142,6 +145,7 @@
           <span>底分 ${r.settings.baseScore}</span>
           <span>${r.settings.allowDianpao ? '可点炮' : '仅自摸'}</span>
           <span>${r.settings.aiFill ? 'AI补位' : '无AI'}</span>
+          <span>${r.settings.allowTing ? '听口开' : '听口关'}</span>
           <span>${roundsText(r.settings.totalRounds)}</span>
           <span>${fanLimitText(r.settings.fanLimit)}</span>
         </div>
@@ -285,7 +289,8 @@
     const cur = game.players[game.turn];
     if (!cur) return '';
     const you = game.yourSeat === game.turn;
-    return you ? '轮到你出牌' : `等待 ${cur.name} 出牌…`;
+    if (you) return cur.ting ? '你已报听（听口），摸牌即打' : '轮到你出牌';
+    return cur.ting ? `等待 ${cur.name} 摸打（听口）…` : `等待 ${cur.name} 出牌…`;
   }
 
   function renderOtherCard(p, seat, pos) {
@@ -299,6 +304,7 @@
         ${p.isAI ? '<span class="pc-ai">AI</span>' : ''}
         ${!p.connected ? '<span class="pc-off">离线</span>' : ''}
         ${p.hosted ? '<span class="pc-host">托管</span>' : ''}
+        ${p.ting ? '<span class="pc-ting">听口</span>' : ''}
         <span class="pc-name">${esc(p.name)}</span>
         <span class="pc-score">${p.score}</span>
       </div>
@@ -321,11 +327,12 @@
         ${p.isDealer ? '<span class="pc-dealer">庄</span>' : ''}
         ${p.isAI ? '<span class="pc-ai">AI</span>' : ''}
         ${p.hosted ? '<span class="pc-host">托管</span>' : ''}
+        ${p.ting ? '<span class="pc-ting">听口</span>' : ''}
         <span class="pc-name">${esc(p.name)}（我）</span>
         <span class="pc-score">${p.score}</span>
       </div>
       <div class="melds">${meldHtml}</div>
-      <div class="hand"><div class="hand-tiles">${hand}</div></div>
+      <div class="hand">${state.tingPick ? '<div class="ting-pick-hint">请选择要打出的牌报听</div>' : ''}<div class="hand-tiles">${hand}</div></div>
       <div class="discard-area">${discards}</div>
     </div>`;
   }
@@ -343,8 +350,8 @@
   function tileHtml(tile, size, ting, discardable) {
     if (!tile) return '';
     const txt = tileText(tile);
-    const suit = tile.slice(-1);
-    const num = tile.slice(0, -1);
+    const suit = tile[0];
+    const num = tile.slice(1);
     const cls = `tile ${size} ${suitClass(suit)}` +
       (discardable ? ' discardable' : '') +
       (ting ? ' ting-mark' : '');
@@ -360,8 +367,8 @@
 
   function tileText(t) {
     if (!t) return '';
-    const num = t.slice(0, -1);
-    const s = t.slice(-1);
+    const num = t.slice(1);
+    const s = t[0];
     const suit = s === 'w' ? '万' : s === 't' ? '条' : '筒';
     return `${num}${suit}`;
   }
@@ -375,6 +382,11 @@
         const game = state.game;
         if (!game || !game.isDrawTurn) return;
         if (!state.prompt || state.prompt.type !== 'draw') return;
+        if (state.tingPick) {
+          // 听口：点击手牌即打出该张报听
+          send({ type: 'ting', tile });
+          return;
+        }
         send({ type: 'play_tile', tile });
       };
     });
@@ -390,7 +402,13 @@
     if (p.type === 'draw') {
       if (p.canHu) btns += `<button class="act act-hu" data-act="hu">胡</button>`;
       if (p.gangOptions && p.gangOptions.length) btns += `<button class="act act-gang" data-act="gang">杠</button>`;
-      btns += `<span class="countdown" style="align-self:center;">点击手牌出牌</span>`;
+      if (p.canDeclareTing && !state.tingPick) btns += `<button class="act act-ting" data-act="ting">听口</button>`;
+      if (state.tingPick) {
+        btns += `<button class="act act-pass" data-act="ting-cancel">取消听口</button>`;
+        btns += `<span class="countdown" style="align-self:center;">点击要打出的牌报听</span>`;
+      } else {
+        btns += `<span class="countdown" style="align-self:center;">点击手牌出牌</span>`;
+      }
     } else if (p.type === 'response') {
       if (p.canHu) btns += `<button class="act act-hu" data-act="hu">胡</button>`;
       if (p.canGang) btns += `<button class="act act-gang" data-act="gang">杠</button>`;
@@ -424,6 +442,13 @@
     else if (act === 'peng') send({ type: 'peng' });
     else if (act === 'pass') send({ type: 'pass' });
     else if (act === 'gang') showGangMenu();
+    else if (act === 'ting') {
+      state.tingPick = true;
+      renderTable();
+    } else if (act === 'ting-cancel') {
+      state.tingPick = false;
+      renderTable();
+    }
   }
 
   function showGangMenu() {
@@ -584,7 +609,8 @@
       const totalRounds = segValue('seg-rounds');
       const allowDianpao = $('#opt-dianpao').checked;
       const aiFill = $('#opt-aifill').checked;
-      send({ type: 'create_room', settings: { baseScore, allowDianpao, fanLimit, totalRounds, aiFill } });
+      const allowTing = !$('#opt-ting') || $('#opt-ting').checked;
+      send({ type: 'create_room', settings: { baseScore, allowDianpao, fanLimit, totalRounds, aiFill, allowTing } });
       hideModal('create-modal');
     };
   }

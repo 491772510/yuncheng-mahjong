@@ -202,6 +202,19 @@ function isTing(hand) {
   return res;
 }
 
+/**
+ * 可否报听：手牌（通常 14 张，摸牌后）中是否存在一张牌，打出后仍听牌。
+ * 用于「听口」玩法的报听资格判定。
+ */
+function canDeclareTing(hand) {
+  for (const t of [...new Set(hand)]) {
+    const rest = hand.slice();
+    rest.splice(rest.indexOf(t), 1);
+    if (isTing(rest).length > 0) return true;
+  }
+  return false;
+}
+
 /** 是否碰碰胡（考虑明牌区）：手牌部分每张牌数量为 3 的倍数或恰一个对子作将 */
 function isPengPengHuWithMelds(hand, melds) {
   const cnt = countTiles(hand);
@@ -280,6 +293,10 @@ function calcFan(hand, info = {}, detail = false) {
     fan += 1;
     names.push('海底捞月');
   }
+  if (info.tingKou) {
+    fan += 1;
+    names.push('听口');
+  }
   void winType;
   return detail ? { fan, names } : fan;
 }
@@ -311,6 +328,7 @@ module.exports = {
   canAnGang,
   canBuGang,
   isTing,
+  canDeclareTing,
   isQiDui,
   isLuxuryQiDui,
   isPengPengHu,

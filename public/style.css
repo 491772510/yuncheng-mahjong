@@ -118,6 +118,7 @@ body {
 .act-hu { background: #ff4757; color: #fff; }
 .act-gang { background: #6c5ce7; color: #fff; }
 .act-peng { background: #00b894; color: #fff; }
+.act-ting { background: #e67e22; color: #fff; }
 .act-pass { background: rgba(255,255,255,.85); color: #333; }
 .countdown { font-size: 12px; opacity: .85; margin-top: 6px; }
 
@@ -138,6 +139,8 @@ body {
 .pc-dealer { font-size: 11px; background: #ffb400; color: #3a2a00; border-radius: 6px; padding: 0 5px; }
 .pc-ai { font-size: 11px; background: #1e9e63; border-radius: 6px; padding: 0 5px; }
 .pc-off { font-size: 11px; background: #b33a3a; border-radius: 6px; padding: 0 5px; }
+.pc-ting { font-size: 11px; background: #e67e22; color: #fff; border-radius: 6px; padding: 0 5px; }
+.ting-pick-hint { font-size: 12px; color: #ffd75e; text-align: center; margin-bottom: 4px; }
 
 /* 手牌 */
 .hand { display: flex; justify-content: center; gap: 3px; margin-top: 6px; flex-wrap: nowrap; }
@@ -262,7 +265,11 @@ body {
   .room-body { flex-direction: column; height: calc(100vh - 52px); }
   .table-wrap { flex: 1.15; min-height: 300px; }
   .side-panel { width: 100%; height: 34vh; border-left: none; border-top: 1px solid rgba(255,255,255,.1); }
-  .tile { width: 30px; height: 43px; font-size: 13px; }
+  /* 手牌：换行 + 等比缩小，保证 13-14 张完整可见可点 */
+  .hand { flex-wrap: wrap; }
+  .hand-tiles { flex-wrap: wrap; justify-content: center; row-gap: 4px; }
+  .tile { width: 26px; height: 38px; font-size: 12px; }
+  .tile .n { font-size: 12px; }
   .tile .s { font-size: 8px; }
   .tile.small { width: 18px; height: 26px; font-size: 9px; }
   .tile.small .n { font-size: 10px; }
@@ -275,5 +282,13 @@ body {
   .discard-area { max-width: 200px; }
   .seat-left .discard-area, .seat-right .discard-area { max-width: 100px; }
   .logo { font-size: 28px; }
-  .act { min-width: 50px; padding: 8px 12px; font-size: 14px; }
+  .act { min-width: 44px; padding: 8px 10px; font-size: 13px; flex: 0 1 auto; }
+  .action-bar { gap: 6px; }
+  /* 结算弹窗与积分榜手机端防溢出 */
+  .modal-box { padding: 16px; width: min(94vw, 430px); }
+  .settle-hands .row { font-size: 12px; gap: 4px; }
+  .settle-hands .tile.tiny { width: 12px; height: 18px; }
+  .score-row .rs { width: 58px; font-size: 11px; }
+  .score-row .sc { font-size: 13px; }
+  .score-row .tag { font-size: 10px; padding: 1px 4px; }
 }

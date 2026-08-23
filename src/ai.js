@@ -19,6 +19,21 @@ function decideDrawAction(game, room, seat) {
     return { type: 'hu' };
   }
 
+  // 1.5) 听口：房间开启且未报听时，若打出某张后听牌则报听（优先于杠，保住听口）
+  if (
+    room.settings.allowTing &&
+    (!game.tingSeats || !game.tingSeats.includes(seat)) &&
+    game.drawnTile !== null
+  ) {
+    for (const t of [...new Set(hand)]) {
+      const rest = hand.slice();
+      rest.splice(rest.indexOf(t), 1);
+      if (rules.isTing(rest).length > 0) {
+        return { type: 'ting', tile: t };
+      }
+    }
+  }
+
   // 2) 暗杠
   const cnt = rules.countTiles(hand);
   for (const [t, c] of cnt) {

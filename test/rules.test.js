@@ -160,3 +160,22 @@ test('calcScore 底分 × 番数，封顶生效', () => {
   assert.equal(rules.calcScore(1, 9, 8), 8);
   assert.equal(rules.calcScore(1, 9, 16), 9);
 });
+
+test('canDeclareTing 听牌可报听（打出某张后仍听牌）', () => {
+  // 14 张（摸牌后）：123万 456万 789万 222条 55条，打出任意顺子张仍听牌
+  const hand = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't2', 't5', 't5'];
+  assert.equal(rules.canDeclareTing(hand), true);
+});
+
+test('canDeclareTing 非听牌状态不可报听', () => {
+  const hand = ['w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't9', 'b1'];
+  assert.equal(rules.canDeclareTing(hand), false);
+});
+
+test('calcFan 听口自摸 +1 番并计入番型名', () => {
+  const hand = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't2', 't5', 't5'];
+  // 平胡自摸 1 番，听口 +1 → 2 番
+  assert.equal(rules.calcFan(hand, { winType: 'zimo', melds: [], tingKou: true }), 2);
+  const fan = rules.calcFan(hand, { winType: 'zimo', melds: [], tingKou: true }, true);
+  assert.ok(fan.names.includes('听口'));
+});
