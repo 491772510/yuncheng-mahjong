@@ -353,20 +353,72 @@
     }).join('');
   }
 
-  const HONOR_NAMES = { e: '东', s: '南', x: '西', n: '北', z: '中', f: '发', p: '白' };
+  const HONOR_NAMES = { e: '東', s: '南', x: '西', n: '北', z: '中', f: '發', p: '白' };
 
   function tileHtml(tile, size, ting, discardable) {
     if (!tile) return '';
-    const txt = tileText(tile);
     const suit = tile[0];
-    const num = tile.slice(1);
     const isHonor = HONOR_NAMES[tile];
     const cls = `tile ${size} ${suitClass(suit)}` +
       (isHonor ? ' honor' : '') +
       (discardable ? ' discardable' : '') +
       (ting ? ' ting-mark' : '');
     const attr = ting ? ` data-ting="${ting}张"` : '';
-    return `<span class="${cls}" data-tile="${tile}"${attr}><span class="n">${isHonor ? HONOR_NAMES[tile] : num}</span><span class="s">${isHonor ? '' : txt}</span></span>`;
+    const inner = isHonor ? honorFace(tile) : suitFace(tile);
+    return `<span class="${cls}" data-tile="${tile}"${attr}>${inner}</span>`;
+  }
+
+  // ===== 传统麻将图案牌面（纯 CSS/HTML，无图片资源）=====
+  // 筒子 1-9 传统圆点布局（百分比坐标：左%, 顶%）
+  const PIP_LAYOUT = {
+    '1': [[50, 50]],
+    '2': [[30, 30], [70, 70]],
+    '3': [[30, 30], [50, 50], [70, 70]],
+    '4': [[30, 30], [70, 30], [30, 70], [70, 70]],
+    '5': [[30, 30], [70, 30], [50, 50], [30, 70], [70, 70]],
+    '6': [[30, 20], [70, 20], [30, 50], [70, 50], [30, 80], [70, 80]],
+    '7': [[25, 20], [25, 50], [25, 80], [75, 10], [75, 37], [75, 63], [75, 90]],
+    '8': [[28, 12], [28, 37], [28, 63], [28, 88], [72, 12], [72, 37], [72, 63], [72, 88]],
+    '9': [[17, 17], [50, 17], [83, 17], [17, 50], [50, 50], [83, 50], [17, 83], [50, 83], [83, 83]]
+  };
+  // 条子 2-9 竖条布局（与筒子传统排列对应）
+  const BAR_LAYOUT = {
+    '2': [[30, 50], [70, 50]],
+    '3': [[50, 25], [30, 75], [70, 75]],
+    '4': [[30, 25], [70, 25], [30, 75], [70, 75]],
+    '5': [[30, 20], [70, 20], [50, 50], [30, 80], [70, 80]],
+    '6': [[30, 17], [30, 50], [30, 83], [70, 17], [70, 50], [70, 83]],
+    '7': [[25, 20], [25, 50], [25, 80], [75, 10], [75, 37], [75, 63], [75, 90]],
+    '8': [[28, 12], [28, 37], [28, 63], [28, 88], [72, 12], [72, 37], [72, 63], [72, 88]],
+    '9': [[17, 17], [50, 17], [83, 17], [17, 50], [50, 50], [83, 50], [17, 83], [50, 83], [83, 83]]
+  };
+
+  function suitFace(tile) {
+    const suit = tile[0];
+    const num = tile.slice(1);
+    if (suit === 'w') {
+      return `<span class="wan-face"><b>${num}</b><i>萬</i></span>`;
+    }
+    if (suit === 't') {
+      if (num === '1') {
+        return `<span class="bird"><i class="b-head"></i><i class="b-body"></i><i class="b-wing"></i><i class="b-tail"></i></span>`;
+      }
+      const pts = BAR_LAYOUT[num] || [];
+      return `<span class="bars">${pts.map((p) => `<i style="left:${p[0]}%;top:${p[1]}%"></i>`).join('')}</span>`;
+    }
+    if (suit === 'b') {
+      const pts = PIP_LAYOUT[num] || [];
+      return `<span class="pips">${pts.map((p) => `<i style="left:${p[0]}%;top:${p[1]}%"></i>`).join('')}</span>`;
+    }
+    return '';
+  }
+
+  function honorFace(tile) {
+    const ch = HONOR_NAMES[tile];
+    if (tile === 'z') return `<span class="honor-face hz">${ch}</span>`;
+    if (tile === 'f') return `<span class="honor-face hf">${ch}</span>`;
+    if (tile === 'p') return `<span class="honor-face hp"></span>`;
+    return `<span class="honor-face hw">${ch}</span>`;
   }
 
   function suitClass(s) {
