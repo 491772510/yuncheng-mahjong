@@ -93,8 +93,35 @@
         break;
       case 'game_state':
         state.game = msg.game;
-        state.prompt = null;
         state.tingPick = false;
+        // 重连兜底：若轮到本玩家出牌或本玩家有未决定的碰/杠/胡响应权，
+        // 但服务端未（或消息已丢失）下发 action_prompt，则按 game_state 自行补齐，
+        // 避免手牌/操作按钮不可点导致整局卡死
+        if (msg.game.isDrawTurn) {
+          if (!state.prompt || state.prompt.type !== 'draw') {
+            state.prompt = { type: 'draw', actions: ['play'], gangOptions: [], canHu: false, canDeclareTing: false };
+          }
+        } else if (msg.game.pending) {
+          const r = msg.game.pending.responders.find((x) => x.seat === msg.game.yourSeat);
+          if (r && r.choice === null) {
+            if (!state.prompt || state.prompt.type !== 'response') {
+              state.prompt = {
+                type: 'response',
+                actions: ['pass'],
+                canHu: r.canHu,
+                canGang: r.canGang,
+                canPeng: r.canPeng,
+                tile: msg.game.pending.tile,
+                pendingType: msg.game.pending.type,
+                timeoutMs: 20000,
+              };
+            }
+          } else {
+            state.prompt = null;
+          }
+        } else {
+          state.prompt = null;
+        }
         if (msg.game.logs && state.room) state.room.logs = msg.game.logs;
         if (state.room && state.room.state === 'playing') {
           renderTable();
@@ -384,7 +411,7 @@
     '4': [[30, 30], [70, 30], [30, 70], [70, 70]],
     '5': [[30, 30], [70, 30], [50, 50], [30, 70], [70, 70]],
     '6': [[30, 20], [70, 20], [30, 50], [70, 50], [30, 80], [70, 80]],
-    '7': [[25, 25], [25, 50], [25, 75], [75, 12], [75, 38], [75, 62], [75, 88]],
+    '7': [[30, 22], [50, 32], [70, 42], [30, 64], [70, 64], [30, 86], [70, 86]],
     '8': [[28, 12], [28, 37], [28, 63], [28, 88], [72, 12], [72, 37], [72, 63], [72, 88]],
     '9': [[17, 17], [50, 17], [83, 17], [17, 50], [50, 50], [83, 50], [17, 83], [50, 83], [83, 83]]
   };
@@ -395,7 +422,7 @@
     '4': [[30, 25], [70, 25], [30, 75], [70, 75]],
     '5': [[30, 20], [70, 20], [50, 50], [30, 80], [70, 80]],
     '6': [[30, 17], [30, 50], [30, 83], [70, 17], [70, 50], [70, 83]],
-    '7': [[25, 25], [25, 50], [25, 75], [75, 12], [75, 38], [75, 62], [75, 88]],
+    '7': [[30, 22], [50, 32], [70, 42], [30, 64], [70, 64], [30, 86], [70, 86]],
     '8': [[28, 12], [28, 37], [28, 63], [28, 88], [72, 12], [72, 37], [72, 63], [72, 88]],
     '9': [[17, 17], [50, 17], [83, 17], [17, 50], [50, 50], [83, 50], [17, 83], [50, 83], [83, 83]]
   };
@@ -411,11 +438,15 @@
         return `<span class="bird"><i class="b-head"></i><i class="b-body"></i><i class="b-wing"></i><i class="b-tail"></i></span>`;
       }
       const pts = BAR_LAYOUT[num] || [];
-      return `<span class="bars">${pts.map((p) => `<i style="left:${p[0]}%;top:${p[1]}%"></i>`).join('')}</span>`;
+      // 7 条按参考图：上 3 绿条斜排 + 下 4 红条 2×2
+      const colored = num === '7' ? pts.map((p, idx) => idx < 3 ? [p[0], p[1], '#1e8449'] : [p[0], p[1], '#c0392b']) : pts;
+      return `<span class="bars">${colored.map((p) => `<i style="left:${p[0]}%;top:${p[1]}%;${p[2] ? 'background:' + p[2] : ''}"></i>`).join('')}</span>`;
     }
     if (suit === 'b') {
       const pts = PIP_LAYOUT[num] || [];
-      return `<span class="pips">${pts.map((p) => `<i style="left:${p[0]}%;top:${p[1]}%"></i>`).join('')}</span>`;
+      // 7 筒按参考图：上 3 绿点斜排 + 下 4 红点 2×2
+      const colored = num === '7' ? pts.map((p, idx) => idx < 3 ? [p[0], p[1], '#1e8449'] : [p[0], p[1], '#c0392b']) : pts;
+      return `<span class="pips">${colored.map((p) => `<i style="left:${p[0]}%;top:${p[1]}%;${p[2] ? 'background:' + p[2] : ''}"></i>`).join('')}</span>`;
     }
     return '';
   }

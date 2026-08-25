@@ -131,6 +131,17 @@ class GameServer {
       this._send(p, { type: 'room_state', room: this._buildRoomView(room) });
       if (room.state === 'playing' && room.game) {
         this._send(p, { type: 'game_state', game: this._buildGameView(room, p.seat) });
+        // 重连补发 action_prompt：若正好轮到该玩家出牌，或该玩家尚有未决定的碰/杠/胡响应权，
+        // 否则前端 prompt 为空，手牌/操作按钮不可点，会卡住整局
+        const g = room.game;
+        if (g.stage === 'draw' && g.turn === p.seat) {
+          this._send(p, { type: 'action_prompt', prompt: this._buildDrawPrompt(room, p.seat) });
+        } else if (g.stage === 'response' && g.pending) {
+          const r = g.pending.responders.find((x) => x.seat === p.seat);
+          if (r && r.choice === null) {
+            this._send(p, { type: 'action_prompt', prompt: this._buildResponsePrompt(room, r) });
+          }
+        }
       }
       if (room.game && room.game.winners) this._sendSettlement(room, p);
       this._broadcastRoomState(room);
@@ -525,12 +536,8 @@ class GameServer {
       this._setTimer(room, 'resp:' + r.seat, RESPONSE_TIMEOUT_MS, () => {
         const g2 = room.game;
         if (room.state === 'playing' && g2 === g && g.pending === r._pendingRef && r.choice === null) {
-          const pl = room.players[r.seat];
-          if (pl && !pl.isAI && pl.connected && !pl.hosted) {
-            pl.hosted = true;
-            this._log(room, `${pl.name} 响应超时，已由 AI 托管`);
-            this._broadcastRoomState(room);
-          }
+          // 仅自动过牌，不托管在线真人：响应窗口只给“过”的兜底，
+          // 托管交由出牌阶段 HUMAN_TIMEOUT 处理，避免在线玩家被误判挂机
           r.choice = 'pass';
           this._tryResolvePending(room, g, g.pending);
         }
