@@ -279,7 +279,13 @@
     html += '</div>';
     wrap.innerHTML = html;
     bindTileClicks();
+    bindCancelHosted();
     renderActions();
+  }
+
+  function bindCancelHosted() {
+    const btn = document.querySelector('#table-wrap .btn-cancel-hosted');
+    if (btn) btn.onclick = () => send({ type: 'cancel_hosted' });
   }
 
   function turnText() {
@@ -332,10 +338,11 @@
       <div class="pc-top">
         ${p.isDealer ? '<span class="pc-dealer">庄</span>' : ''}
         ${p.isAI ? '<span class="pc-ai">AI</span>' : ''}
-        ${p.hosted ? '<span class="pc-host">托管</span>' : ''}
+        ${p.hosted ? '<span class="pc-host">AI托管中</span>' : ''}
         ${p.ting ? '<span class="pc-ting">听口</span>' : ''}
         <span class="pc-name">${esc(p.name)}（我）</span>
         <span class="pc-score">${p.score}</span>
+        ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : ''}
       </div>
       <div class="melds">${meldHtml}</div>
       <div class="hand">${state.tingPick ? '<div class="ting-pick-hint">请选择要打出的牌报听</div>' : ''}<div class="hand-tiles">${hand}</div></div>

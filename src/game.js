@@ -76,6 +76,7 @@ class GameServer {
         case 'gang': return this._gang(p, msg);
         case 'hu': return this._hu(p);
         case 'pass': return this._pass(p);
+        case 'cancel_hosted': return this._cancelHosted(p);
         case 'chat': return this._chat(p, msg);
         default: return this._send(p, { type: 'error', message: '未知消息类型' });
       }
@@ -1012,6 +1013,25 @@ class GameServer {
     if (p && p.hosted && !p.isAI) p.hosted = false;
   }
 
+  /** 玩家主动取消托管，恢复真人控制 */
+  _cancelHosted(p) {
+    const room = p.roomId ? this.rooms.get(p.roomId) : null;
+    if (!room || !room.players || room.players[p.seat] !== p) {
+      return this._err(p, '您不在房间中');
+    }
+    if (p.isAI) return this._err(p, 'AI 玩家无法取消托管');
+    if (!p.connected) return this._err(p, '您当前不在线，无法取消托管');
+    if (!p.hosted) return this._err(p, '您当前未被托管');
+    p.hosted = false;
+    // 若正好轮到该玩家且有 AI 待执行动作：清计数，后续不再调度新 AI 动作
+    if (room.state === 'playing' && room.game && room.game.turn === p.seat) {
+      p._auto = 0;
+    }
+    this._log(room, `${p.name} 已取消托管`);
+    this._broadcastRoomState(room);
+    if (room.state === 'playing' && room.game) this._broadcastGameState(room);
+  }
+
   _scheduleAutoAct(room, seat) {
     const pl = room.players[seat];
     if (!pl) return;
@@ -1023,6 +1043,11 @@ class GameServer {
         return;
       }
       const g = room.game;
+      // 真人已接管（取消托管/重连）：跳过本次代打，避免与真人操作并发
+      if (pl._auto <= 0 || !this._shouldAutoAct(room, seat)) {
+        pl._auto = Math.max(0, (pl._auto || 0) - 1);
+        return;
+      }
       try {
         if (g.stage === 'draw' && g.turn === seat) {
           const decision = ai.decideDrawAction(g, room, seat);
