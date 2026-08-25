@@ -163,36 +163,44 @@ body {
 /* ===== 筒子：蓝绿圆点（1-9 传统排列）===== */
 .pips { position: absolute; inset: 0; }
 .pips i {
-  position: absolute; width: 20%; aspect-ratio: 1 / 1; border-radius: 50%;
+  position: absolute; width: 23%; aspect-ratio: 1 / 1; border-radius: 50%;
   background: #1b7f9e; transform: translate(-50%, -50%);
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.16);
 }
-/* ===== 条子：绿色竖条（2-9）===== */
+/* ===== 条子：绿色竖条（2-9，竖向竹条）===== */
 .bars { position: absolute; inset: 0; }
 .bars i {
-  position: absolute; width: 26%; height: 8%;
-  background: #1e8449; border-radius: 22%;
+  position: absolute; width: 9%; height: 26%;
+  background: #1e8449; border-radius: 30%;
   transform: translate(-50%, -50%);
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.12);
 }
-/* ===== 1条：简化幺鸡（鸟头+身体+翅膀+尾羽）===== */
+/* ===== 1条：简化幺鸡（鸟头+尖嘴+身体+翅膀+尾羽+爪）===== */
 .bird { position: absolute; inset: 0; }
 .bird i { position: absolute; background: #1e8449; }
 .bird .b-head {
-  left: 50%; top: 17%; width: 18%; aspect-ratio: 1 / 1; border-radius: 50%;
+  left: 38%; top: 20%; width: 22%; aspect-ratio: 1 / 1; border-radius: 50%;
   transform: translate(-50%, -50%);
 }
+.bird .b-beak {
+  left: 48%; top: 20%; width: 9%; height: 3.4%;
+  border-radius: 3px; transform: rotate(-18deg);
+}
 .bird .b-body {
-  left: 50%; top: 52%; width: 24%; height: 36%;
-  border-radius: 26%; transform: translate(-50%, -50%);
+  left: 56%; top: 55%; width: 22%; height: 42%;
+  border-radius: 45%; transform: translate(-50%, -50%);
 }
 .bird .b-wing {
-  left: 31%; top: 46%; width: 27%; height: 8%;
-  border-radius: 20%; transform: rotate(-22deg);
+  left: 45%; top: 52%; width: 20%; height: 5%;
+  border-radius: 20%; transform: rotate(-35deg);
 }
 .bird .b-tail {
-  left: 64%; top: 68%; width: 24%; height: 7%;
-  border-radius: 20%; transform: rotate(24deg);
+  left: 64%; top: 70%; width: 20%; height: 5%;
+  border-radius: 20%; transform: rotate(30deg);
+}
+.bird .b-feet {
+  left: 56%; top: 79%; width: 16%; height: 3.4%;
+  border-radius: 3px; transform: translate(-50%, -50%);
 }
 /* ===== 字牌：东南西北红字、中红底白字、发绿底白字、白板白底描边 ===== */
 .honor-face {
