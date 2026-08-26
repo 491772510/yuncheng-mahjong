@@ -88,6 +88,11 @@
           <label class="switch"><input type="checkbox" id="opt-shisanyao"><span></span></label>
           <input type="number" id="opt-shisanyao-mult" class="mult-input" value="8" min="1" max="32">
         </div>
+        <div class="setting-divider">开局玩法（默认开启）</div>
+        <div class="setting-row">
+          <label>开局扣点</label>
+          <label class="switch"><input type="checkbox" id="opt-koupoint" checked><span></span></label>
+        </div>
         <div class="setting-divider">流局庄家（默认下家接庄）</div>
         <div class="setting-row">
           <label>流局庄家</label>
@@ -118,11 +123,15 @@
   <!-- 136 扣点选择弹窗 -->
   <div id="koupoint-modal" class="modal hidden">
     <div class="modal-box">
-      <h3>暗扣点数（1-4 点）</h3>
-      <p class="tip">扣点为本局胡牌倍数（×1~×4），暗扣对其他玩家不可见，结算时公开。1/2 点不能胡，3/4/5 点只能自摸。</p>
+      <h3>选择扣点（1-4 点）</h3>
+      <p class="tip">扣点为本局胡牌倍数（×1~×4），选择后对其他玩家可见。1/2 点不能胡，3/4/5 点只能自摸。</p>
+      <div class="koupoint-hand-wrap">
+        <div class="koupoint-hand-title">我的手牌</div>
+        <div class="hand-tiles" id="koupoint-hand"></div>
+      </div>
       <div class="koupoint-options" id="koupoint-options"></div>
       <div class="modal-actions">
-        <button id="koupoint-confirm" class="btn primary hidden">确认暗扣</button>
+        <button id="koupoint-confirm" class="btn primary hidden">确认扣点</button>
       </div>
     </div>
   </div>

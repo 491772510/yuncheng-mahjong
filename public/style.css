@@ -358,6 +358,10 @@ body {
 .mult-input { width: 56px; margin-left: auto; text-align: center; font-size: 14px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 6px; }
 
 .koupoint-options { display: flex; gap: 10px; justify-content: center; margin: 16px 0; }
+.koupoint-hand-wrap { margin: 12px 0 4px; padding: 10px 12px; background: #f7f3ea; border: 1px solid #e2d9c6; border-radius: 10px; }
+.koupoint-hand-title { font-size: 12px; color: #8a7a5c; margin-bottom: 6px; font-weight: 600; }
+.koupoint-hand-wrap .hand-tiles { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; min-height: 44px; }
+.hand-empty { font-size: 13px; color: #aaa; }
 .koupoint-opt { width: 68px; height: 84px; border: 2px solid #ccc; border-radius: 10px; background: #fff; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; transition: all .15s; }
 .koupoint-opt:hover { border-color: #1e8449; transform: translateY(-2px); }
 .koupoint-opt.selected { border-color: #c0392b; background: #fdf0ef; box-shadow: 0 2px 8px rgba(192,57,43,.25); }

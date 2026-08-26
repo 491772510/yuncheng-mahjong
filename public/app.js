@@ -624,6 +624,13 @@
   let koupointSelected = null;
   function showKoupointModal() {
     koupointSelected = null;
+    // 弹窗内同步展示自己的手牌，方便参考决定扣几点
+    const game = state.game;
+    const mySeat = game && game.yourSeat;
+    const myHand = game && game.players && game.players[mySeat] && game.players[mySeat].hand;
+    $('#koupoint-hand').innerHTML = myHand && myHand.length
+      ? myHand.map((t) => tileHtml(t)).join('')
+      : '<span class="hand-empty">手牌加载中…</span>';
     const box = $('#koupoint-options');
     box.innerHTML = [1, 2, 3, 4].map((n) => `
       <button class="koupoint-opt" data-points="${n}">
@@ -855,6 +862,7 @@
       const dealerFlow = segValue('seg-dealer-flow') === 'keep' ? 'keep' : 'next';
       send({ type: 'create_room', settings: {
         totalRounds, aiFill, dealerFlow,
+        enableKoupoint: $('#opt-koupoint').checked,
         enableQingYiSe, qingYiSeMult: Number($('#opt-qingyise-mult').value) || 4,
         enableYiTiaoLong, yiTiaoLongMult: Number($('#opt-yitiaolong-mult').value) || 4,
         enableShiSanYao, shiSanYaoMult: Number($('#opt-shisanyao-mult').value) || 8,

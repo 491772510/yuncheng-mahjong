@@ -426,7 +426,14 @@ class GameServer {
     room.state = 'playing';
     this._log(room, `第 ${room.roundNo} 局开始，${this._pName(room, g.dealer)} 坐庄`);
 
-    // 开局每人暗扣 1-4 点（AI 随机），全部选完后庄家摸第 14 张
+    // 开局扣点（默认开启）：每人扣 1-4 点（AI 随机），全部选完后庄家摸第 14 张；关闭时跳过扣点，倍数固定 ×1
+    if (room.settings.enableKoupoint === false) {
+      g.kouPoints = [1, 1, 1, 1]; // 关闭：不乘扣点
+      this._broadcastRoomState(room);
+      this._broadcastGameState(room);
+      this._drawTile(room, g.dealer);
+      return;
+    }
     g.stage = 'koupoint';
     for (let s = 0; s < 4; s++) {
       const pl = room.players[s];
@@ -1310,8 +1317,8 @@ class GameServer {
       drawnTile: isDrawTurn && g.drawnTile !== null ? g.drawnTile : null,
       yourSeat: viewerSeat,
       isDrawTurn,
-      // 暗扣仅自己可见（null=未知）；报听扣牌上架与杠分明细全公开
-      kouPoints: g.kouPoints.map((x, s) => (s === viewerSeat ? x : null)),
+      // 扣点选择后全公开；报听扣牌上架与杠分明细全公开
+      kouPoints: g.kouPoints.slice(),
       kouTiles: g.kouTiles.slice(),
       gangLogs: g.gangLogs.slice(),
       players,
@@ -1477,6 +1484,7 @@ class GameServer {
       yiTiaoLongMult,
       shiSanYaoMult,
       dealerFlow: s.dealerFlow === 'keep' ? 'keep' : 'next', // 流局庄家：keep=连庄 / next=下家接庄（默认）
+      enableKoupoint: s.enableKoupoint !== false, // 开局扣点开关（默认开启）
     };
   }
 
