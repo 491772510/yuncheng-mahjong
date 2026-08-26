@@ -13,23 +13,41 @@ const rules = require('./rules');
  */
 function decideDrawAction(game, room, seat) {
   const hand = game.hands[seat];
+  const is136 = room.settings.tileSet === '136';
 
-  // 1) 自摸胡
-  if (game.drawnTile !== null && rules.checkHu(hand)) {
+  // 1) 自摸胡（136 模式受点数限制：1/2 点不能胡）
+  if (
+    game.drawnTile !== null &&
+    rules.checkHu(hand) &&
+    (!is136 || rules.canHuByPoints(rules.tilePoints(game.drawnTile), 'zimo'))
+  ) {
     return { type: 'hu' };
   }
 
-  // 1.5) 听口：房间开启且未报听时，若打出某张后听牌则报听（优先于杠，保住听口）
+  // 1.5) 报听：房间开启且未报听时，若打出某张后听牌则报听（优先于杠，保住听口）
+  // 108 模式：旧听口判定；136 模式：硬性要求听牌中含 ≥6 点牌
   if (
     room.settings.allowTing &&
     (!game.tingSeats || !game.tingSeats.includes(seat)) &&
     game.drawnTile !== null
   ) {
-    for (const t of [...new Set(hand)]) {
-      const rest = hand.slice();
-      rest.splice(rest.indexOf(t), 1);
-      if (rules.isTing(rest).length > 0) {
-        return { type: 'ting', tile: t };
+    if (is136) {
+      if (rules.canDeclareTing136(hand)) {
+        for (const t of [...new Set(hand)]) {
+          const rest = hand.slice();
+          rest.splice(rest.indexOf(t), 1);
+          if (rules.isTing(rest, '136').some((x) => rules.tilePoints(x) >= 6)) {
+            return { type: 'ting', tile: t };
+          }
+        }
+      }
+    } else {
+      for (const t of [...new Set(hand)]) {
+        const rest = hand.slice();
+        rest.splice(rest.indexOf(t), 1);
+        if (rules.isTing(rest).length > 0) {
+          return { type: 'ting', tile: t };
+        }
       }
     }
   }

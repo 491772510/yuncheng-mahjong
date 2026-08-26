@@ -328,6 +328,143 @@ function calcScore(baseScore, fan, fanLimit) {
   return baseScore * f;
 }
 
+// ============ 136 模式：扣点点完整规则（本地民间通用版） ============
+
+/** 胡牌点数：数牌按面值（1-9），字牌一律 10 点 */
+function tilePoints(t) {
+  if (HONOR_NAMES[t]) return 10;
+  return Number(t[1]);
+}
+
+/**
+ * 胡牌点数限制（136 模式）
+ *  1/2 点：不能胡（点炮自摸都不行）
+ *  3/4/5 点：只能自摸
+ *  6/7/8/9/字牌（10 点）：可点炮可自摸
+ * @param {number} pt 胡的那张牌的点数
+ * @param {string} winType 'zimo' | 'dianpao' | 'qianggang'
+ */
+function canHuByPoints(pt, winType) {
+  if (pt <= 2) return false;
+  if (pt <= 5) return winType === 'zimo';
+  return true;
+}
+
+/**
+ * 136 模式报听资格：手牌（14 张，摸牌后）中存在一张牌 t，打出后仍听牌，
+ * 且听口列表中至少包含一张 6 点及以上牌（6/7/8/9/字牌=10点）。
+ */
+function canDeclareTing136(hand) {
+  for (const t of [...new Set(hand)]) {
+    const rest = hand.slice();
+    rest.splice(rest.indexOf(t), 1);
+    const ting = isTing(rest, '136');
+    if (ting.some((x) => tilePoints(x) >= 6)) return true;
+  }
+  return false;
+}
+
+/** 是否一条龙：手牌+明牌区中同一花色 1-9 齐全（不必构成单一顺子） */
+function isYiTiaoLong(hand, melds) {
+  const cnt = countTiles(hand);
+  for (const m of melds || []) {
+    for (const t of m.tiles) cnt.set(t, (cnt.get(t) || 0) + 1);
+  }
+  for (const s of SUITS) {
+    let ok = true;
+    for (let n = 1; n <= 9; n++) {
+      if (!(cnt.get(s + n) || 0)) { ok = false; break; }
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+
+/** 幺九牌：19万/19条/19筒 + 东南西北中发白 */
+const YAO_TILES = ['w1', 'w9', 't1', 't9', 'b1', 'b9', 'e', 's', 'x', 'n', 'z', 'f', 'p'];
+
+/** 是否十三幺：14 张 = 13 种幺九牌各 1 张 + 其中 1 种成对（无明牌区） */
+function isShiSanYao(hand) {
+  if (hand.length !== 14) return false;
+  const cnt = countTiles(hand);
+  if (cnt.size !== 13) return false;
+  let pair = false;
+  for (const t of YAO_TILES) {
+    const c = cnt.get(t) || 0;
+    if (c === 0) return false;
+    if (c === 2) {
+      if (pair) return false;
+      pair = true;
+    } else if (c !== 1) {
+      return false;
+    }
+  }
+  return pair;
+}
+
+/**
+ * 136 模式牌型倍数（乘法叠加）：
+ *  平胡×1、碰碰胡×2、七小对×4、豪华七小对×8、杠上开花×2；
+ *  清一色/一条龙/十三幺为房间开关，启用时倍数可配（默认 ×4/×4/×8）。
+ * @param {string[]} hand 胡牌时的 14 张手牌
+ * @param {object} info { winType, gangShang, qiangGang, melds }
+ * @param {object} opts { qingyise:{enabled,mult}, yitiaolong:{enabled,mult}, shisanyao:{enabled,mult} }
+ * @param {boolean} [detail] true 时返回 { mult, names }
+ */
+function calcMultiplier136(hand, info = {}, opts = {}, detail = false) {
+  const melds = info.melds || [];
+  const qing = opts.qingyise || { enabled: false, mult: 4 };
+  const long = opts.yitiaolong || { enabled: false, mult: 4 };
+  const yao = opts.shisanyao || { enabled: false, mult: 8 };
+  const allTiles = hand.slice();
+  for (const m of melds) {
+    for (const t of m.tiles) allTiles.push(t);
+  }
+  const allSuit =
+    allTiles.length > 0 &&
+    allTiles.every((t) => !HONOR_NAMES[t]) &&
+    allTiles.every((t) => suitOf(t) === suitOf(allTiles[0]));
+
+  let mult = 1;
+  const names = [];
+
+  if (melds.length === 0 && isShiSanYao(hand)) {
+    mult = yao.mult;
+    names.push('十三幺');
+  } else {
+    const isQD = melds.length === 0 && isQiDui(hand);
+    if (isQD) {
+      if (isLuxuryQiDui(hand)) {
+        mult = 8;
+        names.push('豪华七小对');
+      } else {
+        mult = 4;
+        names.push('七小对');
+      }
+    } else {
+      const pp = melds.length === 0 ? isPengPengHu(hand) : isPengPengHuWithMelds(hand, melds);
+      if (pp) {
+        mult *= 2;
+        names.push('碰碰胡');
+      }
+      if (names.length === 0) names.push('平胡');
+    }
+    if (qing.enabled && allSuit) {
+      mult *= qing.mult;
+      names.push('清一色');
+    }
+    if (long.enabled && isYiTiaoLong(hand, melds)) {
+      mult *= long.mult;
+      names.push('一条龙');
+    }
+  }
+  if (info.gangShang) {
+    mult *= 2;
+    names.push('杠上开花');
+  }
+  return detail ? { mult, names } : mult;
+}
+
 module.exports = {
   SUITS,
   SUIT_NAMES,
@@ -356,4 +493,10 @@ module.exports = {
   isPengPengHuWithMelds,
   calcFan,
   calcScore,
+  tilePoints,
+  canHuByPoints,
+  canDeclareTing136,
+  isYiTiaoLong,
+  isShiSanYao,
+  calcMultiplier136,
 };

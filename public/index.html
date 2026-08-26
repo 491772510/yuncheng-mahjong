@@ -90,11 +90,29 @@
           <option value="136">带风带箭（136 张，+东南西北中发白）</option>
         </select>
       </div>
-      <div class="setting-row">
+      <div class="setting-row" id="row-opt-ting">
         <label>允许听口</label>
         <label class="switch"><input type="checkbox" id="opt-ting" checked><span></span></label>
       </div>
-      <p class="tip">未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。听口：报听后锁定手牌摸打，只能自摸胡，自摸番 +1。牌型开局后不可更改。</p>
+      <div id="settings-136" class="settings-136 hidden">
+        <div class="setting-divider">136 模式 · 牌型倍数开关（默认关闭）</div>
+        <div class="setting-row">
+          <label>清一色</label>
+          <label class="switch"><input type="checkbox" id="opt-qingyise"><span></span></label>
+          <input type="number" id="opt-qingyise-mult" class="mult-input" value="4" min="1" max="32">
+        </div>
+        <div class="setting-row">
+          <label>一条龙</label>
+          <label class="switch"><input type="checkbox" id="opt-yitiaolong"><span></span></label>
+          <input type="number" id="opt-yitiaolong-mult" class="mult-input" value="4" min="1" max="32">
+        </div>
+        <div class="setting-row">
+          <label>十三幺</label>
+          <label class="switch"><input type="checkbox" id="opt-shisanyao"><span></span></label>
+          <input type="number" id="opt-shisanyao-mult" class="mult-input" value="8" min="1" max="32">
+        </div>
+      </div>
+      <p class="tip">未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 模式：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。108 模式保持原有规则。</p>
       <div class="modal-actions">
         <button id="create-cancel" class="btn">取消</button>
         <button id="create-confirm" class="btn primary">创建</button>
@@ -109,6 +127,18 @@
       <div id="settle-content"></div>
       <div class="modal-actions">
         <button id="settle-close" class="btn primary">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 136 扣点选择弹窗 -->
+  <div id="koupoint-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>暗扣点数（1-4 点）</h3>
+      <p class="tip">扣点为本局胡牌倍数（×1~×4），暗扣对其他玩家不可见，结算时公开。1/2 点不能胡，3/4/5 点只能自摸。</p>
+      <div class="koupoint-options" id="koupoint-options"></div>
+      <div class="modal-actions">
+        <button id="koupoint-confirm" class="btn primary hidden">确认暗扣</button>
       </div>
     </div>
   </div>

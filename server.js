@@ -12,7 +12,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const { GameServer } = require('./src/game');
 
-const PORT = Number(process.env.PORT || 3000);
+const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const MIME = {
