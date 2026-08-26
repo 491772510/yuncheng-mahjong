@@ -173,6 +173,11 @@ body {
   background: #1b7f9e; transform: translate(-50%, -50%);
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.16);
 }
+/* 6 筒参考图：圆点中心带白色小圆心 */
+.pips.with-core i::after {
+  content: ''; position: absolute; inset: 32%;
+  background: #fff; border-radius: 50%;
+}
 /* ===== 条子：绿色竖条（2-9，竖向竹条）===== */
 .bars { position: absolute; inset: 0; }
 .bars i {
