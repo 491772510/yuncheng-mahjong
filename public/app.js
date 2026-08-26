@@ -87,6 +87,12 @@
         }
         state.room = msg.room;
         renderRoomView();
+        // 不在确认阶段时清理结算确认区，避免跨局/跨房间残留
+        if (!msg.room.settleConfirms) {
+          $('#settle-confirm').classList.add('hidden');
+          $('#settle-confirm-btn').classList.add('hidden');
+          $('#settle-close').classList.remove('hidden');
+        }
         if (state.room.state === 'settled') {
           showSettleModal();
         }
@@ -127,6 +133,8 @@
           renderTable();
           renderSidePanel();
         }
+        // 新一局开始（非结算阶段）时关闭结算弹窗
+        if (msg.game.stage !== 'over') hideModal('settle-modal');
         break;
       case 'action_prompt':
         state.prompt = msg.prompt;
@@ -142,6 +150,18 @@
         if (state.room && state.room.state === 'settled') break; // 总结算弹窗已含最后一局摘要
         state.lastSettlementShown = (state.game && state.game.roundNo) || 0;
         showSettlement(msg.result);
+        // 处于确认阶段（含重连恢复）：渲染确认状态并确保弹窗可见
+        if (msg.confirms) {
+          renderSettleConfirm(msg.confirms);
+          showModal('settle-modal');
+        }
+        break;
+      case 'settlement_confirm':
+        if (state.room && state.room.state === 'settled') break;
+        if (msg.confirms) {
+          renderSettleConfirm(msg.confirms);
+          showModal('settle-modal');
+        }
         break;
       case 'draw_notice':
         // 摸牌提示：显示摸到的具体牌（含字牌）
@@ -205,6 +225,7 @@
     $('#room-id-text').textContent = room.id;
     $('#room-state-text').textContent =
       roomStateText(room.state) + (room.roundNo ? ` · 第 ${room.roundNo} 局` : '') +
+      (room.settleConfirms && !room.settleConfirms.every(Boolean) ? ' · 等待确认' : '') +
       ` · ${roundsText(room.settings.totalRounds)}`;
     renderHeaderBtns();
     if (room.state === 'playing' && state.game) {
@@ -746,6 +767,50 @@
           </div>` : '').join('')}</div>`;
     }
     $('#settle-modal').classList.remove('hidden');
+  }
+
+  // 结算确认区：每位玩家「已确认 / 待确认」+ 自己的「确定」按钮
+  function renderSettleConfirm(confirms) {
+    const wrap = $('#settle-confirm');
+    const btn = $('#settle-confirm-btn');
+    const close = $('#settle-close');
+    const room = state.room;
+    if (!room || !confirms) {
+      wrap.classList.add('hidden');
+      btn.classList.add('hidden');
+      close.classList.remove('hidden');
+      return;
+    }
+    // 确认阶段不允许关闭弹窗，必须点「确定」
+    close.classList.add('hidden');
+    wrap.classList.remove('hidden');
+    let mySeat = state.game ? state.game.yourSeat : -1;
+    if (mySeat < 0) mySeat = room.players.findIndex((pl) => pl && pl.id === state.playerId);
+    const players = room.players || [];
+    wrap.innerHTML =
+      `<div class="settle-confirm-title">本局结算确认（全员确认后开始下一局）</div>` +
+      players
+        .map((pl, s) =>
+          pl
+            ? `<div class="settle-confirm-row ${confirms[s] ? 'ok' : 'wait'}">
+                 <span class="nm">${esc(pl.name)}${s === mySeat ? '（我）' : ''}</span>
+                 <span class="st">${confirms[s] ? '已确认' : '待确认'}</span>
+               </div>`
+            : ''
+        )
+        .join('');
+    if (mySeat >= 0 && !confirms[mySeat]) {
+      btn.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = '确定';
+      btn.onclick = () => {
+        send({ type: 'settle_confirm' });
+        // 乐观更新：等待服务端广播回写全员状态
+        btn.classList.add('hidden');
+      };
+    } else {
+      btn.classList.add('hidden');
+    }
   }
 
   function showSettleModal() {

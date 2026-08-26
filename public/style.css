@@ -375,3 +375,20 @@ body {
 
 .settle-gang { margin: 8px 0; padding: 8px 10px; background: rgba(142,68,173,.08); border-radius: 8px; }
 .settle-gang .row { font-size: 13px; margin: 3px 0; color: #555; }
+
+/* ---------- 结算确认区 ---------- */
+.settle-confirm {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(0,0,0,.06); border: 1px solid rgba(0,0,0,.08);
+}
+.settle-confirm-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; color: #444; }
+.settle-confirm-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 8px; border-radius: 8px; margin: 4px 0; font-size: 13.5px;
+}
+.settle-confirm-row .nm { font-weight: 600; color: #333; }
+.settle-confirm-row .st { font-size: 12.5px; padding: 1px 10px; border-radius: 10px; }
+.settle-confirm-row.ok .st { background: #d4efdf; color: #1e8449; font-weight: 700; }
+.settle-confirm-row.wait .st { background: #fdebd0; color: #b9770e; font-weight: 700; }
+.settle-confirm-row.ok { background: rgba(30,132,73,.06); }
+.settle-confirm-row.wait { background: rgba(185,119,14,.06); }

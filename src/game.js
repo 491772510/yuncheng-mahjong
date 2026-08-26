@@ -78,6 +78,7 @@ class GameServer {
         case 'hu': return this._hu(p);
         case 'pass': return this._pass(p);
         case 'cancel_hosted': return this._cancelHosted(p);
+        case 'settle_confirm': return this._settleConfirm(p);
         case 'chat': return this._chat(p, msg);
         default: return this._send(p, { type: 'error', message: '未知消息类型' });
       }
@@ -242,6 +243,7 @@ class GameServer {
       game: null,
       dealer: null,
       lastWinner: null,
+      settleConfirms: null, // 本局结算确认状态：[seat] -> bool；null 表示不在确认阶段
       logs: [],
       chat: [],
       timers: new Map(),
@@ -1027,16 +1029,44 @@ class GameServer {
     const total = room.settings.totalRounds;
     if (total > 0 && room.roundNo >= total) {
       room.state = 'settled';
+      room.settleConfirms = null;
       this._log(room, `已打完 ${total} 局，房间进入结算（房主可「再来一轮」或解散）`);
       this._broadcastRoomState(room);
       this._broadcastLobby();
-    } else {
-      setTimeout(() => {
-        if (room.state === 'playing' && this.rooms.get(room.id) === room) {
-          this._dealRound(room);
-        }
-      }, 1500);
+      return;
     }
+    // 非最后一局：进入结算确认阶段，全员确认后才自动开始下一局
+    room.settleConfirms = [false, false, false, false];
+    for (let s = 0; s < 4; s++) {
+      // AI / 托管 / 断线玩家自动确认；在线真人等待手动点击「确定」
+      if (room.players[s] && this._shouldAutoAct(room, s)) room.settleConfirms[s] = true;
+    }
+    this._broadcast(room, { type: 'settlement_confirm', confirms: room.settleConfirms.slice() });
+    this._broadcastRoomState(room);
+    this._log(room, '本局结束，等待所有玩家确认「确定」后开始下一局');
+    this._tryStartNextRound(room);
+  }
+
+  // ============ 结算确认 ============
+
+  _settleConfirm(p) {
+    const room = p.roomId ? this.rooms.get(p.roomId) : null;
+    if (!room) return this._err(p, '您不在房间中');
+    if (!room.settleConfirms) return this._err(p, '当前没有需要确认的结算');
+    if (room.players[p.seat] !== p) return this._err(p, '您不在本局座位中');
+    if (room.settleConfirms[p.seat]) return; // 幂等：已确认直接忽略
+    room.settleConfirms[p.seat] = true;
+    this._log(room, `${p.name} 已确认本局结算`);
+    this._broadcast(room, { type: 'settlement_confirm', confirms: room.settleConfirms.slice() });
+    this._tryStartNextRound(room);
+  }
+
+  _tryStartNextRound(room) {
+    if (!room.settleConfirms) return;
+    if (!room.settleConfirms.every(Boolean)) return;
+    room.settleConfirms = null;
+    this._log(room, '所有玩家已确认，开始下一局');
+    this._dealRound(room);
   }
 
   // ============ 玩家操作（全部服务端校验） ============
@@ -1354,6 +1384,7 @@ class GameServer {
             }
           : null
       ),
+      settleConfirms: room.settleConfirms ? room.settleConfirms.slice() : null,
       logs: room.logs.slice(-MAX_LOGS),
       chat: room.chat.slice(-MAX_CHAT),
     };
@@ -1690,6 +1721,8 @@ class GameServer {
       roundNo: g.roundNo,
       settings: room.settings,
     };
+    // 携带本局确认状态（确认阶段 / 重连恢复用）
+    if (room.settleConfirms) msg.confirms = room.settleConfirms.slice();
     if (targetPlayer) this._send(targetPlayer, msg);
     else this._broadcast(room, msg);
   }
