@@ -226,7 +226,7 @@ class GameServer {
     if (p.roomId) return this._err(p, '您已在房间中，请先退出');
     if (this.rooms.size >= MAX_ROOMS) return this._err(p, '房间数量已达上限');
     const settings = this._validateSettings(msg && msg.settings);
-    if (!settings) return this._err(p, '房间设置不合法（底分/番型上限/总局数取值错误）');
+    if (!settings) return this._err(p, '房间设置不合法（总局数取值错误）');
 
     let id;
     do {
@@ -387,8 +387,7 @@ class GameServer {
 
   _dealRound(room) {
     room.roundNo = (room.roundNo || 0) + 1;
-    const is136 = room.settings.tileSet === '136';
-    const wall = rules.shuffle(rules.createTiles(room.settings.tileSet));
+    const wall = rules.shuffle(rules.createTiles());
     const g = (room.game = {
       roundNo: room.roundNo,
       wall,
@@ -424,22 +423,17 @@ class GameServer {
     room.state = 'playing';
     this._log(room, `第 ${room.roundNo} 局开始，${this._pName(room, g.dealer)} 坐庄`);
 
-    if (is136) {
-      // 136 模式：开局每人暗扣 1-4 点（AI 随机），全部选完后庄家摸第 14 张
-      g.stage = 'koupoint';
-      for (let s = 0; s < 4; s++) {
-        const pl = room.players[s];
-        if (pl && pl.isAI) g.kouPoints[s] = 1 + Math.floor(Math.random() * 4);
-      }
-      this._broadcastRoomState(room);
-      this._broadcastGameState(room);
-      this._promptKoupoint(room);
-      if (g.kouPoints.every((x) => x != null)) this._tryStartAfterKouPoint(room);
-      return;
+    // 开局每人暗扣 1-4 点（AI 随机），全部选完后庄家摸第 14 张
+    g.stage = 'koupoint';
+    for (let s = 0; s < 4; s++) {
+      const pl = room.players[s];
+      if (pl && pl.isAI) g.kouPoints[s] = 1 + Math.floor(Math.random() * 4);
     }
-
     this._broadcastRoomState(room);
-    this._drawTile(room, g.dealer);
+    this._broadcastGameState(room);
+    this._promptKoupoint(room);
+    if (g.kouPoints.every((x) => x != null)) this._tryStartAfterKouPoint(room);
+    return;
   }
 
   /** 136 扣点阶段：通知未选择扣点的真人玩家 */
@@ -479,9 +473,8 @@ class GameServer {
 
   _drawTile(room, seat) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
-    // 136 模式：牌墙剩 6 墩（12 张）直接流局
-    if (is136 ? g.wall.length - g.wallPos <= 12 : g.wallPos >= g.wall.length) {
+    // 牌墙剩 6 墩（12 张）直接流局
+    if (g.wall.length - g.wallPos <= 12) {
       this._settleDraw(room);
       return;
     }
@@ -497,8 +490,8 @@ class GameServer {
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     // 听口玩家：摸牌即打（不能换牌、不能碰杠），系统自动打出刚摸的牌
     if (g.tingSeats.includes(seat)) {
-      // 136 报听玩家：若摸牌构成自摸胡（且满足点数限制），进入行动阶段给胡/过；否则摸牌即打（锁死）
-      if (is136 && rules.checkHu(g.hands[seat]) && rules.canHuByPoints(rules.tilePoints(tile), 'zimo')) {
+      // 报听玩家：若摸牌构成自摸胡（且满足点数限制），进入行动阶段给胡/过；否则摸牌即打（锁死）
+      if (rules.checkHu(g.hands[seat]) && rules.canHuByPoints(rules.tilePoints(tile), 'zimo')) {
         this._afterTurnStart(room, seat);
         return;
       }
@@ -545,9 +538,8 @@ class GameServer {
   /** 杠后补牌 */
   _drawAfterGang(room, seat) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
-    // 136 模式：牌墙剩 6 墩（12 张）直接流局
-    if (is136 ? g.wall.length - g.wallPos <= 12 : g.wallPos >= g.wall.length) {
+    // 牌墙剩 6 墩（12 张）直接流局
+    if (g.wall.length - g.wallPos <= 12) {
       this._settleDraw(room);
       return;
     }
@@ -561,8 +553,8 @@ class GameServer {
     this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
-    // 136 报听玩家：杠后补牌手牌继续锁死；若构成自摸胡给胡/过，否则摸牌即打
-    if (is136 && g.tingSeats.includes(seat)) {
+    // 报听玩家：杠后补牌手牌继续锁死；若构成自摸胡给胡/过，否则摸牌即打
+    if (g.tingSeats.includes(seat)) {
       if (rules.checkHu(g.hands[seat])) {
         this._afterTurnStart(room, seat);
         return;
@@ -586,27 +578,16 @@ class GameServer {
   /** 出牌后的响应判定 */
   _afterDiscard(room, discarder) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     const tile = g.lastDiscard.tile;
     const responders = [];
     for (let s = 0; s < 4; s++) {
       if (!room.players[s] || s === discarder) continue;
-      if (is136) {
-        // 136 模式：胡牌受点数限制（6 点及以上才可点炮胡）；报听玩家可胡/可杠，不能碰
-        const canHu = rules.canHuWith(g.hands[s], tile) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
-        const canGang = rules.canGang(g.hands[s], tile);
-        const canPeng = g.tingSeats.includes(s) ? false : rules.canPeng(g.hands[s], tile);
-        if (canHu || canGang || canPeng) {
-          responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
-        }
-      } else {
-        if (g.tingSeats.includes(s)) continue; // 听口玩家只能自摸，不参与碰/杠/点炮
-        const canHu = room.settings.allowDianpao && rules.canHuWith(g.hands[s], tile);
-        const canGang = rules.canGang(g.hands[s], tile);
-        const canPeng = rules.canPeng(g.hands[s], tile);
-        if (canHu || canGang || canPeng) {
-          responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
-        }
+      // 胡牌受点数限制（6 点及以上才可点炮胡）；报听玩家可胡/可杠，不能碰
+      const canHu = rules.canHuWith(g.hands[s], tile) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
+      const canGang = rules.canGang(g.hands[s], tile);
+      const canPeng = g.tingSeats.includes(s) ? false : rules.canPeng(g.hands[s], tile);
+      if (canHu || canGang || canPeng) {
+        responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
       }
     }
     if (responders.length === 0) {
@@ -722,7 +703,6 @@ class GameServer {
 
   _doGangFromDiscard(room, seat, tile) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     const hand = g.hands[seat];
     let removed = 0;
     for (let i = 0; i < hand.length && removed < 3; i++) {
@@ -737,13 +717,12 @@ class GameServer {
     g.lastAction = { type: 'gang' };
     g.turn = seat;
     this._log(room, `${this._pName(room, seat)} 明杠了 ${rules.tileName(tile)}`);
-    if (is136) this._settleGangScore(room, seat, tile, 'ming');
+    this._settleGangScore(room, seat, tile, 'ming');
     this._drawAfterGang(room, seat);
   }
 
   _doAnGang(room, seat, tile) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     const hand = g.hands[seat];
     let removed = 0;
     for (let i = 0; i < hand.length && removed < 4; i++) {
@@ -756,25 +735,19 @@ class GameServer {
     g.melds[seat].push({ type: 'angang', tile, tiles: [tile, tile, tile, tile] });
     g.lastAction = { type: 'gang' };
     this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}`);
-    if (is136) this._settleGangScore(room, seat, tile, 'angang');
+    this._settleGangScore(room, seat, tile, 'angang');
     this._drawAfterGang(room, seat);
   }
 
   _doBuGang(room, seat, tile) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     // 先检查抢杠胡
     const grabbers = [];
     for (let s = 0; s < 4; s++) {
       if (s === seat || !room.players[s]) continue;
-      if (is136) {
-        // 136 模式：抢杠胡算点炮，受点数限制（6 点及以上才可胡）；报听玩家可抢杠
-        const canHu = rules.canHuWith(g.hands[s], tile) && rules.canHuByPoints(rules.tilePoints(tile), 'qianggang');
-        if (canHu) grabbers.push(s);
-      } else {
-        if (g.tingSeats.includes(s)) continue; // 听口玩家不参与抢杠胡
-        if (rules.canHuWith(g.hands[s], tile)) grabbers.push(s);
-      }
+      // 抢杠胡算点炮，受点数限制（6 点及以上才可胡）；报听玩家可抢杠
+      const canHu = rules.canHuWith(g.hands[s], tile) && rules.canHuByPoints(rules.tilePoints(tile), 'qianggang');
+      if (canHu) grabbers.push(s);
     }
     if (grabbers.length > 0) {
       g.stage = 'response';
@@ -817,20 +790,18 @@ class GameServer {
     }
     g.lastAction = { type: 'gang' };
     this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}`);
-    if (is136) this._settleGangScore(room, seat, tile, 'bugang');
+    this._settleGangScore(room, seat, tile, 'bugang');
     this._drawAfterGang(room, seat);
   }
 
   _settleHu(room, winnerSeat, info) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     const hand = g.hands[winnerSeat];
     const gangShang = info.winType === 'zimo' && !!(g.lastAction && g.lastAction.type === 'gang');
     const winLabel =
       info.winType === 'zimo' ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
 
-    if (is136) {
-      // ===== 136 模式：点数 × 牌型倍数 × 自己扣点；包胡一包三 =====
+    // ===== 点数 × 牌型倍数 × 自己扣点；包胡一包三 =====
       const tilePoints = rules.tilePoints(info.tile);
       const multOpts = {
         qingyise: { enabled: room.settings.enableQingYiSe, mult: room.settings.qingYiSeMult },
@@ -914,105 +885,32 @@ class GameServer {
       this._broadcastGameState(room);
       this._sendSettlement(room);
       this._broadcastRoomState(room);
-      return;
-    }
-
-    // ===== 108 模式：底分 × 番数（保持原规则） =====
-    const haiDi = info.winType === 'zimo' && g.wallPos >= g.wall.length;
-    const fanCalc = rules.calcFan(
-      hand,
-      {
-        winType: info.winType,
-        gangShang,
-        haiDi,
-        qiangGang: !!info.qiangGang,
-        tingKou: info.winType === 'zimo' && g.tingSeats.includes(winnerSeat),
-        melds: g.melds[winnerSeat],
-      },
-      true
-    );
-    const fan = fanCalc.fan;
-    const fanNames = fanCalc.names;
-    const base = room.settings.baseScore;
-    const score = rules.calcScore(base, fan, room.settings.fanLimit);
-    const cappedFan = score / base;
-
-    if (info.winType === 'zimo') {
-      for (let s = 0; s < 4; s++) {
-        if (s === winnerSeat || !room.players[s]) continue;
-        room.players[s].score -= score;
-        room.players[s].roundScore -= score;
-        room.players[winnerSeat].score += score;
-        room.players[winnerSeat].roundScore += score;
-      }
-    } else {
-      const loser = room.players[info.discarder];
-      if (loser) {
-        loser.score -= score;
-        loser.roundScore -= score;
-        room.players[winnerSeat].score += score;
-        room.players[winnerSeat].roundScore += score;
-      }
-    }
-
-    g.winners = {
-      type: 'hu',
-      winnerSeat,
-      winType: info.winType,
-      fan: cappedFan,
-      fanNames,
-      score,
-      tile: info.tile,
-      discarder: info.winType === 'zimo' ? null : info.discarder,
-      hands: this._revealHands(room),
-    };
-    room.lastWinner = winnerSeat;
-    this._log(
-      room,
-      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${cappedFan}番 → ${score}分）`
-    );
-    this._broadcastGameState(room);
-    this._sendSettlement(room);
-    this._broadcastRoomState(room);
   }
 
   _settleDraw(room) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     g.stage = 'over';
     const tingSeats = [];
     for (let s = 0; s < 4; s++) {
-      if (room.players[s] && rules.isTing(g.hands[s], room.settings.tileSet).length > 0) tingSeats.push(s);
+      if (room.players[s] && rules.isTing(g.hands[s]).length > 0) tingSeats.push(s);
     }
     const notTing = [];
     for (let s = 0; s < 4; s++) {
       if (room.players[s] && !tingSeats.includes(s)) notTing.push(s);
     }
-    if (!is136 && tingSeats.length > 0 && tingSeats.length < 4) {
-      // 108 模式：荒庄听牌者收底分（保持原规则）
-      const base = room.settings.baseScore;
-      for (const t of tingSeats) {
-        for (const n of notTing) {
-          room.players[t].score += base;
-          room.players[t].roundScore += base;
-          room.players[n].score -= base;
-          room.players[n].roundScore -= base;
-        }
-      }
-    }
     g.winners = {
       type: 'draw',
       tingSeats,
       notTing,
-      mode136: is136,
-      kouPoints: is136 ? g.kouPoints.slice() : undefined, // 136 结算公开扣点
-      gangLogs: is136 ? g.gangLogs.slice() : undefined, // 杠分照常结算（杠时已即时入账）
+      mode136: true,
+      kouPoints: g.kouPoints.slice(), // 结算公开扣点
+      gangLogs: g.gangLogs.slice(), // 杠分照常结算（杠时已即时入账）
       hands: this._revealHands(room),
     };
     room.lastWinner = null; // 荒庄连庄
     this._log(
       room,
-      (is136 ? '牌墙剩 6 墩，流局' : '牌墙摸完，荒庄') +
+      '牌墙剩 6 墩，流局' +
         (tingSeats.length ? `，听牌者：${tingSeats.map((s) => this._pName(room, s)).join('、')}` : '')
     );
     this._broadcastGameState(room);
@@ -1082,7 +980,7 @@ class GameServer {
     if (g.stage !== 'draw') return this._err(p, '当前不能出牌');
     if (g.turn !== p.seat) return this._err(p, '不是您的回合');
     const tile = String((msg && msg.tile) || '');
-    if (!rules.getTileTypes(room.settings.tileSet).includes(tile)) return this._err(p, '非法的牌');
+    if (!rules.getTileTypes().includes(tile)) return this._err(p, '非法的牌');
     const hand = g.hands[p.seat];
     const idx = hand.indexOf(tile);
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
@@ -1102,7 +1000,6 @@ class GameServer {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
     if (g.stage !== 'draw') return this._err(p, '当前不能报听');
     if (g.turn !== p.seat) return this._err(p, '不是您的回合');
@@ -1110,41 +1007,28 @@ class GameServer {
     if (!room.settings.allowTing) return this._err(p, '房间未开启听口玩法');
     if (g.tingSeats.includes(p.seat)) return this._err(p, '您已经报听');
     const tile = String((msg && msg.tile) || '');
-    if (!rules.getTileTypes(room.settings.tileSet).includes(tile)) return this._err(p, '非法的牌');
+    if (!rules.getTileTypes().includes(tile)) return this._err(p, '非法的牌');
     const hand = g.hands[p.seat];
     const idx = hand.indexOf(tile);
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
     const rest = hand.slice();
     rest.splice(idx, 1);
-    const tingList = rules.isTing(rest, room.settings.tileSet);
+    const tingList = rules.isTing(rest);
     if (tingList.length === 0) return this._err(p, '当前手牌不能报听');
 
-    if (is136) {
-      // 136 模式报听：硬性条件 = 听牌中至少含一张 6 点及以上牌
-      if (!tingList.some((x) => rules.tilePoints(x) >= 6)) {
-        return this._err(p, '听牌中须至少含一张 6 点及以上牌（6/7/8/9/字牌）才能报听');
-      }
-      hand.splice(idx, 1);
-      g.discards[p.seat].push(tile);
-      g.lastDiscard = { tile, seat: p.seat };
-      g.tingSeats.push(p.seat);
-      g.kouTiles[p.seat] = tile; // 扣一张无用牌倒扣上架（对所有人可见）
-      g.drawnTile = null;
-      g.lastAction = null;
-      this._clearTimer(room, 'draw:' + p.seat);
-      this._log(room, `${this._pName(room, p.seat)} 报听，扣 ${rules.tileName(tile)} 上架（136）`);
-      this._afterDiscard(room, p.seat);
-      return;
+    // 报听硬性条件：听牌中至少含一张 6 点及以上牌
+    if (!tingList.some((x) => rules.tilePoints(x) >= 6)) {
+      return this._err(p, '听牌中须至少含一张 6 点及以上牌（6/7/8/9/字牌）才能报听');
     }
-
     hand.splice(idx, 1);
     g.discards[p.seat].push(tile);
     g.lastDiscard = { tile, seat: p.seat };
     g.tingSeats.push(p.seat);
+    g.kouTiles[p.seat] = tile; // 扣一张无用牌倒扣上架（对所有人可见）
     g.drawnTile = null;
     g.lastAction = null;
     this._clearTimer(room, 'draw:' + p.seat);
-    this._log(room, `${this._pName(room, p.seat)} 报听，打出 ${rules.tileName(tile)}（听口）`);
+    this._log(room, `${this._pName(room, p.seat)} 报听，扣 ${rules.tileName(tile)} 上架`);
     this._afterDiscard(room, p.seat);
   }
 
@@ -1172,10 +1056,8 @@ class GameServer {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
-    // 108 听口不能杠；136 报听玩家允许杠（杠后补牌手牌继续锁死）
-    if (g.tingSeats.includes(p.seat) && !is136) return this._err(p, '听口状态不能杠');
+    // 报听玩家允许杠（杠后补牌手牌继续锁死）
 
     // 响应阶段：明杠（别人打出的牌）
     if (g.stage === 'response' && g.pending) {
@@ -1194,7 +1076,7 @@ class GameServer {
     if (g.stage === 'draw' && g.turn === p.seat) {
       if (g.drawnTile === null) return this._err(p, '当前不能杠');
       const tile = String((msg && msg.tile) || '');
-      if (!rules.getTileTypes(room.settings.tileSet).includes(tile)) return this._err(p, '非法的牌');
+      if (!rules.getTileTypes().includes(tile)) return this._err(p, '非法的牌');
       const gangType = msg && msg.gangType === 'bugang' ? 'bugang' : 'angang';
       if (gangType === 'angang') {
         if (!rules.canAnGang(g.hands[p.seat], tile)) return this._err(p, '不能暗杠');
@@ -1214,13 +1096,11 @@ class GameServer {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
 
     // 响应阶段：点炮 / 抢杠胡
     if (g.stage === 'response' && g.pending) {
-      // 108 听口只能自摸胡；136 报听玩家可点炮/抢杠（胡牌点数限制已在响应判定中处理）
-      if (g.tingSeats.includes(p.seat) && !is136) return this._err(p, '听口状态只能自摸胡');
+      // 报听玩家可点炮/抢杠（胡牌点数限制已在响应判定中处理）
       const r = g.pending.responders.find((x) => x.seat === p.seat);
       if (!r) return this._err(p, '您没有可响应的操作');
       if (r.choice !== null) return this._err(p, '您已响应过');
@@ -1235,8 +1115,8 @@ class GameServer {
     // 行动阶段：自摸
     if (g.stage === 'draw' && g.turn === p.seat && g.drawnTile !== null) {
       if (!rules.checkHu(g.hands[p.seat])) return this._err(p, '手牌不构成胡牌');
-      // 136 模式自摸胡点数限制：1/2 点不能胡
-      if (is136 && !rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo')) {
+      // 自摸胡点数限制：1/2 点不能胡
+      if (!rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo')) {
         return this._err(p, '胡牌点数限制：1/2 点不能胡（自摸也不允许）');
       }
       this._settleHu(room, p.seat, {
@@ -1255,11 +1135,10 @@ class GameServer {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
-    // 136 报听玩家自摸可选择不胡：系统自动打出刚摸的牌（手牌继续锁死）
+    // 报听玩家自摸可选择不胡：系统自动打出刚摸的牌（手牌继续锁死）
     if (g.stage === 'draw' && g.turn === p.seat && g.drawnTile !== null) {
-      if (is136 && g.tingSeats.includes(p.seat)) {
+      if (g.tingSeats.includes(p.seat)) {
         this._autoTingDiscard(room, p.seat, g.drawnTile);
         return;
       }
@@ -1417,7 +1296,6 @@ class GameServer {
       });
     }
     const isDrawTurn = g.stage === 'draw' && g.turn === viewerSeat;
-    const is136 = room.settings.tileSet === '136';
     const view = {
       roundNo: g.roundNo,
       dealer: g.dealer,
@@ -1428,10 +1306,10 @@ class GameServer {
       drawnTile: isDrawTurn && g.drawnTile !== null ? g.drawnTile : null,
       yourSeat: viewerSeat,
       isDrawTurn,
-      // 136 模式：暗扣仅自己可见（null=未知）；报听扣牌上架与杠分明细全公开
-      kouPoints: is136 ? g.kouPoints.map((x, s) => (s === viewerSeat ? x : null)) : null,
-      kouTiles: is136 ? g.kouTiles.slice() : null,
-      gangLogs: is136 ? g.gangLogs.slice() : null,
+      // 暗扣仅自己可见（null=未知）；报听扣牌上架与杠分明细全公开
+      kouPoints: g.kouPoints.map((x, s) => (s === viewerSeat ? x : null)),
+      kouTiles: g.kouTiles.slice(),
+      gangLogs: g.gangLogs.slice(),
       players,
       pending: g.pending
         ? {
@@ -1458,7 +1336,7 @@ class GameServer {
       for (const t of [...new Set(hand)]) {
         const rest = hand.slice();
         rest.splice(rest.indexOf(t), 1);
-        const ting = rules.isTing(rest, room.settings.tileSet);
+        const ting = rules.isTing(rest);
         if (ting.length > 0) hints[t] = ting.length;
       }
       view.tingHints = hints;
@@ -1468,16 +1346,15 @@ class GameServer {
 
   _buildDrawPrompt(room, seat) {
     const g = room.game;
-    const is136 = room.settings.tileSet === '136';
     const hand = g.hands[seat];
     const actions = ['play'];
     const gangOptions = [];
     if (g.drawnTile !== null) {
-      // 136 模式自摸胡受点数限制：1/2 点不能胡（自摸也不允许），3/4/5 点可自摸
-      const canSelfHu = rules.checkHu(hand) && (!is136 || rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo'));
+      // 自摸胡受点数限制：1/2 点不能胡（自摸也不允许），3/4/5 点可自摸
+      const canSelfHu = rules.checkHu(hand) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo');
       if (canSelfHu) actions.push('hu');
-      // 136 报听玩家：自摸可胡（满足点数限制），不胡则系统摸打（给“过”）；手牌锁死不换牌
-      if (is136 && g.tingSeats.includes(seat)) {
+      // 报听玩家：自摸可胡（满足点数限制），不胡则系统摸打（给“过”）；手牌锁死不换牌
+      if (g.tingSeats.includes(seat)) {
         const canSelfHu = rules.checkHu(hand) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo');
         return {
           type: 'draw',
@@ -1499,12 +1376,8 @@ class GameServer {
       }
       if (gangOptions.length) actions.push('gang');
       if (room.settings.allowTing && !g.tingSeats.includes(seat)) {
-        if (is136) {
-          // 136 报听：摸牌后 14 张手牌存在某张可扣牌，打出后仍听牌且听口中含 ≥6 点牌
-          if (rules.canDeclareTing136(hand)) {
-            actions.push('ting');
-          }
-        } else if (rules.canDeclareTing(hand, room.settings.tileSet)) {
+        // 报听：摸牌后 14 张手牌存在某张可扣牌，打出后仍听牌且听口中含 ≥6 点牌
+        if (rules.canDeclareTing136(hand)) {
           actions.push('ting');
         }
       }
@@ -1584,26 +1457,15 @@ class GameServer {
 
   _validateSettings(s) {
     if (!s || typeof s !== 'object') return null;
-    const baseScore = Number(s.baseScore);
-    const fanLimit = Number(s.fanLimit);
     const totalRounds = Number(s.totalRounds);
-    if (![1, 2, 5, 10].includes(baseScore)) return null;
-    if (![0, 4, 8, 16].includes(fanLimit)) return null;
     if (![0, 4, 8, 12].includes(totalRounds)) return null;
-    const tileSet = s.tileSet === '136' ? '136' : '108';
     const qingYiSeMult = Number(s.qingYiSeMult) || 4;
     const yiTiaoLongMult = Number(s.yiTiaoLongMult) || 4;
     const shiSanYaoMult = Number(s.shiSanYaoMult) || 8;
     return {
-      baseScore,
-      allowDianpao: !!s.allowDianpao,
-      fanLimit,
       totalRounds,
       aiFill: !!s.aiFill,
-      // 108 模式保留听口开关；136 模式报听为必选核心规则
-      allowTing: tileSet === '136' ? true : s.allowTing !== false,
-      tileSet,
-      // 136 模式牌型开关（默认关闭，启用时倍数可配）
+      allowTing: true, // 报听为 136 必选核心规则
       enableQingYiSe: !!s.enableQingYiSe,
       enableYiTiaoLong: !!s.enableYiTiaoLong,
       enableShiSanYao: !!s.enableShiSanYao,

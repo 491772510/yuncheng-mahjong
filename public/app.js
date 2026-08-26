@@ -199,13 +199,10 @@
         <div class="rc-meta">
           <span class="badge ${r.state}">${roomStateText(r.state)}</span>
           <span>${r.playerCount}/4 人</span>
-          <span>底分 ${r.settings.baseScore}</span>
-          <span>${r.settings.allowDianpao ? '可点炮' : '仅自摸'}</span>
+          <span>136张·带风带箭</span>
           <span>${r.settings.aiFill ? 'AI补位' : '无AI'}</span>
-          <span>${r.settings.allowTing ? '听口开' : '听口关'}</span>
-          <span>${r.settings.tileSet === '136' ? '136张·带风带箭' : '108张·标准'}</span>
+          <span>报听必开</span>
           <span>${roundsText(r.settings.totalRounds)}</span>
-          <span>${fanLimitText(r.settings.fanLimit)}</span>
         </div>
         <button class="btn small primary" data-join="${r.id}"
           ${r.state !== 'waiting' || r.playerCount >= 4 ? 'disabled' : ''}>加入</button>
@@ -216,7 +213,6 @@
     return s === 'playing' ? '游戏中' : s === 'settled' ? '已结算' : '等待中';
   }
   function roundsText(v) { return v === 0 ? '不限局数' : v + ' 局'; }
-  function fanLimitText(v) { return v === 0 ? '番型不限' : '封顶 ' + v + ' 番'; }
 
   // ================= 房间视图 =================
   function renderRoomView() {
@@ -353,10 +349,9 @@
     }
     const cur = game.players[game.turn];
     if (!cur) return '';
-    const is136 = state.room && state.room.settings && state.room.settings.tileSet === '136';
     const you = game.yourSeat === game.turn;
-    if (you) return cur.ting ? (is136 ? '你已报听，摸牌即打（只能杠，不能碰/换牌）' : '你已报听（听口），摸牌即打') : '轮到你出牌';
-    return cur.ting ? `等待 ${cur.name} 摸打（${is136 ? '报听' : '听口'}）…` : `等待 ${cur.name} 出牌…`;
+    if (you) return cur.ting ? '你已报听，摸牌即打（只能杠，不能碰/换牌）' : '轮到你出牌';
+    return cur.ting ? `等待 ${cur.name} 摸打（报听）…` : `等待 ${cur.name} 出牌…`;
   }
 
   function renderOtherCard(p, seat, pos) {
@@ -537,11 +532,10 @@
     if (!p) { bar.innerHTML = ''; return; }
     let btns = '';
     if (p.type === 'draw') {
-      const is136 = state.game && state.room && state.room.settings && state.room.settings.tileSet === '136';
       if (p.canHu) btns += `<button class="act act-hu" data-act="hu">胡</button>`;
       if (p.actions && p.actions.includes('pass')) btns += `<button class="act act-pass" data-act="pass">过</button>`;
       if (p.gangOptions && p.gangOptions.length) btns += `<button class="act act-gang" data-act="gang">杠</button>`;
-      if (p.canDeclareTing && !state.tingPick) btns += `<button class="act act-ting" data-act="ting">${is136 ? '报听' : '听口'}</button>`;
+      if (p.canDeclareTing && !state.tingPick) btns += `<button class="act act-ting" data-act="ting">报听</button>`;
       if (state.tingPick) {
         btns += `<button class="act act-pass" data-act="ting-cancel">取消</button>`;
         btns += `<span class="countdown" style="align-self:center;">点击要扣的牌报听</span>`;
@@ -706,66 +700,54 @@
     if (!result) return;
     const title = $('#settle-title');
     const content = $('#settle-content');
-    if (result.mode136) {
-      // ===== 136 模式结算：点数 × 牌型倍数 × 扣点 =====
-      const winner = result.hands && result.hands[result.winnerSeat];
-      const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-      title.textContent = `${winner ? winner.name : ''} ${winLabel}！`;
-      const multText = (result.multNames && result.multNames.length ? result.multNames.join('、') : '平胡');
+    // ===== 136 张玩法结算：点数 × 牌型倍数 × 扣点 =====
+    if (result.type === 'draw') {
+      // 流局：剩 6 墩无人胡，公开听牌者 / 扣点 / 杠分
+      title.textContent = '流局';
+      const ting = (result.tingSeats || []).map((s) => result.hands[s] ? result.hands[s].name : '').join('、');
       const kouText = (result.kouPoints || []).map((v, s) => {
         const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
         return `${esc(nm)} 扣${v}点`;
       }).join(' · ');
-      const calcText = result.winType === 'zimo'
-        ? `${result.tilePoints}点 × 2 × ${result.mult}倍 × 扣${result.kouPoint}点`
-        : `${result.tilePoints}点 × ${result.mult}倍 × 扣${result.kouPoint}点`;
       content.innerHTML = `
-        <div class="settle-head">
-          <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
-          <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}（×${result.mult}）</div>
-          <div class="settle-sub">${calcText}${result.baoHu ? ' · 包胡（一包三）' : ''}</div>
-          <div class="settle-sub">暗扣公开：${kouText}</div>
-        </div>
+        <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，荒庄连庄）</div></div>
+        <div class="settle-sub">${ting ? '听牌者：' + ting : '无人听牌'}</div>
+        <div class="settle-sub">暗扣公开：${kouText}</div>
         ${gangLogsHtml(result.gangLogs, result.hands)}
-        <div class="settle-hands">${result.hands.map((h) => h ? `
-          <div class="row">
-            <b>${esc(h.name)}${h.seat === result.winnerSeat ? '（胡）' : ''}</b>
-            ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
-            ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
-            <span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>
-          </div>` : '').join('')}</div>`;
-      $('#settle-modal').classList.remove('hidden');
-      return;
-    }
-    if (result.type === 'hu') {
-      const winner = result.hands && result.hands[result.winnerSeat];
-      const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-      title.textContent = `${winner ? winner.name : ''} ${winLabel}！`;
-      const fanText = (result.fanNames && result.fanNames.length ? result.fanNames.join('、') : '平胡');
-      content.innerHTML = `
-        <div class="settle-head">
-          <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
-          <div class="settle-sub">胡 ${tileText(result.tile)} · ${fanText || '平胡'}${result.fan === 0 ? '' : ` · ${result.fan}番`}</div>
-        </div>
-        <div class="settle-hands">${result.hands.map((h) => h ? `
-          <div class="row">
-            <b>${esc(h.name)}${h.seat === result.winnerSeat ? '（胡）' : ''}</b>
-            ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
-            ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
-            <span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>
-          </div>` : '').join('')}</div>`;
-    } else {
-      title.textContent = '流局（荒庄）';
-      const ting = (result.tingSeats || []).map((s) => result.hands[s] ? result.hands[s].name : '').join('、');
-      content.innerHTML = `
-        <div class="settle-head"><div class="settle-sub">牌墙已摸完</div></div>
-        <div class="settle-sub">${ting ? '听牌者：' + ting + '（各 +' + (state.room ? state.room.settings.baseScore : 0) + ' 分）' : '无人听牌，无分差'}</div>
         <div class="settle-hands">${result.hands.map((h) => h ? `
           <div class="row"><b>${esc(h.name)}</b>
             ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
             ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
           </div>` : '').join('')}</div>`;
+      $('#settle-modal').classList.remove('hidden');
+      return;
     }
+    const winner = result.hands && result.hands[result.winnerSeat];
+    const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+    title.textContent = `${winner ? winner.name : ''} ${winLabel}！`;
+    const multText = (result.multNames && result.multNames.length ? result.multNames.join('、') : '平胡');
+    const kouText = (result.kouPoints || []).map((v, s) => {
+      const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
+      return `${esc(nm)} 扣${v}点`;
+    }).join(' · ');
+    const calcText = result.winType === 'zimo'
+      ? `${result.tilePoints}点 × 2 × ${result.mult}倍 × 扣${result.kouPoint}点`
+      : `${result.tilePoints}点 × ${result.mult}倍 × 扣${result.kouPoint}点`;
+    content.innerHTML = `
+      <div class="settle-head">
+        <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
+        <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}（×${result.mult}）</div>
+        <div class="settle-sub">${calcText}${result.baoHu ? ' · 包胡（一包三）' : ''}</div>
+        <div class="settle-sub">暗扣公开：${kouText}</div>
+      </div>
+      ${gangLogsHtml(result.gangLogs, result.hands)}
+      <div class="settle-hands">${result.hands.map((h) => h ? `
+        <div class="row">
+          <b>${esc(h.name)}${h.seat === result.winnerSeat ? '（胡）' : ''}</b>
+          ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
+          ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
+          <span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>
+        </div>` : '').join('')}</div>`;
     $('#settle-modal').classList.remove('hidden');
   }
 
@@ -826,25 +808,18 @@
       if (w.type === 'hu') {
         const winner = w.hands && w.hands[w.winnerSeat];
         const winLabel = w.winType === 'zimo' ? '自摸' : w.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-        if (w.mode136) {
-          const multText = (w.multNames && w.multNames.length ? w.multNames.join('、') : '平胡');
-          const kouText = (w.kouPoints || []).map((v, s) => {
-            const nm = w.hands && w.hands[s] ? w.hands[s].name : '座位' + s;
-            return `${esc(nm)} 扣${v}点`;
-          }).join(' · ');
-          const calcText = w.winType === 'zimo'
-            ? `${w.tilePoints}点 × 2 × ${w.mult}倍 × 扣${w.kouPoint}点`
-            : `${w.tilePoints}点 × ${w.mult}倍 × 扣${w.kouPoint}点`;
-          html += `<div class="settle-head">
-            <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${multText} · ${calcText}${w.baoHu ? '（包胡）' : ''} → ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
-            <div class="settle-sub">暗扣公开：${kouText}</div>
-          </div>${gangLogsHtml(w.gangLogs, w.hands)}`;
-        } else {
-          const fanText = (w.fanNames && w.fanNames.length ? w.fanNames.join('、') : '平胡');
-          html += `<div class="settle-head">
-            <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${fanText || '平胡'} · ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
-          </div>`;
-        }
+        const multText = (w.multNames && w.multNames.length ? w.multNames.join('、') : '平胡');
+        const kouText = (w.kouPoints || []).map((v, s) => {
+          const nm = w.hands && w.hands[s] ? w.hands[s].name : '座位' + s;
+          return `${esc(nm)} 扣${v}点`;
+        }).join(' · ');
+        const calcText = w.winType === 'zimo'
+          ? `${w.tilePoints}点 × 2 × ${w.mult}倍 × 扣${w.kouPoint}点`
+          : `${w.tilePoints}点 × ${w.mult}倍 × 扣${w.kouPoint}点`;
+        html += `<div class="settle-head">
+          <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${multText} · ${calcText}${w.baoHu ? '（包胡）' : ''} → ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
+          <div class="settle-sub">暗扣公开：${kouText}</div>
+        </div>${gangLogsHtml(w.gangLogs, w.hands)}`;
       } else {
         const ting = (w.tingSeats || []).map((s) => w.hands[s] ? w.hands[s].name : '').join('、');
         html += `<div class="settle-head"><div class="settle-sub">最后一局：流局（荒庄）${ting ? '，听牌者：' + ting : ''}</div></div>`;
@@ -865,30 +840,17 @@
   function hideModal(id) { $('#' + id).classList.add('hidden'); }
 
   function initCreateModal() {
-    buildSeg('seg-base', [1, 2, 5, 10], (v) => v + ' 分');
-    buildSeg('seg-fan', [0, 4, 8, 16], (v) => (v === 0 ? '不封顶' : v + ' 番'));
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
     $('#create-cancel').onclick = () => hideModal('create-modal');
     $('#settle-close').onclick = () => hideModal('settle-modal');
-    // 牌型切换：136 显示专属开关并隐藏“允许听口”（136 报听为必选核心规则）
-    $('#opt-tileset').addEventListener('change', () => {
-      const is136 = $('#opt-tileset').value === '136';
-      $('#settings-136').classList.toggle('hidden', !is136);
-      $('#row-opt-ting').classList.toggle('hidden', is136);
-    });
     $('#create-confirm').onclick = () => {
-      const baseScore = segValue('seg-base');
-      const fanLimit = segValue('seg-fan');
       const totalRounds = segValue('seg-rounds');
-      const allowDianpao = $('#opt-dianpao').checked;
       const aiFill = $('#opt-aifill').checked;
-      const allowTing = !$('#opt-ting') || $('#opt-ting').checked;
-      const tileSet = $('#opt-tileset') ? $('#opt-tileset').value : '108';
       const enableQingYiSe = $('#opt-qingyise').checked;
       const enableYiTiaoLong = $('#opt-yitiaolong').checked;
       const enableShiSanYao = $('#opt-shisanyao').checked;
       send({ type: 'create_room', settings: {
-        baseScore, allowDianpao, fanLimit, totalRounds, aiFill, allowTing, tileSet,
+        totalRounds, aiFill,
         enableQingYiSe, qingYiSeMult: Number($('#opt-qingyise-mult').value) || 4,
         enableYiTiaoLong, yiTiaoLongMult: Number($('#opt-yitiaolong-mult').value) || 4,
         enableShiSanYao, shiSanYaoMult: Number($('#opt-shisanyao-mult').value) || 8,

@@ -268,10 +268,6 @@ body {
   color: #555; cursor: pointer; font-size: 14px;
 }
 .seg-item.active { background: #1e9e63; border-color: #1e9e63; color: #fff; font-weight: 700; }
-.seg-select {
-  flex: 1; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; background: #fff;
-  color: #333; font-size: 13px; max-width: 240px;
-}
 .switch { position: relative; display: inline-block; width: 52px; height: 28px; cursor: pointer; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch span {

@@ -64,38 +64,15 @@
     <div class="modal-box">
       <h3>创建房间</h3>
       <div class="setting-row">
-        <label>底分</label>
-        <div class="seg" id="seg-base"></div>
-      </div>
-      <div class="setting-row">
-        <label>番型上限</label>
-        <div class="seg" id="seg-fan"></div>
-      </div>
-      <div class="setting-row">
         <label>总局数</label>
         <div class="seg" id="seg-rounds"></div>
-      </div>
-      <div class="setting-row">
-        <label>允许点炮</label>
-        <label class="switch"><input type="checkbox" id="opt-dianpao"><span></span></label>
       </div>
       <div class="setting-row">
         <label>AI 补位</label>
         <label class="switch"><input type="checkbox" id="opt-aifill" checked><span></span></label>
       </div>
-      <div class="setting-row">
-        <label>牌型</label>
-        <select id="opt-tileset" class="seg-select">
-          <option value="108" selected>标准扣点点（108 张，万条筒）</option>
-          <option value="136">带风带箭（136 张，+东南西北中发白）</option>
-        </select>
-      </div>
-      <div class="setting-row" id="row-opt-ting">
-        <label>允许听口</label>
-        <label class="switch"><input type="checkbox" id="opt-ting" checked><span></span></label>
-      </div>
-      <div id="settings-136" class="settings-136 hidden">
-        <div class="setting-divider">136 模式 · 牌型倍数开关（默认关闭）</div>
+      <div id="settings-136" class="settings-136">
+        <div class="setting-divider">牌型倍数开关（默认关闭）</div>
         <div class="setting-row">
           <label>清一色</label>
           <label class="switch"><input type="checkbox" id="opt-qingyise"><span></span></label>
@@ -112,7 +89,7 @@
           <input type="number" id="opt-shisanyao-mult" class="mult-input" value="8" min="1" max="32">
         </div>
       </div>
-      <p class="tip">未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 模式：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。108 模式保持原有规则。</p>
+      <p class="tip">未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。</p>
       <div class="modal-actions">
         <button id="create-cancel" class="btn">取消</button>
         <button id="create-confirm" class="btn primary">创建</button>

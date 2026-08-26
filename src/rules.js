@@ -3,13 +3,13 @@
 /**
  * 运城扣点点麻将规则引擎（纯函数模块，可独立单测）
  *
- * 规则要点：
- *  - 108 张牌：万(w)/条(t)/筒(b) 1-9 各 4 张，无风、箭、花牌
- *  - 只能碰、杠，不能吃；默认只能自摸胡（房间可配置允许点炮）
- *  - 胡牌 = 4 面子 + 1 将（任意对子），或七对（含豪华七对）
- *  - 番型：平胡 1；碰碰胡 +1；清一色 +2；七对 2；豪华七对 4；清七对再 +2；
- *    杠上开花 +1；抢杠胡 +1；海底捞月 +1
- *  - 计分：基础分 = 底分 × 番数（番型上限可选封顶），自摸三家付 / 点炮一家付
+ * 规则要点（136 张民间通用版，唯一玩法）：
+ *  - 136 张牌：万(w)/条(t)/筒(b) 1-9 各 4 张 + 东南西北中发白 各 4 张
+ *  - 只能碰、杠，不能吃；可点炮可自摸（受胡牌点数限制）
+ *  - 胡牌 = 4 面子 + 1 将（任意对子），或七对（含豪华七对）、十三幺
+ *  - 开局每人暗扣 1-4 点（本局胡牌倍数，结算公开）；报听需听口含 ≥6 点牌
+ *  - 胡牌点数限制：1/2 点不能胡；3/4/5 点只能自摸；6/7/8/9/字牌(10 点)可点炮可自摸
+ *  - 计分：点数 × 牌型倍数 × 自己扣点；杠分即时结算（明杠每家 1、暗杠每家 2）
  */
 
 const SUITS = ['w', 't', 'b']; // 万、条、筒
@@ -21,22 +21,21 @@ const HONOR_TILES = ['e', 's', 'x', 'n', 'z', 'f', 'p']; // 东 南 西 北 中 
 const HONOR_NAMES = { e: '东', s: '南', x: '西', n: '北', z: '中', f: '发', p: '白' };
 const HONOR_ORDER = { e: 0, s: 1, x: 2, n: 3, z: 4, f: 5, p: 6 };
 
-/** 全部 27 种数牌（每种 4 张共 108 张）；字牌见 HONOR_TILES */
+/** 全部 27 种数牌（每种 4 张）；字牌见 HONOR_TILES（7 种 × 4 = 28 张），合计 136 张 */
 const ALL_TILE_TYPES = [];
 for (const s of SUITS) {
   for (let n = 1; n <= 9; n++) ALL_TILE_TYPES.push(s + n);
 }
 
-/** 按牌型返回全部牌型编码：'108' = 万条筒 27 种；'136' = 万条筒 + 东南西北中发白 34 种 */
-function getTileTypes(tileSet = '108') {
-  return tileSet === '136' ? ALL_TILE_TYPES.concat(HONOR_TILES) : ALL_TILE_TYPES.slice();
+/** 全部牌型编码：万条筒 27 种 + 东南西北中发白 7 种 = 34 种（136 张） */
+function getTileTypes() {
+  return ALL_TILE_TYPES.concat(HONOR_TILES);
 }
 
-/** 生成完整牌墙：tileSet='108' 生成 108 张；'136' 生成 136 张（含字牌各 4 张） */
-function createTiles(tileSet = '108') {
+/** 生成完整牌墙：136 张（万条筒 1-9 各 4 张 + 字牌各 4 张） */
+function createTiles() {
   const tiles = [];
-  const types = getTileTypes(tileSet);
-  for (const t of types) {
+  for (const t of getTileTypes()) {
     for (let k = 0; k < 4; k++) tiles.push(t);
   }
   return tiles;
@@ -208,26 +207,13 @@ function canBuGang(hand, melds, tile) {
   return melds.some((m) => m.type === 'peng' && m.tile === tile);
 }
 
-/** 听牌检测：13 张手牌，返回能胡的牌列表（空数组 = 未听）。tileSet 决定候选牌范围（108/136） */
-function isTing(hand, tileSet = '108') {
+/** 听牌检测：13 张手牌，返回能胡的牌列表（空数组 = 未听）。候选牌范围为全部 34 种 */
+function isTing(hand) {
   const res = [];
-  for (const t of getTileTypes(tileSet)) {
+  for (const t of getTileTypes()) {
     if (checkHu([...hand, t])) res.push(t);
   }
   return res;
-}
-
-/**
- * 可否报听：手牌（通常 14 张，摸牌后）中是否存在一张牌，打出后仍听牌。
- * 用于「听口」玩法的报听资格判定。
- */
-function canDeclareTing(hand, tileSet = '108') {
-  for (const t of [...new Set(hand)]) {
-    const rest = hand.slice();
-    rest.splice(rest.indexOf(t), 1);
-    if (isTing(rest, tileSet).length > 0) return true;
-  }
-  return false;
 }
 
 /** 是否碰碰胡（考虑明牌区）：手牌部分每张牌数量为 3 的倍数或恰一个对子作将 */
@@ -249,83 +235,6 @@ function isPengPengHuWithMelds(hand, melds) {
     }
   }
   return true;
-}
-
-/**
- * 计算胡牌番数
- * @param {string[]} hand 胡牌时的 14 张手牌（不含明牌区）
- * @param {object} info
- *   winType: 'zimo' | 'dianpao' | 'qianggang'
- *   gangShang: boolean 杠上开花
- *   haiDi: boolean 海底捞月
- *   qiangGang: boolean 抢杠胡
- *   melds: [{type:'peng'|'gang'|'angang'|'bugang', tile, tiles}] 明牌区
- * @param {boolean} [detail] 为 true 时返回 { fan, names }
- * @returns {number | {fan:number, names:string[]}} 番数（detail 时为对象）
- */
-function calcFan(hand, info = {}, detail = false) {
-  const melds = info.melds || [];
-  const winType = info.winType || 'zimo';
-  const allTiles = hand.slice();
-  for (const m of melds) {
-    for (const t of m.tiles) allTiles.push(t);
-  }
-  // 清一色：仅当全部为同一数牌花色（万/条/筒）且不含字牌；字牌属风/箭，不计入清一色
-  const allSuit =
-    allTiles.length > 0 &&
-    allTiles.every((t) => !HONOR_NAMES[t]) &&
-    allTiles.every((t) => suitOf(t) === suitOf(allTiles[0]));
-
-  let fan = 0;
-  const names = [];
-  const isQD = melds.length === 0 && isQiDui(hand);
-  if (isQD) {
-    fan = isLuxuryQiDui(hand) ? 4 : 2;
-    names.push(isLuxuryQiDui(hand) ? '豪华七对' : '七对');
-    if (allSuit) {
-      fan += 2; // 清七对
-      names.push('清一色');
-    }
-  } else {
-    const pp = melds.length === 0 ? isPengPengHu(hand) : isPengPengHuWithMelds(hand, melds);
-    if (pp) {
-      fan += 1; // 碰碰胡
-      names.push('碰碰胡');
-    }
-    if (allSuit) {
-      fan += 2; // 清一色
-      names.push('清一色');
-    }
-    fan += 1; // 平胡基础番
-    if (names.length === 0) names.push('平胡');
-  }
-  if (info.gangShang) {
-    fan += 1;
-    names.push('杠上开花');
-  }
-  if (info.qiangGang) {
-    fan += 1;
-    names.push('抢杠胡');
-  }
-  if (info.haiDi) {
-    fan += 1;
-    names.push('海底捞月');
-  }
-  if (info.tingKou) {
-    fan += 1;
-    names.push('听口');
-  }
-  void winType;
-  return detail ? { fan, names } : fan;
-}
-
-/**
- * 计分：基础分 = 底分 × 番数（番型上限可选封顶，0 表示不封顶）
- */
-function calcScore(baseScore, fan, fanLimit) {
-  let f = fan;
-  if (fanLimit && fanLimit > 0 && f > fanLimit) f = fanLimit;
-  return baseScore * f;
 }
 
 // ============ 136 模式：扣点点完整规则（本地民间通用版） ============
@@ -351,14 +260,14 @@ function canHuByPoints(pt, winType) {
 }
 
 /**
- * 136 模式报听资格：手牌（14 张，摸牌后）中存在一张牌 t，打出后仍听牌，
+ * 报听资格：手牌（14 张，摸牌后）中存在一张牌 t，打出后仍听牌，
  * 且听口列表中至少包含一张 6 点及以上牌（6/7/8/9/字牌=10点）。
  */
 function canDeclareTing136(hand) {
   for (const t of [...new Set(hand)]) {
     const rest = hand.slice();
     rest.splice(rest.indexOf(t), 1);
-    const ting = isTing(rest, '136');
+    const ting = isTing(rest);
     if (ting.some((x) => tilePoints(x) >= 6)) return true;
   }
   return false;
@@ -403,7 +312,7 @@ function isShiSanYao(hand) {
 }
 
 /**
- * 136 模式牌型倍数（乘法叠加）：
+ * 牌型倍数（乘法叠加）：
  *  平胡×1、碰碰胡×2、七小对×4、豪华七小对×8、杠上开花×2；
  *  清一色/一条龙/十三幺为房间开关，启用时倍数可配（默认 ×4/×4/×8）。
  * @param {string[]} hand 胡牌时的 14 张手牌
@@ -486,13 +395,10 @@ module.exports = {
   canAnGang,
   canBuGang,
   isTing,
-  canDeclareTing,
   isQiDui,
   isLuxuryQiDui,
   isPengPengHu,
   isPengPengHuWithMelds,
-  calcFan,
-  calcScore,
   tilePoints,
   canHuByPoints,
   canDeclareTing136,
