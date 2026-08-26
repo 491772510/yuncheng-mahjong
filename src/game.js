@@ -130,7 +130,7 @@ class GameServer {
         return;
       }
       this._log(room, `${p.name} 重新连接`);
-      this._send(p, { type: 'room_state', room: this._buildRoomView(room) });
+      this._send(p, { type: 'room_state', room: this._buildRoomView(room, p.seat) });
       if (room.state === 'playing' && room.game) {
         this._send(p, { type: 'game_state', game: this._buildGameView(room, p.seat) });
         // 重连补发 action_prompt：若正好轮到该玩家出牌，或该玩家尚有未决定的碰/杠/胡响应权，
@@ -252,7 +252,7 @@ class GameServer {
     this.rooms.set(id, room);
     this._seatPlayer(room, p);
     this._log(room, `${p.name} 创建了房间 ${id}`);
-    this._send(p, { type: 'room_state', room: this._buildRoomView(room) });
+    this._send(p, { type: 'room_state', room: this._buildRoomView(room, p.seat) });
     this._broadcastLobby();
   }
 
@@ -267,7 +267,7 @@ class GameServer {
 
     this._seatPlayer(room, p);
     this._log(room, `${p.name} 加入房间`);
-    this._send(p, { type: 'room_state', room: this._buildRoomView(room) });
+    this._send(p, { type: 'room_state', room: this._buildRoomView(room, p.seat) });
     this._broadcastRoomState(room);
     this._broadcastLobby();
     // 4 人满自动开局
@@ -492,7 +492,7 @@ class GameServer {
     g.drawnTile = tile;
     g.lastDiscard = null;
     g.lastAction = null;
-    this._log(room, `${this._pName(room, seat)} 摸到 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 摸到 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 摸牌`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     // 听口玩家：摸牌即打（不能换牌、不能碰杠），系统自动打出刚摸的牌
@@ -518,7 +518,7 @@ class GameServer {
     g.drawnTile = null;
     g.lastAction = null;
     this._clearTimer(room, 'draw:' + seat);
-    this._log(room, `${this._pName(room, seat)} 摸牌即打 ${rules.tileName(tile)}（听口）`);
+    this._log(room, `${this._pName(room, seat)} 摸牌即打 ${rules.tileName(tile)}（听口）`, seat, `${this._pName(room, seat)} 摸牌即打（听口）`);
     this._afterDiscard(room, seat);
   }
 
@@ -1363,7 +1363,7 @@ class GameServer {
 
   // ============ 构建视图 / 消息 ============
 
-  _buildRoomView(room) {
+  _buildRoomView(room, viewerSeat) {
     return {
       id: room.id,
       state: room.state,
@@ -1385,7 +1385,7 @@ class GameServer {
           : null
       ),
       settleConfirms: room.settleConfirms ? room.settleConfirms.slice() : null,
-      logs: room.logs.slice(-MAX_LOGS),
+      logs: this._maskLogsForViewer(room.logs.slice(-MAX_LOGS), viewerSeat),
       chat: room.chat.slice(-MAX_CHAT),
     };
   }
@@ -1449,7 +1449,7 @@ class GameServer {
         : null,
       winners: g.winners,
       settings: room.settings,
-      logs: room.logs,
+      logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
     if (isDrawTurn && g.drawnTile !== null) {
       // 听牌提示：打出某张后听牌数
@@ -1674,10 +1674,23 @@ class GameServer {
     }
   }
 
-  _log(room, text) {
+  _log(room, text, privateFor, maskedText) {
     if (!room) return;
-    room.logs.push({ time: nowTime(), text });
+    const entry = { time: nowTime(), text };
+    if (typeof privateFor === 'number') entry.privateFor = privateFor;
+    if (typeof maskedText === 'string') entry.maskedText = maskedText;
+    room.logs.push(entry);
     if (room.logs.length > MAX_LOGS) room.logs.shift();
+  }
+
+  /** 按查看者视角脱敏日志：私有日志（privateFor）仅本人见完整文本，他人见 maskedText */
+  _maskLogsForViewer(logs, viewerSeat) {
+    return (logs || []).map((e) => {
+      if (e && e.privateFor !== undefined && e.privateFor !== viewerSeat && typeof e.maskedText === 'string') {
+        return { time: e.time, text: e.maskedText };
+      }
+      return e;
+    });
   }
 
   _pName(room, seat) {
@@ -1697,7 +1710,7 @@ class GameServer {
 
   _broadcastRoomState(room) {
     for (const pl of room.players) {
-      if (pl && pl.ws) this._send(pl, { type: 'room_state', room: this._buildRoomView(room) });
+      if (pl && pl.ws) this._send(pl, { type: 'room_state', room: this._buildRoomView(room, pl.seat) });
     }
   }
 
