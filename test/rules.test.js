@@ -263,3 +263,85 @@ test('isYiTiaoLong 判定（手牌+明牌区同花色 1-9 齐全）', () => {
   const no9 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't2', 't2', 't2', 't5', 't5', 'w5'];
   assert.equal(rules.isYiTiaoLong(no9, []), false);
 });
+
+// ============ 报听缺陷修复：碰/杠明牌区（melds）计入听口/报听/胡牌 ============
+
+test('isTing 带 melds：碰后听口立即识别（碰完即听，不待下轮摸牌）', () => {
+  // 碰 t3 后手牌 10 张：123456789万 + 5条单张 → 听 5条（成将）
+  const melds = [{ type: 'peng', tile: 't3', tiles: ['t3', 't3', 't3'] }];
+  const hand = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't5'];
+  const ting = rules.isTing(hand, melds);
+  assert.ok(ting.includes('t5'), '碰后听口应立即识别 t5');
+  // 带 melds 判定与纯手牌结构判定在此例一致（11 张恰为 n*3+2 结构）；
+  // 关键语义：碰后调用链必须统一传 melds，避免把明牌刻子当手牌面子重复计算
+  assert.deepEqual(rules.isTing(hand, melds), rules.isTing(hand));
+});
+
+test('isTing 带 melds：碰 2 次 / 杠后听口', () => {
+  // 碰 t3 + 碰 b3 后手牌 7 张：1234567万 → 听 7万成将（melds 提供 2 个已成型面子）
+  const melds2 = [
+    { type: 'peng', tile: 't3', tiles: ['t3', 't3', 't3'] },
+    { type: 'peng', tile: 'b3', tiles: ['b3', 'b3', 'b3'] },
+  ];
+  const hand2 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7'];
+  const ting2 = rules.isTing(hand2, melds2);
+  assert.ok(ting2.includes('w7'), '碰2次后听口应立即识别 w7');
+
+  // 杠 t3 后手牌 10 张：123456789万 + 5条单张 → 听 5条（杠算 1 个已成型面子）
+  const meldsG = [{ type: 'gang', tile: 't3', tiles: ['t3', 't3', 't3', 't3'] }];
+  const handG = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't5'];
+  const tingG = rules.isTing(handG, meldsG);
+  assert.ok(tingG.includes('t5'), '杠后听口应立即识别 t5');
+});
+
+test('canDeclareTing136 带 melds：碰后报听资格（含 ≥6 点硬性条件）', () => {
+  // 碰 t3 后 11 张：123456789万 + 99条 → 扣 9条 听 9条（9 点）可报听
+  const melds = [{ type: 'peng', tile: 't3', tiles: ['t3', 't3', 't3'] }];
+  const hand11 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't9', 't9'];
+  assert.equal(rules.canDeclareTing136(hand11, melds), true, '碰后应立即具备报听资格');
+  // 不带 melds 时 11 张手牌本身为 n*3+2 结构也可能被识别；
+  // 语义关键：碰后调用链必须统一传 melds，保证明牌刻子作为已成型面子正确参与计算
+  assert.equal(rules.canDeclareTing136(hand11, melds), rules.canDeclareTing136(hand11));
+
+  // 碰后只听小点数：111万222万333万+11条（碰 t3）→ 任意打法听口均 ≤5 点，不满足 ≥6 点硬性条件
+  const handLow = ['w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'w3', 'w3', 'w3', 't1', 't1'];
+  assert.equal(rules.canDeclareTing136(handLow, melds), false);
+});
+
+test('canHuWith/checkHu 带 melds：碰后胡牌判定（点炮/自摸）', () => {
+  // 碰 t3 后手牌 10 张 + 点炮 5条 → 胡；点炮 3条/其他牌不胡
+  const melds = [{ type: 'peng', tile: 't3', tiles: ['t3', 't3', 't3'] }];
+  const hand10 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't5'];
+  assert.equal(rules.canHuWith(hand10, 't5', melds), true);
+  assert.equal(rules.canHuWith(hand10, 't3', melds), false);
+  assert.equal(rules.canHuWith(hand10, 'w9', melds), false);
+  // 自摸：checkHu 带 melds（11 张）
+  assert.equal(rules.checkHu(['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't5', 't5'], melds), true);
+});
+
+test('checkHuWithMelds 手牌长度/非法 meld 校验', () => {
+  // 杠 1 次：胡牌时手牌须 11 张
+  const meldsG = [{ type: 'gang', tile: 't3', tiles: ['t3', 't3', 't3', 't3'] }];
+  assert.equal(rules.checkHu(['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't5', 't5'], meldsG), true);
+  // 手牌张数不符 → false
+  assert.equal(rules.checkHu(['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't5'], meldsG), false);
+  // 非法 meld 类型 → false
+  assert.equal(
+    rules.checkHu(
+      ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't5', 't5'],
+      [{ type: 'chi', tile: 't3', tiles: ['t1', 't2', 't3'] }]
+    ),
+    false
+  );
+});
+
+test('上架暗牌不可作胡目标：胡牌仅基于手牌+melds，扣牌不参与判定', () => {
+  // 报听扣牌（暗牌）存于上架区，不进手牌、不进 melds、不进弃牌区；
+  // 他人点炮判定只看其手牌+melds，扣牌不会被误当作可胡目标
+  const melds = [{ type: 'peng', tile: 't3', tiles: ['t3', 't3', 't3'] }];
+  // 某玩家碰 t3 后手牌 10 张，听 t5
+  const hand10 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't5'];
+  assert.equal(rules.canHuWith(hand10, 't5', melds), true, '收到听口 t5 才胡');
+  assert.equal(rules.canHuWith(hand10, 'b7', melds), false, '上架暗牌 b7 不作为可胡目标');
+  assert.equal(rules.canHuWith(hand10, 't9', melds), false, '收到非听口牌不胡');
+});

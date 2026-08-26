@@ -158,9 +158,12 @@ function isPengPengHu(hand) {
 /**
  * 标准胡牌判定：14 张（或 11/8/5/2 张结构）能否组成 4 面子 + 1 将，或七对。
  * 入参张数需满足 n*3+2（通常 14）。
+ * @param {string[]} hand 手牌
+ * @param {object[]} [melds] 明牌区（碰/杠刻子），非空时走 checkHuWithMelds
  */
-function checkHu(hand) {
+function checkHu(hand, melds) {
   if (!Array.isArray(hand) || hand.length % 3 !== 2) return false;
+  if (Array.isArray(melds) && melds.length > 0) return checkHuWithMelds(hand, melds);
   if (hand.length === 2) {
     const cnt = countTiles(hand);
     const vals = [...cnt.values()];
@@ -181,8 +184,42 @@ function checkHu(hand) {
   return false;
 }
 
-/** 胡某张牌：hand（通常 13 张）+ tile 是否成胡 */
-function canHuWith(hand, tile) {
+/**
+ * 胡牌判定（带明牌区）：将碰/杠刻子作为已成型面子参与结构计算。
+ * 手牌长度须等于 (4 - 明牌面子数) * 3 + 2（杠的展示第 4 张为冗余展示，不参与结构）。
+ * 例：碰 1 次手牌 11 张（11+3=14 张等效）、杠 1 次手牌 11 张（11+4=15 张）、碰 1 杠 1 手牌 8 张。
+ */
+function checkHuWithMelds(hand, melds) {
+  if (!Array.isArray(hand) || !Array.isArray(melds)) return false;
+  const m = melds.filter((x) => x && typeof x === 'object' && x.tile);
+  const meldSets = m.length;
+  if (meldSets > 4) return false;
+  for (const mm of m) {
+    if (mm.type !== 'peng' && mm.type !== 'gang' && mm.type !== 'angang' && mm.type !== 'bugang') {
+      return false;
+    }
+    const c = countTiles(mm.tiles || []).get(mm.tile) || 0;
+    if (c < 3) return false;
+  }
+  const need = (4 - meldSets) * 3 + 2;
+  if (hand.length !== need) return false;
+  const cnt = countTiles(sortTiles(hand));
+  const meldCount = (hand.length - 2) / 3;
+  for (const [tile, c] of cnt) {
+    if (c >= 2) {
+      const c2 = new Map(cnt);
+      const r = c - 2;
+      if (r === 0) c2.delete(tile);
+      else c2.set(tile, r);
+      if (canFormMelds(c2, meldCount)) return true;
+    }
+  }
+  return false;
+}
+
+/** 胡某张牌：hand（通常 13 张）+ tile 是否成胡；melds 非空时按带明牌判定 */
+function canHuWith(hand, tile, melds) {
+  if (Array.isArray(melds) && melds.length > 0) return checkHuWithMelds([...hand, tile], melds);
   return checkHu([...hand, tile]);
 }
 
@@ -207,11 +244,14 @@ function canBuGang(hand, melds, tile) {
   return melds.some((m) => m.type === 'peng' && m.tile === tile);
 }
 
-/** 听牌检测：13 张手牌，返回能胡的牌列表（空数组 = 未听）。候选牌范围为全部 34 种 */
-function isTing(hand) {
+/** 听牌列表：手牌摸入哪张即胡；melds 非空时按带明牌区（碰/杠刻子）计算听口 */
+function isTing(hand, melds) {
   const res = [];
+  const withMelds = Array.isArray(melds) && melds.length > 0;
   for (const t of getTileTypes()) {
-    if (checkHu([...hand, t])) res.push(t);
+    if (withMelds) {
+      if (checkHuWithMelds([...hand, t], melds)) res.push(t);
+    } else if (checkHu([...hand, t])) res.push(t);
   }
   return res;
 }
@@ -260,14 +300,15 @@ function canHuByPoints(pt, winType) {
 }
 
 /**
- * 报听资格：手牌（14 张，摸牌后）中存在一张牌 t，打出后仍听牌，
+ * 报听资格：手牌（14 张，摸牌后；或碰后 11 张）中存在一张牌 t，打出后仍听牌，
  * 且听口列表中至少包含一张 6 点及以上牌（6/7/8/9/字牌=10点）。
+ * 明牌区碰/杠刻子（melds）作为已成型面子参与听口计算。
  */
-function canDeclareTing136(hand) {
+function canDeclareTing136(hand, melds) {
   for (const t of [...new Set(hand)]) {
     const rest = hand.slice();
     rest.splice(rest.indexOf(t), 1);
-    const ting = isTing(rest);
+    const ting = isTing(rest, melds);
     if (ting.some((x) => tilePoints(x) >= 6)) return true;
   }
   return false;
@@ -389,6 +430,7 @@ module.exports = {
   tileName,
   countTiles,
   checkHu,
+  checkHuWithMelds,
   canHuWith,
   canPeng,
   canGang,

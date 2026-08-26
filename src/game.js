@@ -501,7 +501,7 @@ class GameServer {
     // 听口玩家：摸牌即打（不能换牌、不能碰杠），系统自动打出刚摸的牌
     if (g.tingSeats.includes(seat)) {
       // 报听玩家：若摸牌构成自摸胡（且满足点数限制），进入行动阶段给胡/过；否则摸牌即打（锁死）
-      if (rules.checkHu(g.hands[seat]) && rules.canHuByPoints(rules.tilePoints(tile), 'zimo')) {
+      if (rules.checkHu(g.hands[seat], g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(tile), 'zimo')) {
         this._afterTurnStart(room, seat);
         return;
       }
@@ -565,7 +565,7 @@ class GameServer {
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     // 报听玩家：杠后补牌手牌继续锁死；若构成自摸胡给胡/过，否则摸牌即打
     if (g.tingSeats.includes(seat)) {
-      if (rules.checkHu(g.hands[seat])) {
+      if (rules.checkHu(g.hands[seat], g.melds[seat])) {
         this._afterTurnStart(room, seat);
         return;
       }
@@ -593,7 +593,7 @@ class GameServer {
     for (let s = 0; s < 4; s++) {
       if (!room.players[s] || s === discarder) continue;
       // 胡牌受点数限制（6 点及以上才可点炮胡）；报听玩家可胡/可杠，不能碰
-      const canHu = rules.canHuWith(g.hands[s], tile) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
+      const canHu = rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
       const canGang = rules.canGang(g.hands[s], tile);
       const canPeng = g.tingSeats.includes(s) ? false : rules.canPeng(g.hands[s], tile);
       if (canHu || canGang || canPeng) {
@@ -689,7 +689,7 @@ class GameServer {
     g.lastAction = { type: 'peng' };
     g.turn = seat;
     g.stage = 'draw';
-    g.drawnTile = null; // 碰后只能出牌，不能胡/杠
+    g.drawnTile = null; // 碰后只能出牌/报听（碰完即听可立即报听），不能胡/杠
     this._log(room, `${this._pName(room, seat)} 碰了 ${rules.tileName(tile)}`);
     this._afterTurnStart(room, seat);
   }
@@ -757,8 +757,8 @@ class GameServer {
     const grabbers = [];
     for (let s = 0; s < 4; s++) {
       if (s === seat || !room.players[s]) continue;
-      // 抢杠胡算点炮，受点数限制（6 点及以上才可胡）；报听玩家可抢杠
-      const canHu = rules.canHuWith(g.hands[s], tile) && rules.canHuByPoints(rules.tilePoints(tile), 'qianggang');
+      // 抢杠胡算点炮，受点数限制（6 点及以上才可胡）；报听玩家可抢杠；明牌区刻子计入已成型面子
+      const canHu = rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'qianggang');
       if (canHu) grabbers.push(s);
     }
     if (grabbers.length > 0) {
@@ -904,7 +904,7 @@ class GameServer {
     g.stage = 'over';
     const tingSeats = [];
     for (let s = 0; s < 4; s++) {
-      if (room.players[s] && rules.isTing(g.hands[s]).length > 0) tingSeats.push(s);
+      if (room.players[s] && rules.isTing(g.hands[s], g.melds[s]).length > 0) tingSeats.push(s);
     }
     const notTing = [];
     for (let s = 0; s < 4; s++) {
@@ -1005,7 +1005,7 @@ class GameServer {
     this._afterDiscard(room, p.seat);
   }
 
-  /** 报听（听口）：摸牌后存在可打的听牌牌型时，打出指定牌并锁定手牌 */
+  /** 报听（听口）：摸牌后（或碰后立即听牌）存在可打的听牌牌型时，打出指定牌并锁定手牌 */
   _ting(p, msg) {
     if (p._auto > 0) this._markAutoActing(p);
     else this._restoreControl(p);
@@ -1015,7 +1015,9 @@ class GameServer {
     if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
     if (g.stage !== 'draw') return this._err(p, '当前不能报听');
     if (g.turn !== p.seat) return this._err(p, '不是您的回合');
-    if (g.drawnTile === null) return this._err(p, '未摸牌不能报听');
+    // 碰后（未摸牌）也可报听：碰完即听立即识别，不待下一轮摸牌
+    const justPeng = !!(g.lastAction && g.lastAction.type === 'peng');
+    if (g.drawnTile === null && !justPeng) return this._err(p, '未摸牌不能报听');
     if (!room.settings.allowTing) return this._err(p, '房间未开启听口玩法');
     if (g.tingSeats.includes(p.seat)) return this._err(p, '您已经报听');
     const tile = String((msg && msg.tile) || '');
@@ -1025,7 +1027,8 @@ class GameServer {
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
     const rest = hand.slice();
     rest.splice(idx, 1);
-    const tingList = rules.isTing(rest);
+    // 碰/杠刻子（明牌区）作为已成型面子参与听口计算
+    const tingList = rules.isTing(rest, g.melds[p.seat]);
     if (tingList.length === 0) return this._err(p, '当前手牌不能报听');
 
     // 报听硬性条件：听牌中至少含一张 6 点及以上牌
@@ -1033,15 +1036,15 @@ class GameServer {
       return this._err(p, '听牌中须至少含一张 6 点及以上牌（6/7/8/9/字牌）才能报听');
     }
     hand.splice(idx, 1);
-    g.discards[p.seat].push(tile);
-    g.lastDiscard = { tile, seat: p.seat };
     g.tingSeats.push(p.seat);
-    g.kouTiles[p.seat] = tile; // 扣一张无用牌倒扣上架（对所有人可见）
+    g.kouTiles[p.seat] = tile; // 扣牌暗置上架：不进弃牌区，对所有人（含自己）隐藏牌面，且不作为可碰/可胡目标
     g.drawnTile = null;
     g.lastAction = null;
+    g.lastDiscard = null; // 扣牌不进入响应判定，他人不能碰/胡
     this._clearTimer(room, 'draw:' + p.seat);
-    this._log(room, `${this._pName(room, p.seat)} 报听，扣 ${rules.tileName(tile)} 上架`);
-    this._afterDiscard(room, p.seat);
+    this._log(room, `${this._pName(room, p.seat)} 报听，扣牌暗置上架`);
+    this._broadcastGameState(room);
+    this._nextTurn(room, p.seat);
   }
 
   _peng(p) {
@@ -1126,7 +1129,7 @@ class GameServer {
 
     // 行动阶段：自摸
     if (g.stage === 'draw' && g.turn === p.seat && g.drawnTile !== null) {
-      if (!rules.checkHu(g.hands[p.seat])) return this._err(p, '手牌不构成胡牌');
+      if (!rules.checkHu(g.hands[p.seat], g.melds[p.seat])) return this._err(p, '手牌不构成胡牌');
       // 自摸胡点数限制：1/2 点不能胡
       if (!rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo')) {
         return this._err(p, '胡牌点数限制：1/2 点不能胡（自摸也不允许）');
@@ -1318,9 +1321,9 @@ class GameServer {
       drawnTile: isDrawTurn && g.drawnTile !== null ? g.drawnTile : null,
       yourSeat: viewerSeat,
       isDrawTurn,
-      // 扣点选择后全公开；报听扣牌上架与杠分明细全公开
+      // 扣点选择后全公开；报听扣牌上架暗牌脱敏（所有人只见背面，不含牌面）与杠分明细全公开
       kouPoints: g.kouPoints.slice(),
-      kouTiles: g.kouTiles.slice(),
+      kouTiles: g.kouTiles.map((t) => (t ? 'back' : null)),
       gangLogs: g.gangLogs.slice(),
       players,
       pending: g.pending
@@ -1348,7 +1351,7 @@ class GameServer {
       for (const t of [...new Set(hand)]) {
         const rest = hand.slice();
         rest.splice(rest.indexOf(t), 1);
-        const ting = rules.isTing(rest);
+        const ting = rules.isTing(rest, g.melds[viewerSeat]);
         if (ting.length > 0) hints[t] = ting.length;
       }
       view.tingHints = hints;
@@ -1361,13 +1364,31 @@ class GameServer {
     const hand = g.hands[seat];
     const actions = ['play'];
     const gangOptions = [];
+    // 碰后（未摸牌）也可报听：碰完即听立即识别，不待下一轮摸牌；碰后手牌结构不允许胡/杠，只给 play/ting
+    const justPeng = !!(g.lastAction && g.lastAction.type === 'peng');
+    if (justPeng) {
+      if (room.settings.allowTing && !g.tingSeats.includes(seat)) {
+        // 报听：碰后 11 张手牌存在某张可扣牌，打出后仍听牌且听口中含 ≥6 点牌；明牌区刻子计入
+        if (rules.canDeclareTing136(hand, g.melds[seat])) {
+          actions.push('ting');
+        }
+      }
+      return {
+        type: 'draw',
+        actions,
+        gangOptions,
+        canHu: false,
+        canDeclareTing: actions.includes('ting'),
+        timeoutMs: HUMAN_TIMEOUT_MS,
+      };
+    }
     if (g.drawnTile !== null) {
-      // 自摸胡受点数限制：1/2 点不能胡（自摸也不允许），3/4/5 点可自摸
-      const canSelfHu = rules.checkHu(hand) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo');
+      // 自摸胡受点数限制：1/2 点不能胡（自摸也不允许），3/4/5 点可自摸；明牌区刻子计入已成型面子
+      const canSelfHu = rules.checkHu(hand, g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo');
       if (canSelfHu) actions.push('hu');
       // 报听玩家：自摸可胡（满足点数限制），不胡则系统摸打（给“过”）；手牌锁死不换牌
       if (g.tingSeats.includes(seat)) {
-        const canSelfHu = rules.checkHu(hand) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo');
+        const canSelfHu = rules.checkHu(hand, g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo');
         return {
           type: 'draw',
           actions: canSelfHu ? ['hu', 'pass'] : ['pass'],
@@ -1388,8 +1409,8 @@ class GameServer {
       }
       if (gangOptions.length) actions.push('gang');
       if (room.settings.allowTing && !g.tingSeats.includes(seat)) {
-        // 报听：摸牌后 14 张手牌存在某张可扣牌，打出后仍听牌且听口中含 ≥6 点牌
-        if (rules.canDeclareTing136(hand)) {
+        // 报听：手牌（摸牌后 14 张）存在某张可扣牌，打出后仍听牌且听口中含 ≥6 点牌；明牌区刻子计入
+        if (rules.canDeclareTing136(hand, g.melds[seat])) {
           actions.push('ting');
         }
       }

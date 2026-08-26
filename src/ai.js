@@ -14,26 +14,29 @@ const rules = require('./rules');
 function decideDrawAction(game, room, seat) {
   const hand = game.hands[seat];
 
-  // 1) 自摸胡（受点数限制：1/2 点不能胡，3/4/5 点可自摸）
+  // 1) 自摸胡（受点数限制：1/2 点不能胡，3/4/5 点可自摸）；明牌区刻子计入已成型面子
   if (
     game.drawnTile !== null &&
-    rules.checkHu(hand) &&
+    rules.checkHu(hand, game.melds[seat]) &&
     rules.canHuByPoints(rules.tilePoints(game.drawnTile), 'zimo')
   ) {
     return { type: 'hu' };
   }
 
   // 1.5) 报听：房间开启且未报听时，若打出某张后仍听牌且听口含 ≥6 点牌则报听（优先于杠，保住听口）
+  // 覆盖两种时机：摸牌后（drawnTile 非空）与碰牌后未摸牌（justPeng，碰完即听立即识别，不待下一轮摸牌）
+  // 听口判定均计入明牌区碰/杠刻子（melds）
+  const justPeng = !!(game.lastAction && game.lastAction.type === 'peng');
   if (
     room.settings.allowTing &&
     (!game.tingSeats || !game.tingSeats.includes(seat)) &&
-    game.drawnTile !== null
+    (game.drawnTile !== null || justPeng)
   ) {
-    if (rules.canDeclareTing136(hand)) {
+    if (rules.canDeclareTing136(hand, game.melds[seat])) {
       for (const t of [...new Set(hand)]) {
         const rest = hand.slice();
         rest.splice(rest.indexOf(t), 1);
-        if (rules.isTing(rest).some((x) => rules.tilePoints(x) >= 6)) {
+        if (rules.isTing(rest, game.melds[seat]).some((x) => rules.tilePoints(x) >= 6)) {
           return { type: 'ting', tile: t };
         }
       }
@@ -64,8 +67,8 @@ function decideResponse(game, room, seat, prompt) {
   if (prompt.canHu) return 'hu';
   if (prompt.canGang) return 'gang';
   if (prompt.canPeng) {
-    // 简单策略：接近听牌时倾向不碰，否则碰
-    if (game.hands[seat].length <= 13 && rules.isTing(game.hands[seat]).length > 0) return 'pass';
+    // 简单策略：接近听牌时倾向不碰，否则碰；明牌区刻子计入听口判断
+    if (game.hands[seat].length <= 13 && rules.isTing(game.hands[seat], game.melds[seat]).length > 0) return 'pass';
     return 'peng';
   }
   return 'pass';

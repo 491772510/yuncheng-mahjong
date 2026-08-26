@@ -400,7 +400,7 @@
         <span class="pc-score">${p.score}</span>
         ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : ''}
       </div>
-      ${kouTile ? `<div class="kou-tile-row"><span class="tile tiny back"></span><span class="kou-label">报听扣牌：${tileText(kouTile)}</span></div>` : ''}
+      ${kouTile ? `<div class="kou-tile-row"><span class="tile tiny back"></span><span class="kou-label">报听扣牌（暗牌）</span></div>` : ''}
       <div class="melds">${meldHtml}</div>
       <div class="hand">${state.tingPick ? '<div class="ting-pick-hint">请选择要扣的牌报听（需听牌中含 ≥6 点牌）</div>' : ''}<div class="hand-tiles">${hand}</div></div>
       <div class="discard-area">${discards}</div>
