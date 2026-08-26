@@ -412,12 +412,15 @@ class GameServer {
     for (let i = 0; i < 13; i++) {
       for (let s = 0; s < 4; s++) g.hands[s].push(g.wall[g.wallPos++]);
     }
-    // 庄家：上局胡牌者坐庄；荒庄连庄；首局随机
+    // 庄家：上局胡牌者坐庄（谁胡谁坐庄）；流局按设置流转（keep=连庄 / next=下家接庄，默认下家接庄）；首局随机
     if (room.lastWinner != null && room.players[room.lastWinner]) {
       room.dealer = room.lastWinner;
     } else if (room.dealer == null || !room.players[room.dealer]) {
       room.dealer = Math.floor(Math.random() * 4);
+    } else if (room.settings.dealerFlow !== 'keep') {
+      room.dealer = (room.dealer + 1) % 4; // 流局下家接庄
     }
+    // dealerFlow === 'keep' 时：流局连庄，room.dealer 保持不变
     g.dealer = room.dealer;
     for (const pl of room.players) if (pl) pl.roundScore = 0;
     room.state = 'playing';
@@ -684,10 +687,11 @@ class GameServer {
     this._afterTurnStart(room, seat);
   }
 
-  /** 136 模式杠分：明杠每家 1 分、暗杠每家 2 分，不受扣点影响，杠时即时结算 */
+  /** 136 模式杠分：明杠/补杠=该牌点数（字牌 10 点）、暗杠=点数×2；其余三家各付一份给杠主；不受扣点影响，杠时即时结算；抢杠胡成立时不结算（调用方在抢杠分支直接返回，不会进入本方法） */
   _settleGangScore(room, seat, tile, type) {
     const g = room.game;
-    const perSeat = type === 'angang' ? 2 : 1;
+    const points = rules.tilePoints(tile); // 数牌按面值、字牌 10 点
+    const perSeat = type === 'angang' ? points * 2 : points;
     const gain = perSeat * 3;
     for (let s = 0; s < 4; s++) {
       if (s === seat || !room.players[s]) continue;
@@ -696,9 +700,9 @@ class GameServer {
     }
     room.players[seat].score += gain;
     room.players[seat].roundScore += gain;
-    g.gangLogs.push({ seat, tile, type, perSeat });
+    g.gangLogs.push({ seat, tile, type, perSeat, points });
     const typeName = type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : '明杠';
-    this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}，每家 ${perSeat} 分`);
+    this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点），每家 ${perSeat} 分`);
   }
 
   _doGangFromDiscard(room, seat, tile) {
@@ -907,7 +911,7 @@ class GameServer {
       gangLogs: g.gangLogs.slice(), // 杠分照常结算（杠时已即时入账）
       hands: this._revealHands(room),
     };
-    room.lastWinner = null; // 荒庄连庄
+    room.lastWinner = null; // 流局：庄家流转由 _dealRound 按 settings.dealerFlow 处理（连庄/下家接庄）
     this._log(
       room,
       '牌墙剩 6 墩，流局' +
@@ -1472,6 +1476,7 @@ class GameServer {
       qingYiSeMult,
       yiTiaoLongMult,
       shiSanYaoMult,
+      dealerFlow: s.dealerFlow === 'keep' ? 'keep' : 'next', // 流局庄家：keep=连庄 / next=下家接庄（默认）
     };
   }
 

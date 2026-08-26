@@ -688,10 +688,10 @@
     if (!logs || !logs.length) return '';
     const nameOf = (s) => (players && players[s] ? players[s].name : '座位' + s);
     return `<div class="settle-gang">
-      <div class="settle-sub">杠分（明杠每家 1 分 / 暗杠每家 2 分，不受扣点影响）</div>
+      <div class="settle-sub">杠分（明杠/补杠=该牌点数，暗杠=点数×2，字牌=10点；其余三家各付一份，不受扣点影响）</div>
       ${logs.map((lg) => {
         const typeName = lg.type === 'angang' ? '暗杠' : lg.type === 'bugang' ? '补杠' : '明杠';
-        return `<div class="row">${esc(nameOf(lg.seat))} ${typeName} ${tileText(lg.tile)} · 每家 ${lg.perSeat} 分</div>`;
+        return `<div class="row">${esc(nameOf(lg.seat))} ${typeName} ${tileText(lg.tile)} · ${lg.points != null ? lg.points + '点，' : ''}每家 ${lg.perSeat} 分</div>`;
       }).join('')}
     </div>`;
   }
@@ -709,8 +709,9 @@
         const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
         return `${esc(nm)} 扣${v}点`;
       }).join(' · ');
+      const flowLabel = state.room && state.room.settings && state.room.settings.dealerFlow === 'keep' ? '庄家连庄' : '下家接庄';
       content.innerHTML = `
-        <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，荒庄连庄）</div></div>
+        <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，${flowLabel}）</div></div>
         <div class="settle-sub">${ting ? '听牌者：' + ting : '无人听牌'}</div>
         <div class="settle-sub">暗扣公开：${kouText}</div>
         ${gangLogsHtml(result.gangLogs, result.hands)}
@@ -822,7 +823,8 @@
         </div>${gangLogsHtml(w.gangLogs, w.hands)}`;
       } else {
         const ting = (w.tingSeats || []).map((s) => w.hands[s] ? w.hands[s].name : '').join('、');
-        html += `<div class="settle-head"><div class="settle-sub">最后一局：流局（荒庄）${ting ? '，听牌者：' + ting : ''}</div></div>`;
+        const flowLabel = room.settings && room.settings.dealerFlow === 'keep' ? '庄家连庄' : '下家接庄';
+        html += `<div class="settle-head"><div class="settle-sub">最后一局：流局（${flowLabel}）${ting ? '，听牌者：' + ting : ''}</div></div>`;
       }
     }
     html += sorted.map((p, i) => `
@@ -841,6 +843,7 @@
 
   function initCreateModal() {
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
+    buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
     $('#create-cancel').onclick = () => hideModal('create-modal');
     $('#settle-close').onclick = () => hideModal('settle-modal');
     $('#create-confirm').onclick = () => {
@@ -849,8 +852,9 @@
       const enableQingYiSe = $('#opt-qingyise').checked;
       const enableYiTiaoLong = $('#opt-yitiaolong').checked;
       const enableShiSanYao = $('#opt-shisanyao').checked;
+      const dealerFlow = segValue('seg-dealer-flow') === 'keep' ? 'keep' : 'next';
       send({ type: 'create_room', settings: {
-        totalRounds, aiFill,
+        totalRounds, aiFill, dealerFlow,
         enableQingYiSe, qingYiSeMult: Number($('#opt-qingyise-mult').value) || 4,
         enableYiTiaoLong, yiTiaoLongMult: Number($('#opt-yitiaolong-mult').value) || 4,
         enableShiSanYao, shiSanYaoMult: Number($('#opt-shisanyao-mult').value) || 8,
