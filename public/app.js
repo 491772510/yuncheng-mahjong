@@ -695,10 +695,11 @@
     if (!logs || !logs.length) return '';
     const nameOf = (s) => (players && players[s] ? players[s].name : '座位' + s);
     return `<div class="settle-gang">
-      <div class="settle-sub">杠分（明杠/补杠=该牌点数，暗杠=点数×2，字牌=10点；其余三家各付一份，不受扣点影响）</div>
+      <div class="settle-sub">杠分（明杠/补杠=该牌点数，暗杠=点数×2，字牌=10点；再乘杠主扣点，其余三家各付一份）</div>
       ${logs.map((lg) => {
         const typeName = lg.type === 'angang' ? '暗杠' : lg.type === 'bugang' ? '补杠' : '明杠';
-        return `<div class="row">${esc(nameOf(lg.seat))} ${typeName} ${tileText(lg.tile)} · ${lg.points != null ? lg.points + '点，' : ''}每家 ${lg.perSeat} 分</div>`;
+        const kouText = lg.kou != null && lg.kou > 1 ? '×扣' + lg.kou : '';
+        return `<div class="row">${esc(nameOf(lg.seat))} ${typeName} ${tileText(lg.tile)} · ${lg.points != null ? lg.points + '点' + kouText : ''}，每家 ${lg.perSeat} 分</div>`;
       }).join('')}
     </div>`;
   }

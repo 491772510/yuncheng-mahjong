@@ -694,11 +694,12 @@ class GameServer {
     this._afterTurnStart(room, seat);
   }
 
-  /** 136 模式杠分：明杠/补杠=该牌点数（字牌 10 点）、暗杠=点数×2；其余三家各付一份给杠主；不受扣点影响，杠时即时结算；抢杠胡成立时不结算（调用方在抢杠分支直接返回，不会进入本方法） */
+  /** 136 模式杠分：明杠/补杠=该牌点数（字牌 10 点）、暗杠=点数×2，再乘以杠主本局开局扣点数；其余三家各付一份给杠主；杠时即时结算；抢杠胡成立时不结算（调用方在抢杠分支直接返回，不会进入本方法） */
   _settleGangScore(room, seat, tile, type) {
     const g = room.game;
     const points = rules.tilePoints(tile); // 数牌按面值、字牌 10 点
-    const perSeat = type === 'angang' ? points * 2 : points;
+    const kou = g.kouPoints[seat] || 1; // 杠主本局开局扣点（开关关闭时恒为 1）
+    const perSeat = (type === 'angang' ? points * 2 : points) * kou;
     const gain = perSeat * 3;
     for (let s = 0; s < 4; s++) {
       if (s === seat || !room.players[s]) continue;
@@ -707,9 +708,9 @@ class GameServer {
     }
     room.players[seat].score += gain;
     room.players[seat].roundScore += gain;
-    g.gangLogs.push({ seat, tile, type, perSeat, points });
+    g.gangLogs.push({ seat, tile, type, perSeat, points, kou });
     const typeName = type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : '明杠';
-    this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点），每家 ${perSeat} 分`);
+    this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点×扣${kou}），每家 ${perSeat} 分`);
   }
 
   _doGangFromDiscard(room, seat, tile) {
