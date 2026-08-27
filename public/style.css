@@ -256,6 +256,9 @@ body {
 .tile.back { background: linear-gradient(135deg, #1e9e63, #0a5c3c); color: transparent; }
 .tile.discardable { cursor: pointer; transition: transform .1s; }
 .tile.discardable:hover { transform: translateY(-8px); }
+/* 报听选牌阶段：不可报听（听口无 ≥6 点牌）的选项置灰 */
+.hand-tiles.ting-pick .tile:not(.discardable) { opacity: .45; filter: grayscale(.6); cursor: not-allowed; }
+.hand-tiles.ting-pick .tile.discardable:hover { transform: translateY(-8px); }
 .tile.discardable.ting-mark {
   box-shadow: 0 0 0 2px #ffd75e, 0 0 10px rgba(255, 215, 94, .85);
   animation: tingBorder 1.1s ease-in-out infinite;

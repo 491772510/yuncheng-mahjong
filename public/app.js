@@ -387,9 +387,11 @@
     const newTile = game.newTile || null; // 服务端下发：本玩家当前新摸到的牌（仅自己视角）
     const hand = (p.hand || []).map((t, i) => {
       const ting = game.tingHints && game.tingHints[t] ? game.tingHints[t] : 0;
+      // 报听选牌阶段：仅听口含 ≥6 点牌的选项可点击，其余置灰
+      const canDiscard = state.tingPick ? ting > 0 : true;
       // 新摸牌标志：与 newTile 同值且为排序后手牌中第一张该牌（其余同值牌不标记）
       const isNew = newTile === t && p.hand.indexOf(t) === i;
-      return tileHtml(t, '', ting, true, isNew);
+      return tileHtml(t, '', ting, canDiscard, isNew);
     }).join('');
     const meldHtml = renderMelds(p.melds);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
@@ -406,7 +408,7 @@
         ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : ''}
       </div>
       <div class="melds">${meldHtml}</div>
-      <div class="hand">${state.tingPick ? '<div class="ting-pick-hint">请选择要扣的牌报听（需听牌中含 ≥6 点牌）</div>' : ''}<div class="hand-tiles">${hand}</div></div>
+      <div class="hand">${state.tingPick ? '<div class="ting-pick-hint">请选择要扣的牌报听（需听牌中含 ≥6 点牌，灰色不可选）</div>' : ''}<div class="hand-tiles${state.tingPick ? ' ting-pick' : ''}">${hand}</div></div>
       <div class="discard-area">${discards}</div>
     </div>`;
   }
@@ -530,7 +532,12 @@
         if (!game || !game.isDrawTurn) return;
         if (!state.prompt || state.prompt.type !== 'draw') return;
         if (state.tingPick) {
-          // 听口：点击手牌即打出该张报听
+          // 听口：点击手牌即打出该张报听；仅听口含 ≥6 点牌的选项有效
+          const h = game.tingHints && game.tingHints[tile];
+          if (!h) {
+            toast('打出这张后听口不含 ≥6 点牌，不能报听', true);
+            return;
+          }
           send({ type: 'ting', tile });
           return;
         }

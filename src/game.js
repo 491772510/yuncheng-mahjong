@@ -1415,14 +1415,26 @@ class GameServer {
       logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
     if (isDrawTurn && !g.tingSeats.includes(viewerSeat)) {
-      // 听牌提示：打出某张后听牌数
+      // 听牌提示：打出某张后，听口剩余可胡张数（4 - 已见张数）
       const hints = {};
       const hand = g.hands[viewerSeat];
+      // 统计已见牌：自己手牌 + 各家弃牌(牌背不统计) + 明牌区(碰/杠) + 报听扣牌(自己视角可知)
+      const seen = new Map();
+      const addSeen = (t) => {
+        if (t && t !== 'back') seen.set(t, (seen.get(t) || 0) + 1);
+      };
+      for (const t of hand) addSeen(t);
+      for (const d of g.discards) for (const t of d) addSeen(t);
+      for (const m of g.melds) for (const meld of m) for (const t of meld.tiles) addSeen(t);
+      if (g.kouTiles[viewerSeat]) addSeen(g.kouTiles[viewerSeat]);
       for (const t of [...new Set(hand)]) {
         const rest = hand.slice();
         rest.splice(rest.indexOf(t), 1);
         const ting = rules.isTing(rest, g.melds[viewerSeat]);
-        if (ting.length > 0) hints[t] = ting.length;
+        // 只提示可报听的选项：听口中须至少含一张 ≥6 点牌，与 canDeclareTing136 保持一致
+        if (ting.length > 0 && ting.some((x) => rules.tilePoints(x) >= 6)) {
+          hints[t] = ting.reduce((sum, x) => sum + Math.max(0, 4 - (seen.get(x) || 0)), 0);
+        }
       }
       view.tingHints = hints;
     }
