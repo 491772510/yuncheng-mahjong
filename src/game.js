@@ -711,14 +711,14 @@ class GameServer {
 
     const huList = pending.responders.filter((r) => r.choice === 'hu');
     if (huList.length > 0) {
-      for (const r of huList) {
-        this._settleHu(room, r.seat, {
-          winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
-          tile: pending.tile,
-          discarder: pending.discarder,
-          qiangGang: pending.type === 'qianggang',
-        });
-      }
+      // 不支持一炮多响：仅距离放炮（补杠）者最近的一家胡牌
+      const pick = this._nearestSeat(huList.map((r) => r.seat), pending.discarder);
+      this._settleHu(room, pick, {
+        winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
+        tile: pending.tile,
+        discarder: pending.discarder,
+        qiangGang: pending.type === 'qianggang',
+      });
       this._endRound(room);
       return;
     }
