@@ -920,11 +920,7 @@ class GameServer {
       const mult = multCalc.mult;
       const multNames = multCalc.names;
       const kp = g.kouPoints[winnerSeat] || 1; // 胡牌者自己的扣点
-      const baoHu =
-        info.winType !== 'zimo' &&
-        g.tingSeats.includes(winnerSeat) &&
-        !g.tingSeats.includes(info.discarder) &&
-        !!(room.players[info.discarder]);
+      const discarderTing = info.winType !== 'zimo' && g.tingSeats.includes(info.discarder);
 
       let score;
       if (info.winType === 'zimo') {
@@ -937,15 +933,7 @@ class GameServer {
           room.players[winnerSeat].score += score;
           room.players[winnerSeat].roundScore += score;
         }
-      } else if (baoHu) {
-        // 包胡（一包三）：未报听者打 ≥6 点牌被报听者胡 → 点炮者赔三家全部分数（3 份自摸），另两家不出分
-        score = tilePoints * 2 * mult * kp * 3;
-        const loser = room.players[info.discarder];
-        loser.score -= score;
-        loser.roundScore -= score;
-        room.players[winnerSeat].score += score;
-        room.players[winnerSeat].roundScore += score;
-      } else if (g.tingSeats.includes(info.discarder)) {
+      } else if (discarderTing) {
         // 点炮且放炮者已报听：三家各出 1 份（放炮者与另两家闲家各付 score），胡牌者共收 3 份
         score = tilePoints * mult * kp;
         for (let s = 0; s < 4; s++) {
@@ -956,8 +944,8 @@ class GameServer {
           room.players[winnerSeat].roundScore += score;
         }
       } else {
-        // 点炮 = 点数 × 倍数 × 扣点
-        score = tilePoints * mult * kp;
+        // 点炮且放炮者未报听：放炮者独赔 3 份点炮分（含原包胡情形），胡牌者共收 3 份
+        score = tilePoints * mult * kp * 3;
         const loser = room.players[info.discarder];
         if (loser) {
           loser.score -= score;
@@ -977,7 +965,7 @@ class GameServer {
         multNames,
         kouPoint: kp,
         kouPoints: g.kouPoints.slice(), // 结算公开全部玩家扣点
-        baoHu,
+        discarderTing,
         score,
         tile: info.tile,
         discarder: info.winType === 'zimo' ? null : info.discarder,
@@ -985,12 +973,15 @@ class GameServer {
         hands: this._revealHandsWithWinTile(room, winnerSeat, info),
       };
       room.lastWinner = winnerSeat;
-      const baoLabel = baoHu ? '（包胡）' : '';
-      const shareLabel =
-        info.winType !== 'zimo' && g.tingSeats.includes(info.discarder) ? '（放炮者已报听，三家各出1份）' : '';
+      const payLabel =
+        info.winType === 'zimo'
+          ? ''
+          : discarderTing
+            ? '（放炮者已报听，三家各出1份）'
+            : '（放炮者未报听，独赔3份）';
       this._log(
         room,
-        `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${tilePoints}点 × ${mult}倍 × 扣${kp}${baoLabel}${shareLabel} → ${score}分）`
+        `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${tilePoints}点 × ${mult}倍 × 扣${kp}${payLabel} → ${score}分）`
       );
       this._broadcastGameState(room);
       this._sendSettlement(room);

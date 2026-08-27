@@ -778,7 +778,7 @@
       <div class="settle-head">
         <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
         <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}（×${result.mult}）</div>
-        <div class="settle-sub">${calcText}${result.baoHu ? ' · 包胡（一包三）' : ''}</div>
+        <div class="settle-sub">${calcText}${result.winType !== 'zimo' ? (result.discarderTing ? ' · 放炮者已报听，三家各出1份' : ' · 放炮者未报听，独赔3份') : ''}</div>
         <div class="settle-sub">暗扣公开：${kouText}</div>
       </div>
       ${gangLogsHtml(result.gangLogs, result.hands)}
@@ -858,7 +858,7 @@
           ? `${w.tilePoints}点 × 2 × ${w.mult}倍 × 扣${w.kouPoint}点`
           : `${w.tilePoints}点 × ${w.mult}倍 × 扣${w.kouPoint}点`;
         html += `<div class="settle-head">
-          <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${multText} · ${calcText}${w.baoHu ? '（包胡）' : ''} → ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
+          <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${multText} · ${calcText}${w.winType !== 'zimo' ? (w.discarderTing ? '（放炮者已报听，三家各出1份）' : '（放炮者未报听，独赔3份）') : ''} → ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
           <div class="settle-sub">暗扣公开：${kouText}</div>
         </div>${gangLogsHtml(w.gangLogs, w.hands)}`;
       } else {

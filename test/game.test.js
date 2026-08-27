@@ -377,7 +377,7 @@ test('点炮胡七对：胡牌 tile 并入后正确算 4 倍（七小对），�
   assert.equal(g.winners.mult, 4, '点炮七对应计 4 倍');
   assert.ok(g.winners.multNames.includes('七小对'), '番型应识别为七小对');
   assert.ok(!g.winners.multNames.includes('平胡'), '点炮七对不得误判为平胡');
-  assert.equal(g.winners.score, 28, '点炮分 = 点数7 × 4倍 × 扣点1 = 28');
+  assert.equal(g.winners.score, 84, '放炮者未报听独赔 3 份 = 点数7 × 4倍 × 扣点1 × 3 = 84');
   await sleep(400);
   cleanupServer(srv);
 });
@@ -393,7 +393,7 @@ test('点炮胡碰碰胡：胡牌 tile 并入后正确算 2 倍（碰碰胡）�
   assert.equal(g.winners.mult, 2, '点炮碰碰胡应计 2 倍');
   assert.ok(g.winners.multNames.includes('碰碰胡'), '番型应识别为碰碰胡');
   assert.ok(!g.winners.multNames.includes('平胡'), '点炮碰碰胡不得误判为平胡');
-  assert.equal(g.winners.score, 14, '点炮分 = 点数7 × 2倍 × 扣点1 = 14');
+  assert.equal(g.winners.score, 42, '放炮者未报听独赔 3 份 = 点数7 × 2倍 × 扣点1 × 3 = 42');
   await sleep(400);
   cleanupServer(srv);
 });
@@ -408,7 +408,7 @@ test('点炮胡一条龙：胡牌 tile 并入后正确计一条龙倍数', async
   srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b5', discarder: 1, qiangGang: false });
   assert.ok(g.winners.multNames.includes('一条龙'), '番型应识别为一条龙');
   assert.equal(g.winners.mult, 4, '平胡1 × 一条龙4 = 4 倍');
-  assert.equal(g.winners.score, 20, '点炮分 = 点数5 × 4倍 × 扣点1 = 20');
+  assert.equal(g.winners.score, 60, '放炮者未报听独赔 3 份 = 点数5 × 4倍 × 扣点1 × 3 = 60');
   await sleep(400);
   cleanupServer(srv);
 });
@@ -424,7 +424,7 @@ test('点炮胡十三幺：胡牌 tile 并入后正确计 8 倍（十三幺）',
   assert.equal(g.winners.mult, 8, '点炮十三幺应计 8 倍');
   assert.ok(g.winners.multNames.includes('十三幺'), '番型应识别为十三幺');
   assert.ok(!g.winners.multNames.includes('平胡'), '点炮十三幺不得误判为平胡');
-  assert.equal(g.winners.score, 80, '点炮分 = 点数10 × 8倍 × 扣点1 = 80');
+  assert.equal(g.winners.score, 240, '放炮者未报听独赔 3 份 = 点数10 × 8倍 × 扣点1 × 3 = 240');
   await sleep(400);
   cleanupServer(srv);
 });
@@ -524,10 +524,10 @@ test('自摸结算展示：手牌本就 14 张，不重复补牌', async () => {
   cleanupServer(srv);
 });
 
-// ============ 功能5.6：点炮且放炮者已报听 → 三家各出 1 份（胡牌者共收 3 份） ============
-// 规则：放炮者已报听（在 g.tingSeats 中）时，点炮胡支付改为三家各出 1 份——放炮者与另两家
-// 闲家各付 score（score = 点数 × 倍数 × 胡牌者扣点），胡牌者共收 3 份；放炮者未报听维持
-// 普通点炮独付；包胡一包三、自摸逻辑不变。
+// ============ 功能5.6：点炮胡支付规则（136 版） ============
+// 规则：放炮者已报听 → 三家各出 1 份（score = 点数 × 倍数 × 胡牌者扣点），胡牌者共收 3 份；
+// 放炮者未报听 → 放炮者独赔 3 份点炮分（score×3），胡牌者共收 3 份（无论胡牌者是否报听，
+// 原包胡一包三并入此规则不再单独加重）；自摸保持三家各付 1 份自摸分不变。
 
 test('点炮者已报听：三家各出 1 份，胡牌者共收 3 份', async () => {
   const srv = newServer();
@@ -548,36 +548,36 @@ test('点炮者已报听：三家各出 1 份，胡牌者共收 3 份', async ()
   cleanupServer(srv);
 });
 
-test('点炮者未报听：维持普通点炮独付，另两家不出分', async () => {
+test('胡牌者未报听、放炮者未报听：放炮者独赔 3 份点炮分，另两家不出分', async () => {
   const srv = newServer();
   const { room } = makeHuRoom(srv);
   const winnerSeat = 0;
   const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
   const g = setupHuState(room, winnerSeat, hand13, 'b7');
-  g.tingSeats = []; // 放炮者未报听
+  g.tingSeats = []; // 胡牌者未报听、放炮者未报听
 
   srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
-  assert.equal(g.winners.score, 28, '点炮分 = 点数7 × 4倍 × 扣点1 = 28');
-  assert.equal(room.players[0].roundScore, 28, '胡牌者收 28');
-  assert.equal(room.players[1].roundScore, -28, '放炮者独付 28');
+  assert.equal(g.winners.score, 84, '独赔 3 份 = 点数7 × 4倍 × 扣点1 × 3 = 84');
+  assert.equal(room.players[0].roundScore, 84, '胡牌者收 84');
+  assert.equal(room.players[1].roundScore, -84, '放炮者独赔 84');
   assert.equal(room.players[2].roundScore, 0, '闲家2不出分');
   assert.equal(room.players[3].roundScore, 0, '闲家3不出分');
   await sleep(400);
   cleanupServer(srv);
 });
 
-test('包胡一包三不变：胡者报听、放炮者未报听时放炮者独赔三家', async () => {
+test('包胡并入此规则：胡者报听、放炮者未报听同样独赔 3 份点炮分（不再 3×自摸分）', async () => {
   const srv = newServer();
   const { room } = makeHuRoom(srv);
   const winnerSeat = 0;
   const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
   const g = setupHuState(room, winnerSeat, hand13, 'b7');
-  g.tingSeats = [0]; // 胡牌者已报听，放炮者未报听 → 包胡
+  g.tingSeats = [0]; // 胡牌者已报听、放炮者未报听（原包胡场景）
 
   srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
-  assert.equal(g.winners.score, 168, '包胡分 = 点数7 × 2 × 4倍 × 扣点1 × 3 = 168');
-  assert.equal(room.players[0].roundScore, 168, '包胡者（胡牌者）收 168');
-  assert.equal(room.players[1].roundScore, -168, '放炮者独赔 168（一包三）');
+  assert.equal(g.winners.score, 84, '独赔 3 份点炮分 = 点数7 × 4倍 × 扣点1 × 3 = 84（不再是 3×自摸分 168）');
+  assert.equal(room.players[0].roundScore, 84, '胡牌者收 84');
+  assert.equal(room.players[1].roundScore, -84, '放炮者独赔 84');
   assert.equal(room.players[2].roundScore, 0, '闲家2不出分');
   assert.equal(room.players[3].roundScore, 0, '闲家3不出分');
   await sleep(400);
@@ -598,6 +598,27 @@ test('抢杠胡且放炮者已报听：同样三家各出 1 份（抢杠胡算�
   assert.equal(room.players[1].roundScore, -28, '放炮者出 1 份');
   assert.equal(room.players[2].roundScore, -28, '闲家2出 1 份');
   assert.equal(room.players[3].roundScore, -28, '闲家3出 1 份');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('自摸不受影响：三家各付 1 份自摸分，胡牌者共收 3 份自摸分', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const g = room.game;
+  g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
+  g.melds[winnerSeat] = [];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+  g.lastAction = null;
+
+  srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
+  assert.equal(g.winners.score, 56, '自摸分 = 点数7 × 2 × 4倍 × 扣点1 = 56');
+  assert.equal(room.players[0].roundScore, 168, '胡牌者共收 3 份自摸分 = 56 × 3 = 168');
+  assert.equal(room.players[1].roundScore, -56, '闲家1出 1 份自摸分');
+  assert.equal(room.players[2].roundScore, -56, '闲家2出 1 份自摸分');
+  assert.equal(room.players[3].roundScore, -56, '闲家3出 1 份自摸分');
   await sleep(400);
   cleanupServer(srv);
 });
