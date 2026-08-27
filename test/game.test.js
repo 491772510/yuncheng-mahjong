@@ -462,3 +462,50 @@ test('自摸路径不受影响：完整 14 张手牌照常识别七对 4 倍', a
   cleanupServer(srv);
 });
 
+// ============ 功能6：AI 不能成为房主 ============
+// Bug 背景：房主退出/超时离开 waiting 房间时，新房主取 others[0]，可能转让给 AI。
+// 要求：房主转让仅限真人，无其他真人则直接解散房间。
+
+test('房主退出时房间内有 AI 和真人：房主转让给真人而非 AI', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主甲' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+
+  // 先加 AI（占座位 1），再加入真人（座位 2）
+  send(wa, { type: 'add_ai' });
+  const aiId = room.players.find((p) => p && p.isAI).id;
+  assert.ok(aiId, 'AI 已加入');
+
+  const wb = makeWs();
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  send(wb, { type: 'join_room', roomId: room.id });
+  const humanId = wbSentPlayerId(wb, '玩家乙');
+
+  // 房主退出：新房主必须是真人乙，不能是 AI
+  send(wa, { type: 'leave_room' });
+  assert.notEqual(room.ownerId, aiId, 'AI 不得成为房主');
+  assert.equal(room.ownerId, humanId, '房主应转让给真人玩家');
+  cleanupServer(srv);
+});
+
+test('房主退出时房间内只剩 AI：房间直接解散，不留 AI 房主', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主甲' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const roomId = [...srv.rooms.values()][0].id;
+
+  send(wa, { type: 'add_ai' });
+  send(wa, { type: 'add_ai' });
+
+  // 房主退出：只剩 AI（未满 4 人不会自动开局），房间应解散
+  send(wa, { type: 'leave_room' });
+  assert.equal(srv.rooms.has(roomId), false, '无真人房主候选时房间应解散');
+  cleanupServer(srv);
+});
+

@@ -214,7 +214,8 @@ class GameServer {
     if (room.state === 'waiting') {
       this._log(room, `${p.name} 超时未重连，已离开房间`);
       if (p.id === room.ownerId) {
-        const others = room.players.filter(Boolean).filter((x) => x.id !== p.id);
+        // AI 不能成为房主：仅从其他在线真人中转让，无真人则解散房间
+        const others = room.players.filter(Boolean).filter((x) => x.id !== p.id && !x.isAI);
         if (others.length === 0) {
           this._destroyRoom(room);
           return;
@@ -331,7 +332,8 @@ class GameServer {
       return this._err(p, '牌局进行中，无法退出（可请房主解散房间）');
     }
     if (p.id === room.ownerId) {
-      const others = room.players.filter(Boolean).filter((x) => x.id !== p.id);
+      // AI 不能成为房主：仅从其他真人中转让，无真人则解散房间
+      const others = room.players.filter(Boolean).filter((x) => x.id !== p.id && !x.isAI);
       if (others.length === 0) {
         this._destroyRoom(room);
         return;
