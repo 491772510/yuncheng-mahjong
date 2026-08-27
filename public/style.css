@@ -260,6 +260,7 @@ body {
 .hand-tiles.ting-pick .tile:not(.discardable) { opacity: .45; filter: grayscale(.6); cursor: not-allowed; }
 .hand-tiles.ting-pick .tile.discardable:hover { transform: translateY(-8px); }
 .tile.discardable.ting-mark {
+  overflow: visible; /* 允许右上角听口角标完整溢出显示，不被牌面裁剪 */
   box-shadow: 0 0 0 2px #ffd75e, 0 0 10px rgba(255, 215, 94, .85);
   animation: tingBorder 1.1s ease-in-out infinite;
 }
