@@ -195,6 +195,16 @@ test('canDeclareTing136 硬性条件：听口含 ≥6 点牌', () => {
   assert.equal(rules.canDeclareTing136(handZ), true);
 });
 
+test('canDeclareTing136 绝听仍可报听：报听资格只看牌型听口与点数门槛，不看剩余可胡张数', () => {
+  // 七对听 b7（7 点 ≥6）：打出 w9 后 13 张听 b7
+  const hand = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'w9'];
+  assert.equal(rules.canDeclareTing136(hand), true, '听口 b7 含 ≥6 点，具备报听资格');
+  // 即使该听口牌已成绝听（如在桌上 3 张 + 自己 1 张 = 4 张全见），报听资格不受影响（资格判定不含已见张统计）
+  const handTing = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  assert.ok(rules.isTing(handTing).includes('b7'), '13 张时听口含 b7');
+  assert.equal(rules.canDeclareTing136(hand), true, '绝听不影响报听资格');
+});
+
 test('calcMultiplier136 平胡/碰碰胡/七对/豪华七对/杠上开花', () => {
   const ping = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't2', 't5', 't5'];
   const pp = ['w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'w3', 'w3', 'w3', 'w4', 'w4', 'w4', 't5', 't5'];

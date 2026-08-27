@@ -386,9 +386,11 @@
     const isTurn = game.turn === seat && !game.winners;
     const newTile = game.newTile || null; // 服务端下发：本玩家当前新摸到的牌（仅自己视角）
     const hand = (p.hand || []).map((t, i) => {
-      const ting = game.tingHints && game.tingHints[t] ? game.tingHints[t] : 0;
-      // 报听选牌阶段：仅听口含 ≥6 点牌的选项可点击，其余置灰
-      const canDiscard = state.tingPick ? ting > 0 : true;
+      // tingHints[t] 未定义 = 打出后听口不含 ≥6 点牌（不可报听）；为 0 = 绝听但可报听（仅角标显示剩余 0 张）
+      const tH = game.tingHints ? game.tingHints[t] : undefined;
+      const ting = tH === undefined ? 0 : tH;
+      // 报听选牌阶段：仅进入提示列表（含 ≥6 点听口）的选项可点击，未进入置灰；绝听（tH===0）仍可报听
+      const canDiscard = state.tingPick ? tH !== undefined : true;
       // 新摸牌标志：与 newTile 同值且为排序后手牌中第一张该牌（其余同值牌不标记）
       const isNew = newTile === t && p.hand.indexOf(t) === i;
       return tileHtml(t, '', ting, canDiscard, isNew);
@@ -535,8 +537,9 @@
         if (!state.prompt || state.prompt.type !== 'draw') return;
         if (state.tingPick) {
           // 听口：点击手牌即打出该张报听；仅听口含 ≥6 点牌的选项有效
+          // 注意：tingHints[t] 为 0（该听口牌 4 张已全见，绝听）也算有效可报听，只有未进入提示列表（undefined）才拒绝
           const h = game.tingHints && game.tingHints[tile];
-          if (!h) {
+          if (h === undefined || h === null) {
             toast('打出这张后听口不含 ≥6 点牌，不能报听', true);
             return;
           }
