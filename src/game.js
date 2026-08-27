@@ -596,7 +596,7 @@ class GameServer {
     g.lastAction = null;
     g.newTiles[seat] = null; // 摸牌即打：新牌标志随出牌清除
     this._clearTimer(room, 'draw:' + seat);
-    this._log(room, `${this._pName(room, seat)} 摸牌即打 ${rules.tileName(tile)}（听口）`, seat, `${this._pName(room, seat)} 摸牌即打（听口）`);
+    this._log(room, `${this._pName(room, seat)} 摸牌即打 ${rules.tileName(tile)}（听口）`);
     this._afterDiscard(room, seat);
   }
 
