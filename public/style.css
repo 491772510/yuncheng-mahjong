@@ -106,8 +106,10 @@ body {
 .table-center {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   text-align: center; z-index: 5; pointer-events: none;
+  background: rgba(0, 0, 0, .55); border-radius: 14px; padding: 10px 18px;
+  max-width: 92%; box-shadow: 0 4px 16px rgba(0, 0, 0, .35);
 }
-.wall-count { font-size: 13px; opacity: .8; }
+.wall-count { font-size: 13px; opacity: .9; }
 .wall-count b { font-size: 20px; color: #ffd75e; }
 .turn-info { font-size: 13px; margin-top: 4px; min-height: 20px; }
 .action-bar { margin-top: 10px; display: flex; gap: 8px; justify-content: center; pointer-events: auto; flex-wrap: wrap; }
@@ -131,11 +133,11 @@ body {
 .seat-left { left: 6px; top: 50%; transform: translateY(-50%); }
 .seat-right { right: 6px; top: 50%; transform: translateY(-50%); }
 
-.player-card { background: rgba(0,0,0,.22); border-radius: 12px; padding: 6px 10px; border: 2px solid transparent; }
+.player-card { background: rgba(0,0,0,.22); border-radius: 12px; padding: 8px 10px; border: 2px solid transparent; }
 .player-card.active-turn { border-color: #ffd75e; box-shadow: 0 0 10px rgba(255,215,94,.5); }
 .player-card.winner { border-color: #ffb400; background: rgba(255,180,0,.18); }
 
-.pc-top { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.pc-top { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 5px; }
 .pc-name { font-weight: 600; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-score { margin-left: auto; color: #ffd75e; font-weight: 700; }
 .pc-host { font-size: 11px; color: #ffb4b4; }
@@ -289,12 +291,12 @@ body {
 .tile.discarded { opacity: .85; cursor: default; }
 
 /* 出牌区 */
-.discard-area { display: flex; flex-wrap: wrap; gap: 3px; max-width: 300px; }
+.discard-area { display: flex; flex-wrap: wrap; gap: 4px; max-width: 300px; }
 .seat-top .discard-area, .seat-bottom .discard-area { max-width: 100%; justify-content: center; }
 .seat-left .discard-area, .seat-right .discard-area { max-width: 130px; }
 
 /* 碰杠区 */
-.melds { display: flex; gap: 4px; flex-wrap: wrap; }
+.melds { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 4px; }
 .meld { display: flex; gap: 2px; }
 
 /* 等待/结算房间 */
@@ -379,6 +381,12 @@ body {
   .room-body { flex-direction: column; height: calc(100vh - 52px); }
   .table-wrap { flex: 1.15; min-height: 300px; }
   .side-panel { width: 100%; height: 34vh; border-left: none; border-top: 1px solid rgba(255,255,255,.1); }
+  /* 中央提示区：紧凑底衬，避免与弃牌堆/牌面叠在一起看不清 */
+  .table-center { padding: 6px 10px; border-radius: 10px; }
+  .table-center .wall-count { font-size: 12px; }
+  .table-center .wall-count b { font-size: 16px; }
+  .table-center .turn-info { font-size: 12px; margin-top: 2px; min-height: 15px; }
+  .table-center .action-bar { margin-top: 6px; }
   /* 手牌：换行 + 等比缩小，保证 13-14 张完整可见可点 */
   .hand { flex-wrap: wrap; }
   .hand-tiles { flex-wrap: wrap; justify-content: center; row-gap: 4px; }
@@ -391,8 +399,10 @@ body {
   .tile.tiny { width: 14px; height: 20px; }
   .seat-bottom { bottom: 2px; }
   .seat-top { top: 2px; }
-  .pc-top { font-size: 12px; }
+  .player-card { padding: 5px 8px; }
+  .pc-top { font-size: 12px; gap: 5px; margin-bottom: 3px; }
   .pc-name { max-width: 60px; }
+  .melds { margin-bottom: 3px; }
   .discard-area { max-width: 200px; }
   .seat-left .discard-area, .seat-right .discard-area { max-width: 100px; }
   .logo { font-size: 28px; }
