@@ -890,7 +890,9 @@ class GameServer {
 
   _settleHu(room, winnerSeat, info) {
     const g = room.game;
-    const hand = g.hands[winnerSeat];
+    // 算番型时必须使用完整手牌：自摸时胡牌已在手牌；点炮/抢杠时 info.tile 是打出的胡牌，需并入
+    const hand = g.hands[winnerSeat].slice();
+    if (info.winType !== 'zimo') hand.push(info.tile);
     const gangShang = info.winType === 'zimo' && !!(g.lastAction && g.lastAction.type === 'gang');
     const winLabel =
       info.winType === 'zimo' ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';

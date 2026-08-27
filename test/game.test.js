@@ -338,3 +338,127 @@ test('开局扣点阶段：在线真人超时未选自动补扣点，不卡 koup
   cleanupServer(srv);
 });
 
+// ============ 功能5：点炮/抢杠胡算番型必须使用完整手牌（胡牌 tile 并入） ============
+// Bug 背景：_settleHu 曾用 g.hands[winnerSeat] 直接算番，点炮/抢杠时手牌少一张（13 张），
+// 导致七对/碰碰胡/一条龙/十三幺等 14 张番型被误判为平胡。
+
+function makeHuRoom(srv, extraSettings = {}) {
+  const wa = makeWs();
+  const wb = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS, ...extraSettings } });
+  const room = [...srv.rooms.values()][0];
+  send(wb, { type: 'join_room', roomId: room.id });
+  send(wa, { type: 'start_game' });
+  return { srv, room };
+}
+
+function setupHuState(room, winnerSeat, hand13, tile) {
+  const g = room.game;
+  g.hands[winnerSeat] = hand13.slice(); // 点炮/抢杠时手牌 13 张（不含打出的胡牌）
+  g.melds[winnerSeat] = [];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+  g.lastAction = null;
+  return g;
+}
+
+test('点炮胡七对：胡牌 tile 并入后正确算 4 倍（七小对），不再误判平胡', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+  assert.equal(g.winners.mult, 4, '点炮七对应计 4 倍');
+  assert.ok(g.winners.multNames.includes('七小对'), '番型应识别为七小对');
+  assert.ok(!g.winners.multNames.includes('平胡'), '点炮七对不得误判为平胡');
+  assert.equal(g.winners.score, 28, '点炮分 = 点数7 × 4倍 × 扣点1 = 28');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('点炮胡碰碰胡：胡牌 tile 并入后正确算 2 倍（碰碰胡），不再误判平胡', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't1', 'w2', 'w2', 'w2', 'b3', 'b3', 'b3', 'w5', 'w5', 't7', 't7'];
+  const g = setupHuState(room, winnerSeat, hand13, 't7');
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 't7', discarder: 1, qiangGang: false });
+  assert.equal(g.winners.mult, 2, '点炮碰碰胡应计 2 倍');
+  assert.ok(g.winners.multNames.includes('碰碰胡'), '番型应识别为碰碰胡');
+  assert.ok(!g.winners.multNames.includes('平胡'), '点炮碰碰胡不得误判为平胡');
+  assert.equal(g.winners.score, 14, '点炮分 = 点数7 × 2倍 × 扣点1 = 14');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('点炮胡一条龙：胡牌 tile 并入后正确计一条龙倍数', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, { enableYiTiaoLong: true, yiTiaoLongMult: 4 });
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9', 'w1', 'w1', 'w1', 'b5'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b5');
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b5', discarder: 1, qiangGang: false });
+  assert.ok(g.winners.multNames.includes('一条龙'), '番型应识别为一条龙');
+  assert.equal(g.winners.mult, 4, '平胡1 × 一条龙4 = 4 倍');
+  assert.equal(g.winners.score, 20, '点炮分 = 点数5 × 4倍 × 扣点1 = 20');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('点炮胡十三幺：胡牌 tile 并入后正确计 8 倍（十三幺）', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['w1', 'w9', 't1', 't9', 'b1', 'b9', 'e', 's', 'x', 'n', 'z', 'f', 'p'];
+  const g = setupHuState(room, winnerSeat, hand13, 'z');
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'z', discarder: 1, qiangGang: false });
+  assert.equal(g.winners.mult, 8, '点炮十三幺应计 8 倍');
+  assert.ok(g.winners.multNames.includes('十三幺'), '番型应识别为十三幺');
+  assert.ok(!g.winners.multNames.includes('平胡'), '点炮十三幺不得误判为平胡');
+  assert.equal(g.winners.score, 80, '点炮分 = 点数10 × 8倍 × 扣点1 = 80');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('抢杠胡七对：qianggang 路径同样并入胡牌 tile，正确计 4 倍', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+
+  srv._settleHu(room, winnerSeat, { winType: 'qianggang', tile: 'b7', discarder: 1, qiangGang: true });
+  assert.equal(g.winners.mult, 4, '抢杠胡七对应计 4 倍');
+  assert.ok(g.winners.multNames.includes('七小对'), '番型应识别为七小对');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('自摸路径不受影响：完整 14 张手牌照常识别七对 4 倍', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const g = room.game;
+  g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
+  g.melds[winnerSeat] = [];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+  g.lastAction = null;
+
+  srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
+  assert.equal(g.winners.mult, 4, '自摸七对应计 4 倍');
+  assert.ok(g.winners.multNames.includes('七小对'), '自摸番型应识别为七小对');
+  assert.equal(g.winners.score, 56, '自摸分 = 点数7 × 2(自摸) × 4倍 × 扣点1 = 56');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
