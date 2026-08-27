@@ -176,6 +176,10 @@ class GameServer {
         p.hosted = true;
         // 若正等该玩家响应 → 立即视为过，避免卡局
         const g = room.game;
+        if (g.stage === 'koupoint' && g.kouPoints[p.seat] == null) {
+          // 扣点阶段断线：立即自动补扣点，避免四座填不满卡在扣点阶段无法开局
+          this._autoFillKoupoint(room, p.seat);
+        }
         if (g.stage === 'response' && g.pending) {
           const r = g.pending.responders.find((x) => x.seat === p.seat);
           if (r && r.choice === null) {
@@ -482,13 +486,34 @@ class GameServer {
     g.stage = 'koupoint';
     for (let s = 0; s < 4; s++) {
       const pl = room.players[s];
-      if (pl && pl.isAI) g.kouPoints[s] = 1 + Math.floor(Math.random() * 4);
+      if (!pl) continue;
+      if (pl.isAI || pl.hosted || !pl.connected) {
+        // AI / 托管 / 断线真人：自动随机补 1-4 扣点，保证不卡扣点阶段
+        g.kouPoints[s] = 1 + Math.floor(Math.random() * 4);
+        this._log(room, `${this._pName(room, s)} 自动暗扣（${g.kouPoints[s]} 点）`);
+      } else {
+        // 在线未托管真人：等待选择；超时未选则自动补
+        this._setTimer(room, 'koupoint:' + s, HUMAN_TIMEOUT_MS, () => {
+          this._autoFillKoupoint(room, s);
+        });
+      }
     }
     this._broadcastRoomState(room);
     this._broadcastGameState(room);
     this._promptKoupoint(room);
     if (g.kouPoints.every((x) => x != null)) this._tryStartAfterKouPoint(room);
     return;
+  }
+
+  /** 自动为未选扣点座位随机补 1-4 点（AI/托管/断线/超时），确保四座填满正常开局 */
+  _autoFillKoupoint(room, seat) {
+    const g = room && room.game;
+    if (!room || !g || room.state !== 'playing' || g.stage !== 'koupoint') return;
+    if (g.kouPoints[seat] != null) return;
+    g.kouPoints[seat] = 1 + Math.floor(Math.random() * 4);
+    this._log(room, `${this._pName(room, seat)} 未选择扣点，系统自动暗扣（${g.kouPoints[seat]} 点）`);
+    this._broadcastGameState(room);
+    if (g.kouPoints.every((x) => x != null)) this._tryStartAfterKouPoint(room);
   }
 
   /** 136 扣点阶段：通知未选择扣点的真人玩家 */

@@ -268,3 +268,73 @@ test('房主 60 秒内重连：取消离线超时解散，房间继续正常进�
   await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
+
+// ============ 功能4：开局扣点阶段不卡局 ============
+test('开局扣点阶段：断线真人座位立即自动补扣点，四座填满正常开局', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  const wb = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS, enableKoupoint: true } });
+  const room = [...srv.rooms.values()][0];
+  send(wb, { type: 'join_room', roomId: room.id });
+  send(wa, { type: 'start_game' });
+  const g = room.game;
+  assert.equal(g.stage, 'koupoint');
+
+  // AI 座位开局即自动填 1-4 扣点
+  for (let s = 0; s < 4; s++) {
+    const pl = room.players[s];
+    if (pl && pl.isAI) {
+      assert.ok(g.kouPoints[s] >= 1 && g.kouPoints[s] <= 4, 'AI 座位自动随机补扣点');
+    }
+  }
+
+  // 玩家乙在扣点阶段断线 → 立即自动补扣点（不等 30s 超时）
+  wb.handlers.close();
+  const seatB = room.players.findIndex((p) => p && p.name === '玩家乙');
+  assert.ok(g.kouPoints[seatB] >= 1 && g.kouPoints[seatB] <= 4, '断线真人座位立即自动补扣点');
+
+  // 房主收到扣点选择提示，选择后四座填满正常开局
+  const promptA = lastOf(wa, 'action_prompt');
+  assert.ok(promptA && promptA.prompt.type === 'koupoint', '在线真人收到扣点选择提示');
+  send(wa, { type: 'koupoint', points: 3 });
+  assert.ok(g.kouPoints.every((x) => x != null), '四座扣点全部填满');
+  assert.equal(g.stage, 'draw', '扣点填满后正常开局，不卡 koupoint');
+  assert.equal(room.state, 'playing');
+  cleanupServer(srv);
+});
+
+test('开局扣点阶段：在线真人超时未选自动补扣点，不卡 koupoint 阶段', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS, enableKoupoint: true } });
+  const room = [...srv.rooms.values()][0];
+  send(wa, { type: 'start_game' });
+  const g = room.game;
+  assert.equal(g.stage, 'koupoint');
+  const seatA = room.players.findIndex((p) => p && p.name === '房主');
+
+  // 在线未托管真人：设有超时自动补定时器（HUMAN_TIMEOUT_MS=30s）
+  assert.ok(room.timers.has('koupoint:' + seatA), '在线真人设有超时自动补扣点定时器');
+  assert.ok(g.kouPoints[seatA] == null, '真人尚未选择扣点');
+
+  // 模拟超时回调触发：自动补 1-4 扣点
+  srv._autoFillKoupoint(room, seatA);
+  assert.ok(g.kouPoints[seatA] >= 1 && g.kouPoints[seatA] <= 4, '超时后自动补扣点');
+  assert.ok(g.kouPoints.every((x) => x != null), '四座扣点全部填满');
+  assert.equal(g.stage, 'draw', '扣点填满后正常开局，不卡 koupoint');
+
+  // 已填座位重复触发自动补应为 no-op（不重复改值）
+  const before = g.kouPoints[seatA];
+  srv._autoFillKoupoint(room, seatA);
+  assert.equal(g.kouPoints[seatA], before, '已选座位自动补为 no-op');
+  await sleep(400); // 等待开局后 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  cleanupServer(srv);
+});
+
