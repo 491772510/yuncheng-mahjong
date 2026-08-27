@@ -129,6 +129,16 @@
           state.prompt = null;
         }
         if (msg.game.logs && state.room) state.room.logs = msg.game.logs;
+        // 杠分即时结算只广播 game_state，不广播 room_state；
+        // 这里同步 players 的 score/roundScore，保证积分榜与实时牌局一致
+        if (msg.game.players && state.room && state.room.players) {
+          for (const p of msg.game.players) {
+            if (p && state.room.players[p.seat]) {
+              state.room.players[p.seat].score = p.score;
+              state.room.players[p.seat].roundScore = p.roundScore;
+            }
+          }
+        }
         if (state.room && state.room.state === 'playing') {
           renderTable();
           renderSidePanel();
