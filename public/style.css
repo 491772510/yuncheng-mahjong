@@ -121,6 +121,9 @@ body {
 .act-ting { background: #e67e22; color: #fff; }
 .act-pass { background: rgba(255,255,255,.85); color: #333; }
 .countdown { font-size: 12px; opacity: .85; margin-top: 6px; }
+/* 碰/杠/胡 响应提示：文字+牌面图案 */
+.resp-hint { display: inline-flex; align-items: center; gap: 4px; align-self: center; color: #fff; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.resp-hint .tile { box-shadow: none; border-color: #fff; }
 
 .seat { position: absolute; z-index: 4; }
 .seat-bottom { bottom: 8px; left: 50%; transform: translateX(-50%); width: 94%; }

@@ -565,7 +565,12 @@
       if (p.canGang) btns += `<button class="act act-gang" data-act="gang">杠</button>`;
       if (p.canPeng) btns += `<button class="act act-peng" data-act="peng">碰</button>`;
       btns += `<button class="act act-pass" data-act="pass">过</button>`;
-      btns += `<span class="countdown" style="align-self:center;">${p.pendingType === 'qianggang' ? '抢杠胡' : tileText(p.tile)}</span>`;
+      const acts = [];
+      if (p.canPeng) acts.push('碰');
+      if (p.canGang) acts.push('杠');
+      if (p.canHu) acts.push('胡');
+      const actLabel = acts.length ? acts.join('/') : (p.pendingType === 'qianggang' ? '抢杠胡' : '');
+      btns += `<span class="resp-hint">${actLabel ? actLabel + '「' : ''}${tileHtml(p.tile, 'small')}${actLabel ? '」' : ''}</span>`;
     }
     bar.innerHTML = btns;
     if (p.timeoutMs) {
