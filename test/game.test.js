@@ -524,6 +524,88 @@ test('自摸结算展示：手牌本就 14 张，不重复补牌', async () => {
   cleanupServer(srv);
 });
 
+// ============ 功能5.6：点炮且放炮者已报听 → 三家均摊（各出 1/3 份，胡牌者收 1 份） ============
+// 规则：放炮者已报听（在 g.tingSeats 中）时，点炮胡支付改为三家均摊——放炮者与另两家闲家
+// 各出 score/3（score = 点数 × 倍数 × 胡牌者扣点），胡牌者总收 1 份；放炮者未报听维持普通
+// 点炮独付；包胡一包三、自摸逻辑不变。
+
+function assertClose(actual, expected, msg) {
+  assert.ok(Math.abs(actual - expected) < 1e-9, `${msg}：期望 ${expected}，实际 ${actual}`);
+}
+
+test('点炮者已报听：三家均摊，各出 1/3 份，胡牌者总收 1 份', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.tingSeats = [1]; // 放炮者（seat1）已报听
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+  assert.equal(g.winners.score, 28, '胡牌者总收 1 份 = 点数7 × 4倍 × 扣点1 = 28');
+  assertClose(room.players[0].roundScore, 28, '胡牌者收满 1 份');
+  assertClose(room.players[1].roundScore, -28 / 3, '放炮者出 1/3 份');
+  assertClose(room.players[2].roundScore, -28 / 3, '闲家2出 1/3 份');
+  assertClose(room.players[3].roundScore, -28 / 3, '闲家3出 1/3 份');
+  assertClose(room.players[1].roundScore + room.players[2].roundScore + room.players[3].roundScore, -28, '三家合计支出 = 胡牌者收入');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('点炮者未报听：维持普通点炮独付，另两家不出分', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.tingSeats = []; // 放炮者未报听
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+  assert.equal(g.winners.score, 28, '点炮分 = 点数7 × 4倍 × 扣点1 = 28');
+  assert.equal(room.players[0].roundScore, 28, '胡牌者收 28');
+  assert.equal(room.players[1].roundScore, -28, '放炮者独付 28');
+  assert.equal(room.players[2].roundScore, 0, '闲家2不出分');
+  assert.equal(room.players[3].roundScore, 0, '闲家3不出分');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('包胡一包三不变：胡者报听、放炮者未报听时放炮者独赔三家', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.tingSeats = [0]; // 胡牌者已报听，放炮者未报听 → 包胡
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+  assert.equal(g.winners.score, 168, '包胡分 = 点数7 × 2 × 4倍 × 扣点1 × 3 = 168');
+  assert.equal(room.players[0].roundScore, 168, '包胡者（胡牌者）收 168');
+  assert.equal(room.players[1].roundScore, -168, '放炮者独赔 168（一包三）');
+  assert.equal(room.players[2].roundScore, 0, '闲家2不出分');
+  assert.equal(room.players[3].roundScore, 0, '闲家3不出分');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('抢杠胡且放炮者已报听：同样走三家均摊（抢杠胡算点炮）', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.tingSeats = [1]; // 放炮者已报听
+
+  srv._settleHu(room, winnerSeat, { winType: 'qianggang', tile: 'b7', discarder: 1, qiangGang: true });
+  assert.equal(g.winners.score, 28, '抢杠胡总收 = 点数7 × 4倍 × 扣点1 = 28');
+  assertClose(room.players[0].roundScore, 28, '胡牌者收满 1 份');
+  assertClose(room.players[1].roundScore, -28 / 3, '放炮者出 1/3 份');
+  assertClose(room.players[2].roundScore, -28 / 3, '闲家2出 1/3 份');
+  assertClose(room.players[3].roundScore, -28 / 3, '闲家3出 1/3 份');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
 // ============ 功能6：AI 不能成为房主 ============
 // Bug 背景：房主退出/超时离开 waiting 房间时，新房主取 others[0]，可能转让给 AI。
 // 要求：房主转让仅限真人，无其他真人则直接解散房间。

@@ -945,6 +945,17 @@ class GameServer {
         loser.roundScore -= score;
         room.players[winnerSeat].score += score;
         room.players[winnerSeat].roundScore += score;
+      } else if (g.tingSeats.includes(info.discarder)) {
+        // 点炮且放炮者已报听：三家均摊（放炮者与另两家闲家各出 1/3 份），胡牌者总收 1 份
+        score = tilePoints * mult * kp;
+        const share = score / 3;
+        for (let s = 0; s < 4; s++) {
+          if (s === winnerSeat || !room.players[s]) continue;
+          room.players[s].score -= share;
+          room.players[s].roundScore -= share;
+          room.players[winnerSeat].score += share;
+          room.players[winnerSeat].roundScore += share;
+        }
       } else {
         // 点炮 = 点数 × 倍数 × 扣点
         score = tilePoints * mult * kp;
@@ -976,9 +987,11 @@ class GameServer {
       };
       room.lastWinner = winnerSeat;
       const baoLabel = baoHu ? '（包胡）' : '';
+      const shareLabel =
+        info.winType !== 'zimo' && g.tingSeats.includes(info.discarder) ? '（放炮者已报听，三家均摊）' : '';
       this._log(
         room,
-        `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${tilePoints}点 × ${mult}倍 × 扣${kp}${baoLabel} → ${score}分）`
+        `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${tilePoints}点 × ${mult}倍 × 扣${kp}${baoLabel}${shareLabel} → ${score}分）`
       );
       this._broadcastGameState(room);
       this._sendSettlement(room);
