@@ -723,16 +723,29 @@
   }
 
   // ================= 结算 =================
-  function gangLogsHtml(logs, players) {
-    if (!logs || !logs.length) return '';
-    const nameOf = (s) => (players && players[s] ? players[s].name : '座位' + s);
+  // 统一支付明细表：胡牌支付（自摸三家各付1份 / 点炮已报听三家各出1份 / 点炮未报听独赔3份）
+  // + 杠分（明杠/补杠=该牌点数，暗杠=点数×2，字牌=10点；再乘杠主扣点，其余三家各付一份）
+  // 数据来自后端 winners.payments（[{kind:'hu'|'gang', title, toSeat, toAmount, rows:[{seat,amount,role}]}]）
+  function paymentTableHtml(result) {
+    const pays = result && result.payments;
+    if (!pays || !pays.length) return '';
+    const nameOf = (s) => (result.hands && result.hands[s] ? result.hands[s].name : '座位' + s);
+    const rowsHtml = pays.map((pay) => {
+      const fromTxt = pay.rows.map((r) =>
+        `${esc(nameOf(r.seat))} <span class="pay-neg">${r.amount}</span>${r.role ? '<span class="pay-role">（' + esc(r.role) + '）</span>' : ''}`
+      ).join('、');
+      return `<tr>
+        <td class="pay-item">${esc(pay.title)}</td>
+        <td class="pay-from">${fromTxt}</td>
+        <td class="pay-to">${esc(nameOf(pay.toSeat))} <span class="pay-pos">+${pay.toAmount}</span></td>
+      </tr>`;
+    }).join('');
     return `<div class="settle-gang">
-      <div class="settle-sub">杠分（明杠/补杠=该牌点数，暗杠=点数×2，字牌=10点；再乘杠主扣点，其余三家各付一份）</div>
-      ${logs.map((lg) => {
-        const typeName = lg.type === 'angang' ? '暗杠' : lg.type === 'bugang' ? '补杠' : '明杠';
-        const kouText = lg.kou != null && lg.kou > 1 ? '×扣' + lg.kou : '';
-        return `<div class="row">${esc(nameOf(lg.seat))} ${typeName} ${tileText(lg.tile)} · ${lg.points != null ? lg.points + '点' + kouText : ''}，每家 ${lg.perSeat} 分</div>`;
-      }).join('')}
+      <div class="settle-sub">支付明细（负数=付出，正数=收入）</div>
+      <table class="pay-table">
+        <thead><tr><th>项目</th><th>付款方</th><th>收款方</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
     </div>`;
   }
 
@@ -754,7 +767,7 @@
         <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，${flowLabel}）</div></div>
         <div class="settle-sub">${ting ? '听牌者：' + ting : '无人听牌'}</div>
         <div class="settle-sub">暗扣公开：${kouText}</div>
-        ${gangLogsHtml(result.gangLogs, result.hands)}
+        ${paymentTableHtml(result)}
         <div class="settle-hands">${result.hands.map((h) => h ? `
           <div class="row"><b>${esc(h.name)}</b>
             ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
@@ -781,7 +794,7 @@
         <div class="settle-sub">${calcText}${result.winType !== 'zimo' ? (result.discarderTing ? ' · 放炮者已报听，三家各出1份' : ' · 放炮者未报听，独赔3份') : ''}</div>
         <div class="settle-sub">暗扣公开：${kouText}</div>
       </div>
-      ${gangLogsHtml(result.gangLogs, result.hands)}
+      ${paymentTableHtml(result)}
       <div class="settle-hands">${result.hands.map((h) => h ? `
         <div class="row">
           <b>${esc(h.name)}${h.seat === result.winnerSeat ? '（胡）' : ''}</b>
@@ -860,7 +873,7 @@
         html += `<div class="settle-head">
           <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${multText} · ${calcText}${w.winType !== 'zimo' ? (w.discarderTing ? '（放炮者已报听，三家各出1份）' : '（放炮者未报听，独赔3份）') : ''} → ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
           <div class="settle-sub">暗扣公开：${kouText}</div>
-        </div>${gangLogsHtml(w.gangLogs, w.hands)}`;
+        </div>${paymentTableHtml(w)}`;
       } else {
         const ting = (w.tingSeats || []).map((s) => w.hands[s] ? w.hands[s].name : '').join('、');
         const flowLabel = room.settings && room.settings.dealerFlow === 'keep' ? '庄家连庄' : '下家接庄';

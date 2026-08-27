@@ -794,6 +794,29 @@ class GameServer {
     this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点×扣${kou}），每家 ${perSeat} 分`);
   }
 
+  /** 杠分支付明细条目（统一支付明细表用）：明杠/补杠=牌点、暗杠=牌点×2，乘杠主扣点，其余三家各付一份给杠主 */
+  _buildGangPayments(room) {
+    const g = room.game;
+    const pays = [];
+    for (const lg of g.gangLogs) {
+      const typeName = lg.type === 'angang' ? '暗杠' : lg.type === 'bugang' ? '补杠' : '明杠';
+      const kouText = lg.kou != null && lg.kou > 1 ? '×扣' + lg.kou : '';
+      const rows = [];
+      for (let s = 0; s < 4; s++) {
+        if (s === lg.seat) continue;
+        rows.push({ seat: s, amount: -lg.perSeat, role: '杠分' });
+      }
+      pays.push({
+        kind: 'gang',
+        title: `${typeName} ${rules.tileName(lg.tile)}（${lg.points}点${kouText}）`,
+        toSeat: lg.seat,
+        toAmount: lg.perSeat * 3,
+        rows,
+      });
+    }
+    return pays;
+  }
+
   _doGangFromDiscard(room, seat, tile) {
     const g = room.game;
     const hand = g.hands[seat];
@@ -923,6 +946,7 @@ class GameServer {
       const discarderTing = info.winType !== 'zimo' && g.tingSeats.includes(info.discarder);
 
       let score;
+      const huPayments = [];
       if (info.winType === 'zimo') {
         // 自摸 = 点数 × 2 × 倍数 × 扣点，三家都给
         score = tilePoints * 2 * mult * kp;
@@ -933,6 +957,13 @@ class GameServer {
           room.players[winnerSeat].score += score;
           room.players[winnerSeat].roundScore += score;
         }
+        huPayments.push({
+          kind: 'hu',
+          title: `自摸 · 三家各付 ${score} 分`,
+          toSeat: winnerSeat,
+          toAmount: score * 3,
+          rows: [0, 1, 2, 3].filter((s) => s !== winnerSeat).map((s) => ({ seat: s, amount: -score, role: '闲家' })),
+        });
       } else if (discarderTing) {
         // 点炮且放炮者已报听：三家各出 1 份（放炮者与另两家闲家各付 score），胡牌者共收 3 份
         score = tilePoints * mult * kp;
@@ -943,6 +974,15 @@ class GameServer {
           room.players[winnerSeat].score += score;
           room.players[winnerSeat].roundScore += score;
         }
+        huPayments.push({
+          kind: 'hu',
+          title: `${winLabel}（放炮者已报听）· 三家各付 ${score} 分`,
+          toSeat: winnerSeat,
+          toAmount: score * 3,
+          rows: [0, 1, 2, 3]
+            .filter((s) => s !== winnerSeat)
+            .map((s) => ({ seat: s, amount: -score, role: s === info.discarder ? '放炮者（已报听）' : '闲家' })),
+        });
       } else {
         // 点炮且放炮者未报听：放炮者独赔 3 份点炮分（含原包胡情形），胡牌者共收 3 份
         score = tilePoints * mult * kp * 3;
@@ -953,6 +993,13 @@ class GameServer {
           room.players[winnerSeat].score += score;
           room.players[winnerSeat].roundScore += score;
         }
+        huPayments.push({
+          kind: 'hu',
+          title: `${winLabel}（放炮者未报听）· 放炮者独赔 ${score} 分`,
+          toSeat: winnerSeat,
+          toAmount: score,
+          rows: [{ seat: info.discarder, amount: -score, role: '放炮者（未报听，独赔3份）' }],
+        });
       }
 
       g.winners = {
@@ -970,6 +1017,7 @@ class GameServer {
         tile: info.tile,
         discarder: info.winType === 'zimo' ? null : info.discarder,
         gangLogs: g.gangLogs.slice(),
+        payments: [...huPayments, ...this._buildGangPayments(room)],
         hands: this._revealHandsWithWinTile(room, winnerSeat, info),
       };
       room.lastWinner = winnerSeat;
@@ -1006,6 +1054,7 @@ class GameServer {
       mode136: true,
       kouPoints: g.kouPoints.slice(), // 结算公开扣点
       gangLogs: g.gangLogs.slice(), // 杠分照常结算（杠时已即时入账）
+      payments: this._buildGangPayments(room), // 流局无胡牌支付，仅杠分明细
       hands: this._revealHands(room),
     };
     room.lastWinner = null; // 流局：庄家流转由 _dealRound 按 settings.dealerFlow 处理（连庄/下家接庄）

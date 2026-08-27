@@ -623,6 +623,96 @@ test('自摸不受影响：三家各付 1 份自摸分，胡牌者共收 3 份�
   cleanupServer(srv);
 });
 
+// ============ 功能5.7：结算支付明细（winners.payments 统一明细表数据） ============
+// payments 结构：[{ kind:'hu'|'gang', title, toSeat, toAmount, rows:[{seat, amount, role}] }]
+// 胡牌支付三情形：自摸三家各付1份；点炮已报听三家各出1份；点炮未报听放炮者独赔3份。
+// 杠分：明杠/补杠=牌点、暗杠=牌点×2，乘杠主扣点，其余三家各付一份给杠主。
+
+test('支付明细-点炮未报听：payments 含 hu 条目，放炮者独赔 3 份并带角色标签', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.tingSeats = [];
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+  const pays = g.winners.payments;
+  assert.ok(Array.isArray(pays) && pays.length >= 1, 'winners 应含 payments 明细');
+  const hu = pays.find((p) => p.kind === 'hu');
+  assert.ok(hu, 'payments 应含胡牌支付条目');
+  assert.equal(hu.toSeat, 0, '收款方为胡牌者');
+  assert.equal(hu.toAmount, 84, '胡牌者共收 3 份 = 84');
+  assert.equal(hu.rows.length, 1, '未报听仅放炮者一人付');
+  assert.equal(hu.rows[0].seat, 1);
+  assert.equal(hu.rows[0].amount, -84, '放炮者独赔 84');
+  assert.match(hu.rows[0].role, /未报听/, '角色标签含未报听独赔');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('支付明细-点炮已报听：三家各付 1 份，放炮者带已报听标签', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.tingSeats = [1]; // 放炮者（seat1）已报听
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+  const hu = g.winners.payments.find((p) => p.kind === 'hu');
+  assert.equal(hu.toAmount, 84, '胡牌者共收 3 份 = 84');
+  assert.equal(hu.rows.length, 3, '三家各付 1 份');
+  assert.equal(hu.rows.reduce((a, r) => a + r.amount, 0), -84, '三家合计支出 = 胡牌者收入');
+  assert.ok(hu.rows.every((r) => r.amount === -28), '每份 28 分');
+  const discarderRow = hu.rows.find((r) => r.seat === 1);
+  assert.match(discarderRow.role, /已报听/, '放炮者角色标签含已报听');
+  assert.ok(hu.rows.filter((r) => r.seat !== 1).every((r) => r.role === '闲家'), '另两家为闲家');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('支付明细-自摸：三家各付 1 份自摸分，角色均为闲家', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const g = room.game;
+  g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
+  g.melds[winnerSeat] = [];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+  g.lastAction = null;
+
+  srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
+  const hu = g.winners.payments.find((p) => p.kind === 'hu');
+  assert.equal(hu.toAmount, 168, '胡牌者共收 3 份自摸分 = 56 × 3 = 168');
+  assert.equal(hu.rows.length, 3);
+  assert.ok(hu.rows.every((r) => r.amount === -56), '三家各付 56 分');
+  assert.ok(hu.rows.every((r) => r.role === '闲家'), '角色均为闲家');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('支付明细-流局：payments 含杠分明细条目（三家各付一份给杠主）', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = room.game;
+  g.gangLogs.push({ seat: 1, tile: 'w5', type: 'ming', perSeat: 5, points: 5, kou: 1 });
+
+  srv._settleDraw(room);
+  const pays = g.winners.payments;
+  assert.ok(Array.isArray(pays) && pays.length === 1, '流局仅杠分支付条目');
+  const gang = pays[0];
+  assert.equal(gang.kind, 'gang');
+  assert.equal(gang.toSeat, 1, '杠主为收款方');
+  assert.equal(gang.toAmount, 15, '杠主共收 5 × 3 = 15');
+  assert.equal(gang.rows.length, 3, '其余三家各付一份');
+  assert.ok(gang.rows.every((r) => r.amount === -5), '每家付 5 分');
+  assert.ok(gang.rows.every((r) => r.role === '杠分'), '角色为杠分');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
 // ============ 功能6：AI 不能成为房主 ============
 // Bug 背景：房主退出/超时离开 waiting 房间时，新房主取 others[0]，可能转让给 AI。
 // 要求：房主转让仅限真人，无其他真人则直接解散房间。
