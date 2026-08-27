@@ -883,11 +883,23 @@
         html += `<div class="settle-head">
           <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${multText} · ${calcText}${w.winType !== 'zimo' ? (w.discarderTing ? '（放炮者已报听，三家各出1份）' : '（放炮者未报听，独赔3份）') : ''} → ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
           <div class="settle-sub">暗扣公开：${kouText}</div>
-        </div>${paymentTableHtml(w)}`;
+        </div>${paymentTableHtml(w)}` +
+          `<div class="settle-hands">${w.hands.map((h) => h ? `
+          <div class="row">
+            <b>${esc(h.name)}${h.seat === w.winnerSeat ? '（赢）' : ''}</b>
+            ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
+            ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
+            <span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>
+          </div>` : '').join('')}</div>`;
       } else {
         const ting = (w.tingSeats || []).map((s) => w.hands[s] ? w.hands[s].name : '').join('、');
         const flowLabel = room.settings && room.settings.dealerFlow === 'keep' ? '庄家连庄' : '下家接庄';
-        html += `<div class="settle-head"><div class="settle-sub">最后一局：流局（${flowLabel}）${ting ? '，听牌者：' + ting : ''}</div></div>`;
+        html += `<div class="settle-head"><div class="settle-sub">最后一局：流局（${flowLabel}）${ting ? '，听牌者：' + ting : ''}</div></div>` +
+          `<div class="settle-hands">${w.hands.map((h) => h ? `
+          <div class="row"><b>${esc(h.name)}</b>
+            ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
+            ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
+          </div>` : '').join('')}</div>`;
       }
     }
     html += sorted.map((p, i) => `
