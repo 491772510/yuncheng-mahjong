@@ -644,7 +644,10 @@ class GameServer {
       if (!room.players[s] || s === discarder) continue;
       // 胡牌受点数限制（6 点及以上才可点炮胡）；报听玩家可胡/可杠，不能碰
       const canHu = rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
-      const canGang = rules.canGang(g.hands[s], tile);
+      // 报听玩家杠不能破坏听张：杠牌若在当前听口中则不允许明杠
+      const canGang = g.tingSeats.includes(s)
+        ? (rules.canGang(g.hands[s], tile) && !rules.isTing(g.hands[s], g.melds[s]).includes(tile))
+        : rules.canGang(g.hands[s], tile);
       const canPeng = g.tingSeats.includes(s) ? false : rules.canPeng(g.hands[s], tile);
       if (canHu || canGang || canPeng) {
         responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
@@ -1148,6 +1151,10 @@ class GameServer {
       if (!r) return this._err(p, '您没有可响应的操作');
       if (r.choice !== null) return this._err(p, '您已响应过');
       if (!r.canGang) return this._err(p, '不能杠');
+      // 双保险：报听玩家明杠听张（响应判定已过滤，此处防绕过）
+      if (g.tingSeats.includes(p.seat) && rules.isTing(g.hands[p.seat], g.melds[p.seat]).includes(g.pending.tile)) {
+        return this._err(p, '报听后不能杠听张，会破坏听口');
+      }
       r.choice = 'gang';
       this._clearTimer(room, 'resp:' + p.seat);
       this._log(room, `${p.name} 选择杠`);
@@ -1160,6 +1167,15 @@ class GameServer {
       if (g.drawnTile === null) return this._err(p, '当前不能杠');
       const tile = String((msg && msg.tile) || '');
       if (!rules.getTileTypes().includes(tile)) return this._err(p, '非法的牌');
+      // 报听后杠不能破坏听张：去掉刚摸的牌后，杠牌若仍在听口中则拒绝
+      if (g.tingSeats.includes(p.seat)) {
+        const base = g.hands[p.seat].slice();
+        const di = base.lastIndexOf(g.drawnTile);
+        if (di >= 0) base.splice(di, 1);
+        if (rules.isTing(base, g.melds[p.seat]).includes(tile)) {
+          return this._err(p, '报听后不能杠听张，会破坏听口');
+        }
+      }
       const gangType = msg && msg.gangType === 'bugang' ? 'bugang' : 'angang';
       if (gangType === 'angang') {
         if (!rules.canAnGang(g.hands[p.seat], tile)) return this._err(p, '不能暗杠');
