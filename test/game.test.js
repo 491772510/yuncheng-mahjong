@@ -509,3 +509,55 @@ test('房主退出时房间内只剩 AI：房间直接解散，不留 AI 房主'
   cleanupServer(srv);
 });
 
+// ============ 功能7：一炮一响（不支持一炮多响） ============
+// Bug 背景：点炮时可能多家能胡，要求仅取距离放炮者最近的一家胡牌（a19e040）。
+// 规则：_tryResolvePending 中 huList 取最近座位调用 _settleHu，其余视为过牌。
+
+test('一炮一响：下家与下下家都能点炮胡时，仅最近下家胡牌', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  const wb = makeWs();
+  const wc = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  srv.handleConnection(wc);
+  send(wc, { type: 'join_lobby', name: '玩家丙' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+  send(wb, { type: 'join_room', roomId: room.id });
+  send(wc, { type: 'join_room', roomId: room.id });
+  send(wa, { type: 'start_game' }); // AI 补 seat3 后开局
+  assert.equal(room.state, 'playing');
+
+  const g = room.game;
+  // 听 b7 的七对 13 张：手牌 + b7 即胡
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  // seat1（玩家乙，下家）、seat2（玩家丙，下下家）都能胡 b7；seat3（AI）不能胡
+  g.hands[1] = hand13.slice();
+  g.hands[2] = hand13.slice();
+  g.hands[3] = ['w1', 'w2', 'w3', 't1', 't2', 't3', 'b1', 'b2', 'b3', 'e', 's', 'x', 'n'];
+  g.melds = [[], [], [], []];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+  g.lastAction = null;
+  g.lastDiscard = { tile: 'b7', seat: 0 };
+
+  // 房主（seat0）打出 b7，生成响应阶段
+  srv._afterDiscard(room, 0);
+  assert.equal(g.pending.responders.length, 2, '仅下家与下下家进入响应');
+  const huSeats = g.pending.responders.filter((r) => r.canHu).map((r) => r.seat).sort();
+  assert.deepEqual(huSeats, [1, 2], '两家都能点炮胡');
+
+  // 两家都选择胡：仅最近下家（seat1）结算胡牌，不产生一炮多响
+  send(wb, { type: 'hu' });
+  send(wc, { type: 'hu' });
+  await sleep(100);
+  assert.ok(g.winners, '本局已结算');
+  assert.equal(g.winners.winnerSeat, 1, '一炮一响：仅最近下家胡牌');
+  assert.equal(g.winners.discarder, 0, '放炮者为房主');
+  await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  cleanupServer(srv);
+});
+
