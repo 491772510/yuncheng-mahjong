@@ -479,8 +479,8 @@
         return `<span class="tiao-mark"><svg viewBox="0 0 42 60"><path d="M7 12 L14 24 L21 12 L28 24 L35 12" stroke="#007830" stroke-width="2" fill="none"/><path d="M7 48 L14 36 L21 48 L28 36 L35 48" stroke="#007830" stroke-width="2" fill="none"/></svg></span>`;
       }
       if (num === '7') {
-        // 7 条按用户指定 SVG：上方 1 竖条 + 上排 3 条 + 下排 3 条，全绿 #007830
-        return `<span class="tiao-mark"><svg viewBox="0 0 42 60"><path d="M21 12 L21 22" stroke="#007830" stroke-width="3" stroke-linecap="round"/><path d="M12 26 L12 36 M21 26 L21 36 M30 26 L30 36" stroke="#007830" stroke-width="3" stroke-linecap="round"/><path d="M12 40 L12 50 M21 40 L21 50 M30 40 L30 50" stroke="#007830" stroke-width="3" stroke-linecap="round"/></svg></span>`;
+        // 7 条按用户指定 SVG：上方 1 竖条（红）+ 上排 3 条 + 下排 3 条（绿 #007830）
+        return `<span class="tiao-mark"><svg viewBox="0 0 42 60"><path d="M21 12 L21 22" stroke="#c8102e" stroke-width="3" stroke-linecap="round"/><path d="M12 26 L12 36 M21 26 L21 36 M30 26 L30 36" stroke="#007830" stroke-width="3" stroke-linecap="round"/><path d="M12 40 L12 50 M21 40 L21 50 M30 40 L30 50" stroke="#007830" stroke-width="3" stroke-linecap="round"/></svg></span>`;
       }
       const pts = BAR_LAYOUT[num] || [];
       return `<span class="bars">${pts.map((p) => `<i style="left:${p[0]}%;top:${p[1]}%;${p[2] ? 'background:' + p[2] : ''}"></i>`).join('')}</span>`;
