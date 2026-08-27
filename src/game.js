@@ -1413,7 +1413,7 @@ class GameServer {
       settings: room.settings,
       logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
-    if (isDrawTurn && g.drawnTile !== null) {
+    if (isDrawTurn && !g.tingSeats.includes(viewerSeat)) {
       // 听牌提示：打出某张后听牌数
       const hints = {};
       const hand = g.hands[viewerSeat];
