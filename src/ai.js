@@ -43,16 +43,17 @@ function decideDrawAction(game, room, seat) {
     }
   }
 
-  // 2) 暗杠
-  const cnt = rules.countTiles(hand);
-  for (const [t, c] of cnt) {
-    if (c === 4) return { type: 'gang', gangType: 'angang', tile: t };
-  }
-
-  // 3) 补杠
-  for (const m of game.melds[seat]) {
-    if (m.type === 'peng' && cnt.get(m.tile) >= 1) {
-      return { type: 'gang', gangType: 'bugang', tile: m.tile };
+  // 2) 暗杠 / 3) 补杠：仅摸牌后可杠（碰牌后 drawnTile 为 null，服务端 _gang 会拒绝“当前不能杠”，
+  // 若此处仍返回 gang，AI 动作被拒后无后续出牌，牌局将死锁）
+  if (game.drawnTile !== null) {
+    const cnt = rules.countTiles(hand);
+    for (const [t, c] of cnt) {
+      if (c === 4) return { type: 'gang', gangType: 'angang', tile: t };
+    }
+    for (const m of game.melds[seat]) {
+      if (m.type === 'peng' && cnt.get(m.tile) >= 1) {
+        return { type: 'gang', gangType: 'bugang', tile: m.tile };
+      }
     }
   }
 
