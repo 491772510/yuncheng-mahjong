@@ -474,7 +474,10 @@
     }
     if (suit === 't') {
       if (num === '1') {
-        return `<span class="bird"><i class="b-head"></i><i class="b-body"></i><i class="b-wing"></i><i class="b-tail"></i></span>`;
+        return `<span class="tiao-mark"><svg viewBox="0 0 42 60"><circle cx="21" cy="18" r="7" stroke="#007830" stroke-width="2" fill="none"/><circle cx="24" cy="17" r="2" fill="#007830"/><path d="M28 18 L33 16" stroke="#007830" stroke-width="2"/><path d="M21 25 L21 38" stroke="#007830" stroke-width="2"/><path d="M21 29 L12 34" stroke="#007830" stroke-width="2"/><path d="M21 29 L30 34" stroke="#007830" stroke-width="2"/><path d="M21 38 L16 54 M21 38 L26 54" stroke="#007830" stroke-width="2"/></svg></span>`;
+      }
+      if (num === '8') {
+        return `<span class="tiao-mark"><svg viewBox="0 0 42 60"><path d="M7 24 L14 12 L21 24 L28 12 L35 24" stroke="#007830" stroke-width="2" fill="none"/><path d="M7 36 L14 48 L21 36 L28 48 L35 36" stroke="#007830" stroke-width="2" fill="none"/></svg></span>`;
       }
       const pts = BAR_LAYOUT[num] || [];
       // 7 条按参考图：上 3 绿条斜排 + 下 4 红条 2×2
