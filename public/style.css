@@ -233,6 +233,9 @@ body {
 /* 弃牌堆 tiny 字牌：缩小内边距与字号，避免红中/发财底色块被裁剪 */
 .tile.tiny .honor-face { inset: 1px; font-size: 9px; border-radius: 2px; }
 .tile.tiny .honor-face.hp { border-width: 1px; }
+/* 弃牌堆 tiny 万子：缩小数字与萬字字号，避免竖排超出牌高显示不全 */
+.tile.tiny .wan-face b { font-size: 1.1em; }
+.tile.tiny .wan-face i { font-size: 0.7em; margin-top: 1px; }
 .tile.tiny .n { font-size: 9px; }
 .tile.tiny .s { font-size: 6px; }
 .tile.back { background: linear-gradient(135deg, #1e9e63, #0a5c3c); color: transparent; }
