@@ -462,6 +462,68 @@ test('自摸路径不受影响：完整 14 张手牌照常识别七对 4 倍', a
   cleanupServer(srv);
 });
 
+// ============ 功能5.5：结算手牌展示（点炮/抢杠赢家补入胡牌 tile，自摸不补） ============
+// Bug 背景：_revealHands 使用真实手牌 g.hands，点炮/抢杠时赢家真实手牌为 13 张（胡牌未含入），
+// 结算界面视觉少一张。修复：仅结算展示层为赢家补入胡的那张（14 张完整展示），
+// g.hands 原始数据与 _settleHu 局部算番副本均不受影响。
+
+test('点炮胡结算展示：赢家补入胡牌 tile 显示 14 张，原始手牌仍 13 张', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+
+  const winnerView = g.winners.hands.find((r) => r && r.seat === winnerSeat);
+  assert.equal(winnerView.hand.length, 14, '点炮胡赢家结算展示应为 14 张（补入胡牌）');
+  assert.equal(winnerView.hand.filter((t) => t === 'b7').length, 2, '展示手牌应含两张 b7（13 张真实手牌 + 胡牌）');
+  assert.equal(g.hands[winnerSeat].length, 13, 'g.hands 原始手牌仍为 13 张，展示补牌不落库');
+  const otherView = g.winners.hands.find((r) => r && r.seat !== winnerSeat);
+  assert.equal(otherView.hand.length, 13, '其他玩家展示手牌不受补牌影响（AI 13 张）');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('抢杠胡结算展示：赢家同样补入胡牌 tile 显示 14 张', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+
+  srv._settleHu(room, winnerSeat, { winType: 'qianggang', tile: 'b7', discarder: 1, qiangGang: true });
+
+  const winnerView = g.winners.hands.find((r) => r && r.seat === winnerSeat);
+  assert.equal(winnerView.hand.length, 14, '抢杠胡赢家结算展示应为 14 张（补入胡牌）');
+  assert.equal(winnerView.hand.filter((t) => t === 'b7').length, 2, '展示手牌应含两张 b7');
+  assert.equal(g.hands[winnerSeat].length, 13, 'g.hands 原始手牌仍为 13 张');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('自摸结算展示：手牌本就 14 张，不重复补牌', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const g = room.game;
+  g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
+  g.melds[winnerSeat] = [];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+  g.lastAction = null;
+
+  srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
+
+  const winnerView = g.winners.hands.find((r) => r && r.seat === winnerSeat);
+  assert.equal(winnerView.hand.length, 14, '自摸赢家结算展示应为 14 张（真实手牌）');
+  assert.equal(winnerView.hand.filter((t) => t === 'b7').length, 2, '自摸展示手牌保持两张 b7，不额外补牌');
+  assert.equal(g.hands[winnerSeat].length, 14, 'g.hands 原始手牌保持 14 张');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
 // ============ 功能6：AI 不能成为房主 ============
 // Bug 背景：房主退出/超时离开 waiting 房间时，新房主取 others[0]，可能转让给 AI。
 // 要求：房主转让仅限真人，无其他真人则直接解散房间。

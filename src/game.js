@@ -972,7 +972,7 @@ class GameServer {
         tile: info.tile,
         discarder: info.winType === 'zimo' ? null : info.discarder,
         gangLogs: g.gangLogs.slice(),
-        hands: this._revealHands(room),
+        hands: this._revealHandsWithWinTile(room, winnerSeat, info),
       };
       room.lastWinner = winnerSeat;
       const baoLabel = baoHu ? '（包胡）' : '';
@@ -1583,6 +1583,19 @@ class GameServer {
           }
         : null
     );
+  }
+
+  /**
+   * 结算手牌展示：基于真实手牌（_revealHands），点炮/抢杠胡赢家补入胡的那张牌（14 张完整展示），自摸不补（胡牌已在手）。
+   * 仅影响展示，g.hands 原始数据与 _settleHu 局部算番副本均不受影响。
+   */
+  _revealHandsWithWinTile(room, winnerSeat, info) {
+    const revealed = this._revealHands(room);
+    if (info.winType !== 'zimo') {
+      const w = revealed.find((r) => r && r.seat === winnerSeat);
+      if (w) w.hand = rules.sortTiles([...w.hand, info.tile]);
+    }
+    return revealed;
   }
 
   // ============ 工具方法 ============
