@@ -1103,13 +1103,14 @@ class GameServer {
     }
     hand.splice(idx, 1);
     g.tingSeats.push(p.seat);
-    g.kouTiles[p.seat] = tile; // 扣牌暗置上架：不进弃牌区，对所有人（含自己）隐藏牌面，且不作为可碰/可胡目标
+    g.kouTiles[p.seat] = tile; // 记录扣牌（报听状态标识，不再单独上架公示）
+    g.discards[p.seat].push('back'); // 暗扣进废牌堆：渲染为牌背，不参与任何响应判定
     g.drawnTile = null;
     g.lastAction = null;
     g.lastDiscard = null; // 扣牌不进入响应判定，他人不能碰/胡
     g.newTiles[p.seat] = null; // 报听后手牌锁定，新牌标志清除
     this._clearTimer(room, 'draw:' + p.seat);
-    this._log(room, `${this._pName(room, p.seat)} 报听，扣牌暗置上架`);
+    this._log(room, `${this._pName(room, p.seat)} 报听，扣牌暗扣进废牌堆`);
     this._broadcastGameState(room);
     this._nextTurn(room, p.seat);
   }
