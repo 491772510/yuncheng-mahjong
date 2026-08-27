@@ -507,6 +507,10 @@
         colored = pts.map((p, idx) => idx < greenN ? [p[0], p[1], '#1e8449'] : [p[0], p[1], '#c0392b']);
         if (num === '6') pipsCls = 'pips with-core';
       }
+      // 9 筒：中间一排（y=50 的三个点）为红色，上下两排保持默认色
+      if (num === '9') {
+        colored = pts.map((p, idx) => (idx >= 3 && idx <= 5) ? [p[0], p[1], '#c0392b'] : p);
+      }
       return `<span class="${pipsCls}">${colored.map((p) => `<i style="left:${p[0]}%;top:${p[1]}%;${p[2] ? 'background:' + p[2] : ''}"></i>`).join('')}</span>`;
     }
     return '';
