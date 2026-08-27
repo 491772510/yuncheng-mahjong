@@ -15,6 +15,7 @@ const rules = require('./rules');
 const ai = require('./ai');
 
 const RECONNECT_MS = 60000; // 断线重连窗口
+const OWNER_OFFLINE_MS = 60000; // 房主离线超时：AI 托管打完本局，本局结束后自动解散房间
 const HUMAN_TIMEOUT_MS = 30000; // 真人行动超时（自动托管）
 const RESPONSE_TIMEOUT_MS = 20000; // 响应窗口
 const MAX_ROOMS = 100;
@@ -129,6 +130,11 @@ class GameServer {
         this._sendLobbyState(p);
         return;
       }
+      // 房主重连：取消离线超时解散定时器（已触发 pendingDisband 的不回退）
+      if (p.id === room.ownerId) {
+        this._clearTimer(room, 'owner:offline');
+        room.ownerOfflineSince = null;
+      }
       this._log(room, `${p.name} 重新连接`);
       this._send(p, { type: 'room_state', room: this._buildRoomView(room, p.seat) });
       if (room.state === 'playing' && room.game) {
@@ -181,6 +187,11 @@ class GameServer {
         }
         if (this._shouldAutoAct(room, p.seat)) this._scheduleAutoAct(room, p.seat);
       }
+      // 房主断线：启动 60 秒超时定时器；超时后房主座位 AI 托管打完本局，本局结束自动解散
+      if (p.id === room.ownerId && room.state === 'playing' && !room.pendingDisband) {
+        room.ownerOfflineSince = Date.now();
+        this._setTimer(room, 'owner:offline', OWNER_OFFLINE_MS, () => this._handleOwnerOfflineTimeout(room));
+      }
       this._broadcastRoomState(room);
       if (room.state === 'playing' && room.game) this._broadcastGameState(room);
     }
@@ -220,6 +231,36 @@ class GameServer {
     }
   }
 
+  /** 房主离线超过 60 秒：房主座位 AI 托管打完本局，本局结束后自动解散房间 */
+  _handleOwnerOfflineTimeout(room) {
+    // 回调已触发：无论是否重连都清理定时器，防止重入/重复触发
+    this._clearTimer(room, 'owner:offline');
+    const owner = room.players.find((pl) => pl && pl.id === room.ownerId);
+    if (owner && owner.connected) {
+      // 已重连：取消解散
+      room.ownerOfflineSince = null;
+      return;
+    }
+    // 无任何在线真人（含房主）：房间已无意义，直接解散
+    if (!room.players.some((pl) => pl && !pl.isAI && pl.connected)) {
+      this._destroyRoom(room);
+      return;
+    }
+    room.pendingDisband = true;
+    this._log(room, '房主离线超过 60 秒，本局结束后将解散房间');
+    this._broadcast(room, { type: 'room_notice', text: '房主离线超过60秒，本局结束后将解散房间' });
+    this._broadcastRoomState(room);
+    // 确保房主座位由 AI 托管继续打本局（断线时已托管，此处兜底）
+    const ownerSeat = owner ? room.players.indexOf(owner) : -1;
+    if (room.state === 'playing' && room.game && ownerSeat >= 0 && this._shouldAutoAct(room, ownerSeat)) {
+      this._scheduleAutoAct(room, ownerSeat);
+    }
+    // 边界：超时时本局已结束（结算中/终局 settled），无进行中的牌局可等，直接解散
+    if (room.state !== 'playing' || !room.game || room.game.stage === 'over') {
+      this._destroyRoom(room);
+    }
+  }
+
   // ============ 房间 ============
 
   _createRoom(p, msg) {
@@ -237,6 +278,9 @@ class GameServer {
       id,
       settings,
       ownerId: p.id,
+      ownerName: p.name, // 创建者名称（房主转让/离开后保持原创建者）
+      ownerOfflineSince: null, // 房主离线起始时间；超 60 秒后 AI 托管并在本局结束后解散
+      pendingDisband: false, // 房主离线超时标记：本局结束后自动解散房间
       state: 'waiting',
       roundNo: 0,
       players: [null, null, null, null],
@@ -401,6 +445,7 @@ class GameServer {
       turn: -1,
       stage: 'draw',
       drawnTile: null,
+      newTiles: [null, null, null, null], // 每位玩家当前“新摸到”的牌（仅自己视角可见，打出/碰/杠/报听后清除）
       lastDiscard: null,
       lastAction: null,
       pending: null,
@@ -495,6 +540,8 @@ class GameServer {
     g.drawnTile = tile;
     g.lastDiscard = null;
     g.lastAction = null;
+    // 报听玩家摸牌即打（或自摸），手牌锁死，不标“新牌”；正常玩家记录新摸牌
+    g.newTiles[seat] = g.tingSeats.includes(seat) ? null : tile;
     this._log(room, `${this._pName(room, seat)} 摸到 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 摸牌`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
@@ -520,6 +567,7 @@ class GameServer {
     g.lastDiscard = { tile, seat };
     g.drawnTile = null;
     g.lastAction = null;
+    g.newTiles[seat] = null; // 摸牌即打：新牌标志随出牌清除
     this._clearTimer(room, 'draw:' + seat);
     this._log(room, `${this._pName(room, seat)} 摸牌即打 ${rules.tileName(tile)}（听口）`, seat, `${this._pName(room, seat)} 摸牌即打（听口）`);
     this._afterDiscard(room, seat);
@@ -560,6 +608,8 @@ class GameServer {
     g.drawnTile = tile;
     g.lastDiscard = null;
     g.lastAction = { type: 'gang' }; // 保持杠标记 → 杠上开花
+    // 报听玩家杠后补牌仍锁死摸打，不标“新牌”；正常玩家记录新摸牌
+    g.newTiles[seat] = g.tingSeats.includes(seat) ? null : tile;
     this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
@@ -690,6 +740,7 @@ class GameServer {
     g.turn = seat;
     g.stage = 'draw';
     g.drawnTile = null; // 碰后只能出牌/报听（碰完即听可立即报听），不能胡/杠
+    g.newTiles[seat] = null; // 碰后手牌变动，新牌标志清除
     this._log(room, `${this._pName(room, seat)} 碰了 ${rules.tileName(tile)}`);
     this._afterTurnStart(room, seat);
   }
@@ -728,6 +779,7 @@ class GameServer {
     g.lastDiscard = null;
     g.lastAction = { type: 'gang' };
     g.turn = seat;
+    g.newTiles[seat] = null; // 杠后补牌前清除旧标志（补牌后重新设置）
     this._log(room, `${this._pName(room, seat)} 明杠了 ${rules.tileName(tile)}`);
     this._settleGangScore(room, seat, tile, 'ming');
     this._drawAfterGang(room, seat);
@@ -746,6 +798,7 @@ class GameServer {
     }
     g.melds[seat].push({ type: 'angang', tile, tiles: [tile, tile, tile, tile] });
     g.lastAction = { type: 'gang' };
+    g.newTiles[seat] = null; // 杠后补牌前清除旧标志（补牌后重新设置）
     this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}`);
     this._settleGangScore(room, seat, tile, 'angang');
     this._drawAfterGang(room, seat);
@@ -801,6 +854,7 @@ class GameServer {
       m.tiles.push(tile);
     }
     g.lastAction = { type: 'gang' };
+    g.newTiles[seat] = null; // 杠后补牌前清除旧标志（补牌后重新设置；抢杠分支不动，牌仍在手）
     this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}`);
     this._settleGangScore(room, seat, tile, 'bugang');
     this._drawAfterGang(room, seat);
@@ -934,8 +988,18 @@ class GameServer {
   _endRound(room) {
     const g = room.game;
     if (g) g.stage = 'over';
-    for (const [k, t] of room.timers) clearTimeout(t);
+    // 保留房主离线超时定时器：本局结束时不能误清，否则房主超时后本局结束自动解散将失效
+    const ownerOfflineTimer = room.timers.get('owner:offline');
+    for (const [k, t] of room.timers) if (k !== 'owner:offline') clearTimeout(t);
     room.timers.clear();
+    if (ownerOfflineTimer) room.timers.set('owner:offline', ownerOfflineTimer);
+    // 房主离线超时：本局结算已广播，直接解散房间，通知所有玩家回大厅
+    if (room.pendingDisband) {
+      this._log(room, '房主离线超时，本局结束，房间解散');
+      this._broadcast(room, { type: 'room_notice', text: '房主离线超时，本局结束，房间已解散' });
+      this._destroyRoom(room);
+      return;
+    }
     const total = room.settings.totalRounds;
     if (total > 0 && room.roundNo >= total) {
       room.state = 'settled';
@@ -1000,6 +1064,8 @@ class GameServer {
     hand.splice(idx, 1);
     g.discards[p.seat].push(tile);
     g.lastDiscard = { tile, seat: p.seat };
+    g.drawnTile = null;
+    g.newTiles[p.seat] = null; // 新牌已打出，标志清除
     this._clearTimer(room, 'draw:' + p.seat);
     this._log(room, `${this._pName(room, p.seat)} 打出 ${rules.tileName(tile)}`);
     this._afterDiscard(room, p.seat);
@@ -1041,6 +1107,7 @@ class GameServer {
     g.drawnTile = null;
     g.lastAction = null;
     g.lastDiscard = null; // 扣牌不进入响应判定，他人不能碰/胡
+    g.newTiles[p.seat] = null; // 报听后手牌锁定，新牌标志清除
     this._clearTimer(room, 'draw:' + p.seat);
     this._log(room, `${this._pName(room, p.seat)} 报听，扣牌暗置上架`);
     this._broadcastGameState(room);
@@ -1319,6 +1386,8 @@ class GameServer {
       wallCount: g.wall.length - g.wallPos,
       lastDiscard: g.lastDiscard,
       drawnTile: isDrawTurn && g.drawnTile !== null ? g.drawnTile : null,
+      // 新摸牌标志：仅下发本玩家自己的新摸牌（他人视角恒为 null）
+      newTile: (g.newTiles && g.newTiles[viewerSeat]) || null,
       yourSeat: viewerSeat,
       isDrawTurn,
       // 扣点选择后全公开；报听扣牌上架暗牌脱敏（所有人只见背面，不含牌面）与杠分明细全公开
@@ -1642,6 +1711,7 @@ class GameServer {
       id: r.id,
       state: r.state,
       settings: r.settings,
+      ownerName: r.ownerName, // 创建者名称（房主转让/离开后仍保持原创建者）
       playerCount: r.players.filter(Boolean).length,
     }));
     this._send(p, { type: 'lobby_state', rooms });

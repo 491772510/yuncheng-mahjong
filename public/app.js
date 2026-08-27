@@ -167,6 +167,10 @@
         // 摸牌提示：显示摸到的具体牌（含字牌）
         toast('摸到 ' + tileText(msg.tile), false);
         break;
+      case 'room_notice':
+        // 房间级广播提示（如房主离线超时，本局结束后解散房间）
+        toast(msg.text || '', true);
+        break;
       case 'chat':
         renderChat(msg.chat);
         break;
@@ -199,6 +203,7 @@
         <div class="rc-meta">
           <span class="badge ${r.state}">${roomStateText(r.state)}</span>
           <span>${r.playerCount}/4 人</span>
+          <span>创建者 ${esc(r.ownerName || '未知')}</span>
           <span>136张·带风带箭</span>
           <span>${r.settings.aiFill ? 'AI补位' : '无AI'}</span>
           <span>报听必开</span>
@@ -381,9 +386,12 @@
   function renderSelfCard(p, seat) {
     const game = state.game;
     const isTurn = game.turn === seat && !game.winners;
-    const hand = (p.hand || []).map((t) => {
+    const newTile = game.newTile || null; // 服务端下发：本玩家当前新摸到的牌（仅自己视角）
+    const hand = (p.hand || []).map((t, i) => {
       const ting = game.tingHints && game.tingHints[t] ? game.tingHints[t] : 0;
-      return tileHtml(t, '', ting, true);
+      // 新摸牌标志：与 newTile 同值且为排序后手牌中第一张该牌（其余同值牌不标记）
+      const isNew = newTile === t && p.hand.indexOf(t) === i;
+      return tileHtml(t, '', ting, true, isNew);
     }).join('');
     const meldHtml = renderMelds(p.melds);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
@@ -419,14 +427,15 @@
 
   const HONOR_NAMES = { e: '東', s: '南', x: '西', n: '北', z: '中', f: '發', p: '白' };
 
-  function tileHtml(tile, size, ting, discardable) {
+  function tileHtml(tile, size, ting, discardable, isNew) {
     if (!tile) return '';
     const suit = tile[0];
     const isHonor = HONOR_NAMES[tile];
     const cls = `tile ${size} ${suitClass(suit)}` +
       (isHonor ? ' honor' : '') +
       (discardable ? ' discardable' : '') +
-      (ting ? ' ting-mark' : '');
+      (ting ? ' ting-mark' : '') +
+      (isNew ? ' new-tile' : '');
     const attr = ting ? ` data-ting="${ting}张"` : '';
     const inner = isHonor ? honorFace(tile) : suitFace(tile);
     return `<span class="${cls}" data-tile="${tile}"${attr}>${inner}</span>`;
