@@ -748,10 +748,23 @@
       const fromTxt = pay.rows.map((r) =>
         `<div class="pay-line">${esc(nameOf(r.seat))} <span class="pay-neg">${r.amount}</span>${r.role ? '<span class="pay-role">（' + esc(r.role) + '）</span>' : ''}</div>`
       ).join('');
+      const actor = pay.kind === 'gang' ? '杠牌' : '胡牌';
+      // 项目列写明谁胡/谁杠/谁点炮：点炮者从付款方行 role 含"放炮者"的行反推
+      const discarderRow = pay.rows.find((r) => r.role && r.role.includes('放炮者'));
+      let title = pay.title;
+      if (pay.kind === 'gang') {
+        title = `${nameOf(pay.toSeat)} ${title}`;
+      } else {
+        title = title
+          .replace(/^点炮胡/, `${nameOf(pay.toSeat)} 胡`)
+          .replace(/^自摸/, `${nameOf(pay.toSeat)} 自摸`)
+          .replace(/^抢杠胡/, `${nameOf(pay.toSeat)} 抢杠胡`);
+        if (discarderRow) title = title.replace(/（放炮者[^）]*）/, '').replace(/胡/, `胡（${nameOf(discarderRow.seat)} 点炮）`);
+      }
       return `<tr>
-        <td class="pay-item">${esc(pay.title)}</td>
+        <td class="pay-item">${esc(title)}</td>
         <td class="pay-from">${fromTxt}</td>
-        <td class="pay-to">${esc(nameOf(pay.toSeat))} <span class="pay-pos">+${pay.toAmount}</span></td>
+        <td class="pay-to"><span class="pay-actor">${actor}</span>${esc(nameOf(pay.toSeat))} <span class="pay-pos">+${pay.toAmount}</span></td>
       </tr>`;
     }).join('');
     return `<div class="settle-gang">
@@ -780,7 +793,7 @@
       content.innerHTML = `
         <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，${flowLabel}）</div></div>
         <div class="settle-sub">${ting ? '听牌者：' + ting : '无人听牌'}</div>
-        <div class="settle-sub">暗扣公开：${kouText}</div>
+        <div class="settle-sub">扣点：${kouText}</div>
         ${paymentTableHtml(result)}
         <div class="settle-hands">${result.hands.map((h) => h ? `
           <div class="row"><b>${esc(h.name)}</b>
@@ -806,7 +819,7 @@
         <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
         <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}（×${result.mult}）</div>
         <div class="settle-sub">${calcText}${result.winType !== 'zimo' ? (result.discarderTing ? ' · 放炮者已报听，三家各出1份' : ' · 放炮者未报听，独赔3份') : ''}</div>
-        <div class="settle-sub">暗扣公开：${kouText}</div>
+        <div class="settle-sub">扣点：${kouText}</div>
       </div>
       ${paymentTableHtml(result)}
       <div class="settle-hands">${result.hands.map((h) => h ? `
@@ -886,7 +899,7 @@
           : `${w.tilePoints}点 × ${w.mult}倍 × 扣${w.kouPoint}点`;
         html += `<div class="settle-head">
           <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${multText} · ${calcText}${w.winType !== 'zimo' ? (w.discarderTing ? '（放炮者已报听，三家各出1份）' : '（放炮者未报听，独赔3份）') : ''} → ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
-          <div class="settle-sub">暗扣公开：${kouText}</div>
+          <div class="settle-sub">扣点：${kouText}</div>
         </div>${paymentTableHtml(w)}` +
           `<div class="settle-hands">${w.hands.map((h) => h ? `
           <div class="row">
