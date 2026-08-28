@@ -439,13 +439,13 @@ body {
 .settle-gang .row { font-size: 13px; margin: 3px 0; color: #555; }
 
 /* 统一支付明细表（胡牌支付 + 杠分） */
-.pay-table { width: auto; min-width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
-.pay-table th { text-align: left; font-size: 12px; color: #7d5a9c; padding: 3px 6px; border-bottom: 1px solid rgba(142,68,173,.25); white-space: nowrap; }
+.pay-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; table-layout: auto; }
+.pay-table th { text-align: left; font-size: 12px; color: #7d5a9c; padding: 3px 6px; border-bottom: 1px solid rgba(142,68,173,.25); }
 .pay-table td { padding: 5px 6px; border-bottom: 1px solid rgba(0,0,0,.05); vertical-align: top; }
-.pay-table .pay-item { white-space: nowrap; font-weight: 600; color: #444; }
-.pay-table .pay-from { color: #555; white-space: nowrap; }
-.pay-table .pay-from .pay-line { padding: 1px 0; }
-.pay-table .pay-to { white-space: nowrap; color: #1e8449; font-weight: 600; }
+.pay-table .pay-item { font-weight: 600; color: #444; }
+.pay-table .pay-from { color: #555; }
+.pay-table .pay-from .pay-line { padding: 1px 0; overflow-wrap: anywhere; }
+.pay-table .pay-to { color: #1e8449; font-weight: 600; overflow-wrap: anywhere; }
 .pay-neg { color: #c0392b; font-weight: 600; }
 .pay-pos { color: #1e8449; font-weight: 600; }
 .pay-role { color: #999; font-size: 12px; }
