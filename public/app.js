@@ -1041,7 +1041,8 @@
 
   // ================= 启动 =================
   // 移动端浏览器工具栏遮挡修复：100vh 在手机浏览器含地址栏/底部工具栏，
-  // 用真实可视视口高度（visualViewport / innerHeight）重算 room-body 高度
+  // 用真实可视视口高度（visualViewport / innerHeight）重算 room-body 高度；
+  // Android 浏览器（Chrome/微信等）横屏时底部工具栏悬浮覆盖页面，需额外预留空间
   function fitViewportHeight() {
     const body = $('.room-body');
     if (!body) return;
@@ -1049,10 +1050,14 @@
     const vh = (window.visualViewport && window.visualViewport.height) ||
                window.innerHeight || document.documentElement.clientHeight;
     const hh = header ? header.offsetHeight : 52;
-    body.style.height = Math.max(Math.round(vh - hh), 200) + 'px';
+    // Android 底部工具栏（含手势条）约 56px；竖屏可随滚动收起，横屏常驻，故横屏必留
+    const isAndroid = /Android/i.test(navigator.userAgent || '');
+    const isLandscape = window.matchMedia && window.matchMedia('(orientation: landscape)').matches;
+    const bottom = (isAndroid && isLandscape) ? 56 : 0;
+    body.style.height = Math.max(Math.round(vh - hh - bottom), 200) + 'px';
   }
   window.addEventListener('resize', fitViewportHeight);
-  window.addEventListener('orientationchange', () => setTimeout(fitViewportHeight, 250));
+  window.addEventListener('orientationchange', () => setTimeout(fitViewportHeight, 300));
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', fitViewportHeight);
   }
@@ -1062,7 +1067,9 @@
     initCreateModal();
     bindEvents();
     connect();
+    // 浏览器工具栏显隐有延迟，多等几次再校准高度，避免刚进入房间时底部被盖
     fitViewportHeight();
+    [300, 900, 2000].forEach((ms) => setTimeout(fitViewportHeight, ms));
   }
   init();
 })();
