@@ -163,10 +163,16 @@ body {
   0%, 100% { transform: scale(1); box-shadow: 0 0 6px rgba(243, 156, 18, 0.8); }
   50% { transform: scale(1.15); box-shadow: 0 0 16px rgba(243, 156, 18, 1); }
 }
-.ting-pick-hint { font-size: 12px; color: #ffd75e; text-align: center; margin-bottom: 4px; }
+.ting-pick-hint {
+  position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
+  font-size: 12px; color: #ffd75e; text-align: center; margin-bottom: 4px;
+  white-space: nowrap; z-index: 5;
+  background: rgba(0,0,0,.55); border-radius: 6px; padding: 2px 10px;
+  pointer-events: none;
+}
 
 /* 手牌 */
-.hand { display: flex; justify-content: center; gap: 3px; margin-top: 6px; flex-wrap: nowrap; }
+.hand { position: relative; display: flex; justify-content: center; gap: 3px; margin-top: 6px; flex-wrap: nowrap; }
 .hand-tiles { display: flex; gap: 4px; flex-wrap: nowrap; }
 .tile {
   width: 40px; height: 56px; border-radius: 6px; background: #fff; color: #333;
