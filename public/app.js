@@ -746,8 +746,8 @@
     const nameOf = (s) => (result.hands && result.hands[s] ? result.hands[s].name : '座位' + s);
     const rowsHtml = pays.map((pay) => {
       const fromTxt = pay.rows.map((r) =>
-        `${esc(nameOf(r.seat))} <span class="pay-neg">${r.amount}</span>${r.role ? '<span class="pay-role">（' + esc(r.role) + '）</span>' : ''}`
-      ).join('、');
+        `<div class="pay-line">${esc(nameOf(r.seat))} <span class="pay-neg">${r.amount}</span>${r.role ? '<span class="pay-role">（' + esc(r.role) + '）</span>' : ''}</div>`
+      ).join('');
       return `<tr>
         <td class="pay-item">${esc(pay.title)}</td>
         <td class="pay-from">${fromTxt}</td>
