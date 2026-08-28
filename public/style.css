@@ -344,8 +344,8 @@ body {
 .settle-big { font-size: 34px; font-weight: 800; color: #d35400; }
 .settle-sub { color: #666; margin-top: 4px; }
 .settle-score-grid { display: grid; gap: 8px; margin-bottom: 14px; }
-.settle-player { display: flex; align-items: center; gap: 8px; background: #eee; border-radius: 8px; padding: 8px 10px; }
-.settle-player .nm { flex: 1; font-weight: 600; }
+.settle-player { display: flex; align-items: center; gap: 8px; background: #eee; border-radius: 8px; padding: 8px 10px; color: #222; }
+.settle-player .nm { flex: 1; font-weight: 600; color: #222; }
 .settle-player .delta { font-weight: 800; font-size: 16px; }
 .settle-player .delta.up { color: #c0392b; }
 .settle-player .delta.down { color: #1e8449; }
