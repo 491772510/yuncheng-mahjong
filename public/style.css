@@ -417,6 +417,50 @@ body {
   .score-row .tag { font-size: 10px; padding: 1px 4px; }
 }
 
+/* ---------- 手机横屏适配 ---------- */
+@media (max-width: 960px) and (orientation: landscape) {
+  .room-body { flex-direction: row; height: calc(100vh - 52px); }
+  .side-panel { width: 240px; height: 100%; border-left: 1px solid rgba(255,255,255,.1); border-top: none; }
+  .table-wrap { flex: 1; min-height: 0; }
+  /* 中央提示区：紧凑底衬，避免挤占横屏有限高度 */
+  .table-center { padding: 5px 10px; border-radius: 10px; max-width: 78%; }
+  .table-center .wall-count { font-size: 12px; }
+  .table-center .wall-count b { font-size: 15px; }
+  .table-center .turn-info { font-size: 12px; margin-top: 2px; min-height: 15px; }
+  .table-center .action-bar { margin-top: 5px; }
+  /* 手牌：单行展示 + 等比牌面（横屏横向空间足，略大于竖屏） */
+  .hand { flex-wrap: nowrap; }
+  .hand-tiles { flex-wrap: nowrap; justify-content: center; }
+  .tile { width: 24px; height: 34px; font-size: 11px; }
+  .tile .n { font-size: 11px; }
+  .tile .s { font-size: 7px; }
+  .tile.small { width: 17px; height: 24px; font-size: 8px; }
+  .tile.small .n { font-size: 9px; }
+  .tile.small .s { font-size: 5px; }
+  .tile.tiny { width: 13px; height: 19px; }
+  .seat-bottom { bottom: 2px; width: 92%; }
+  .seat-top { top: 2px; width: 92%; }
+  .player-card { padding: 4px 7px; }
+  .pc-top { font-size: 11px; gap: 4px; margin-bottom: 2px; }
+  .pc-name { max-width: 56px; }
+  .melds { margin-bottom: 2px; }
+  .discard-area { max-width: 180px; }
+  .seat-left .discard-area, .seat-right .discard-area { max-width: 96px; }
+  .act { min-width: 40px; padding: 6px 9px; font-size: 12px; }
+  .action-bar { gap: 5px; }
+  .pc-ting { font-size: 12px; padding: 1px 6px; letter-spacing: 1px; }
+  .logo { font-size: 24px; }
+  .room-header { padding: 6px 12px; }
+  .room-id { font-size: 13px; }
+  .room-id b { font-size: 17px; }
+  .room-state { font-size: 11px; }
+  .header-right .btn { padding: 5px 10px; font-size: 12px; }
+  /* 结算弹窗横屏防溢出 */
+  .modal-box { padding: 14px; width: min(92vw, 460px); max-height: 86vh; overflow-y: auto; }
+  .settle-hands .row { font-size: 12px; gap: 4px; }
+  .settle-hands .tile.tiny { width: 13px; height: 19px; }
+}
+
 /* ================= 136 模式：扣点弹窗 / 报听扣牌 / 设置开关 / 杠分明细 ================= */
 .settings-136 { margin-top: 6px; padding: 8px 10px; background: rgba(0,0,0,.05); border-radius: 8px; }
 .setting-divider { font-size: 12px; color: #888; margin: 4px 0 8px; font-weight: 700; }
