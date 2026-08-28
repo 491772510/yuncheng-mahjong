@@ -232,6 +232,7 @@
   // ================= 房间视图 =================
   function renderRoomView() {
     showView('room');
+    fitViewportHeight();
     const room = state.room;
     $('#room-id-text').textContent = room.id;
     $('#room-state-text').textContent =
@@ -1039,11 +1040,29 @@
   }
 
   // ================= 启动 =================
+  // 移动端浏览器工具栏遮挡修复：100vh 在手机浏览器含地址栏/底部工具栏，
+  // 用真实可视视口高度（visualViewport / innerHeight）重算 room-body 高度
+  function fitViewportHeight() {
+    const body = $('.room-body');
+    if (!body) return;
+    const header = $('.room-header');
+    const vh = (window.visualViewport && window.visualViewport.height) ||
+               window.innerHeight || document.documentElement.clientHeight;
+    const hh = header ? header.offsetHeight : 52;
+    body.style.height = Math.max(Math.round(vh - hh), 200) + 'px';
+  }
+  window.addEventListener('resize', fitViewportHeight);
+  window.addEventListener('orientationchange', () => setTimeout(fitViewportHeight, 250));
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', fitViewportHeight);
+  }
+
   function init() {
     $('#nick-input').value = state.name;
     initCreateModal();
     bindEvents();
     connect();
+    fitViewportHeight();
   }
   init();
 })();
