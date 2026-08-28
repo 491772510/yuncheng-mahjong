@@ -403,6 +403,12 @@ body {
   .tile.small .n { font-size: 9px; }
   .tile.small .s { font-size: 5px; }
   .tile.tiny { width: 12px; height: 18px; }
+  /* 报听角标：缩小字号与内边距，避免遮挡牌面图案 */
+  .tile.discardable.ting-mark::after { font-size: 9px; padding: 0 3px; top: -11px; right: -5px; line-height: 1.4; animation: tingPulseSmall 1.1s ease-in-out infinite; }
+  @keyframes tingPulseSmall {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.06); }
+  }
   .seat-bottom { bottom: 2px; }
   .seat-top { top: 2px; }
   .player-card { padding: 5px 8px; }
@@ -448,6 +454,8 @@ body {
   .tile.small { width: 17px; height: 24px; font-size: 8px; }
   .tile.small .n { font-size: 9px; }
   .tile.small .s { font-size: 5px; }
+  /* 报听角标：横屏同样缩小，避免遮挡牌面图案 */
+  .tile.discardable.ting-mark::after { font-size: 9px; padding: 0 3px; top: -11px; right: -5px; line-height: 1.4; animation: tingPulseSmall 1.1s ease-in-out infinite; }
   .tile.tiny { width: 13px; height: 19px; }
   .seat-bottom { bottom: 2px; width: 92%; }
   .seat-top { top: 2px; width: 92%; }
