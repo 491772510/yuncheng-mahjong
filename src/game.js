@@ -191,8 +191,8 @@ class GameServer {
         }
         if (this._shouldAutoAct(room, p.seat)) this._scheduleAutoAct(room, p.seat);
       }
-      // 房主断线：启动 60 秒超时定时器；超时后房主座位 AI 托管打完本局，本局结束自动解散
-      if (p.id === room.ownerId && room.state === 'playing' && !room.pendingDisband) {
+      // 房主断线：非 waiting 状态启动 60 秒超时定时器；超时后牌局进行中则 AI 托管打完本局自动解散，牌局未进行（结算确认/终局）则转让房主或解散
+      if (p.id === room.ownerId && room.state !== 'waiting' && !room.pendingDisband) {
         room.ownerOfflineSince = Date.now();
         this._setTimer(room, 'owner:offline', OWNER_OFFLINE_MS, () => this._handleOwnerOfflineTimeout(room));
       }
@@ -236,7 +236,7 @@ class GameServer {
     }
   }
 
-  /** 房主离线超过 60 秒：房主座位 AI 托管打完本局，本局结束后自动解散房间 */
+  /** 房主离线超过 60 秒：牌局进行中则 AI 托管打完本局、本局结束自动解散；牌局未进行（结算确认/终局）则转让房主给在线真人，无真人则解散 */
   _handleOwnerOfflineTimeout(room) {
     // 回调已触发：无论是否重连都清理定时器，防止重入/重复触发
     this._clearTimer(room, 'owner:offline');
@@ -251,19 +251,32 @@ class GameServer {
       this._destroyRoom(room);
       return;
     }
-    room.pendingDisband = true;
-    this._log(room, '房主离线超过 60 秒，本局结束后将解散房间');
-    this._broadcast(room, { type: 'room_notice', text: '房主离线超过60秒，本局结束后将解散房间' });
-    this._broadcastRoomState(room);
-    // 确保房主座位由 AI 托管继续打本局（断线时已托管，此处兜底）
-    const ownerSeat = owner ? room.players.indexOf(owner) : -1;
-    if (room.state === 'playing' && room.game && ownerSeat >= 0 && this._shouldAutoAct(room, ownerSeat)) {
-      this._scheduleAutoAct(room, ownerSeat);
+    // 牌局进行中（未到结算）：房主座位 AI 托管打完本局，本局结束后自动解散
+    if (room.state === 'playing' && room.game && room.game.stage !== 'over') {
+      room.pendingDisband = true;
+      this._log(room, '房主离线超过 60 秒，本局结束后将解散房间');
+      this._broadcast(room, { type: 'room_notice', text: '房主离线超过60秒，本局结束后将解散房间' });
+      this._broadcastRoomState(room);
+      // 确保房主座位由 AI 托管继续打本局（断线时已托管，此处兜底）
+      const ownerSeat = owner ? room.players.indexOf(owner) : -1;
+      if (ownerSeat >= 0 && this._shouldAutoAct(room, ownerSeat)) {
+        this._scheduleAutoAct(room, ownerSeat);
+      }
+      return;
     }
-    // 边界：超时时本局已结束（结算中/终局 settled），无进行中的牌局可等，直接解散
-    if (room.state !== 'playing' || !room.game || room.game.stage === 'over') {
+    // 牌局未进行（结算确认中 / 终局 settled）：房主不在则转让给其他在线真人，无真人则解散
+    const others = room.players.filter(Boolean).filter((x) => x.id !== room.ownerId && !x.isAI && x.connected);
+    if (others.length === 0) {
       this._destroyRoom(room);
+      return;
     }
+    const newOwner = others[0];
+    room.ownerId = newOwner.id;
+    room.ownerOfflineSince = null;
+    this._log(room, `房主 ${owner ? owner.name : '（离线）'} 离线超时，${newOwner.name} 成为新房主`);
+    this._broadcast(room, { type: 'room_notice', text: `房主离线超时，${newOwner.name} 成为新房主` });
+    this._broadcastRoomState(room);
+    this._broadcastLobby();
   }
 
   // ============ 房间 ============

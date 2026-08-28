@@ -166,7 +166,7 @@ test('房主离线超时：广播提示，本局结束后自动解散房间并�
   cleanupServer(srv);
 });
 
-test('牌局中途 _endRound 结算不得误清房主离线超时定时器（owner:offline 保留，超时后本局结束仍解散）', async () => {
+test('牌局中途 _endRound 结算不得误清房主离线超时定时器（保留定时器，超时后结算确认阶段转让房主）', async () => {
   const srv = newServer();
   const wa = makeWs();
   const wb = makeWs();
@@ -190,22 +190,19 @@ test('牌局中途 _endRound 结算不得误清房主离线超时定时器（own
   assert.ok(room.timers.has('owner:offline'), '_endRound 后房主离线超时定时器应保留');
   assert.equal(room.pendingDisband, false, '正常结算不应误触发解散');
 
-  // 60 秒超时回调随后触发：广播提示 + 置解散标记
+  // 60 秒超时回调随后触发：本局已打完（结算确认中），房主转让给在线真人，房间不解散
+  const playerB = room.players.find((pl) => pl && pl.name === '玩家乙');
   srv._handleOwnerOfflineTimeout(room);
-  assert.equal(room.pendingDisband, true, '超时后解散标记已置位');
+  assert.equal(room.ownerId, playerB.id, '房主已转让给在线真人玩家乙');
+  assert.equal(room.pendingDisband, false, '转让后不置解散标记');
   const notice = lastOf(wb, 'room_notice');
-  assert.ok(notice && notice.text.includes('房主离线超过60秒'), '已广播房主离线超时提示');
-
-  // 新一局（或当前局）结算结束：自动解散房间
-  srv._endRound(room);
-  assert.equal(srv.rooms.has(room.id), false, '本局结束后房间已解散');
-  const kick = lastOf(wb, 'room_state');
-  assert.equal(kick.room, null, '玩家收到 room_state null（回大厅）');
-  await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  assert.ok(notice && notice.text.includes('成为新房主'), '已广播新房主提示');
+  assert.equal(srv.rooms.has(room.id), true, '有在线真人时房间不解散');
+  await sleep(400); // 等待残留定时器跑完，避免挂住 worker
   cleanupServer(srv);
 });
 
-test('房主超时时本局已终局（settled）：广播提示后直接解散房间', async () => {
+test('房主超时时本局已终局（settled）：转让房主给在线真人而非解散', async () => {
   const srv = newServer();
   const wa = makeWs();
   const wb = makeWs();
@@ -225,13 +222,35 @@ test('房主超时时本局已终局（settled）：广播提示后直接解散�
 
   // 模拟超时到来前牌局已全部打完（终局 settled）
   room.state = 'settled';
+  const playerB = room.players.find((pl) => pl && pl.name === '玩家乙');
   srv._handleOwnerOfflineTimeout(room);
   const notice = lastOf(wb, 'room_notice');
-  assert.ok(notice && notice.text.includes('房主离线超过60秒'), '已广播房主离线超时提示');
-  assert.equal(srv.rooms.has(room.id), false, '本局已结束，房间直接解散');
-  const kick = lastOf(wb, 'room_state');
-  assert.equal(kick.room, null, '玩家收到 room_state null（回大厅）');
-  await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  assert.ok(notice && notice.text.includes('房主离线超时'), '已广播房主离线超时提示');
+  assert.equal(room.ownerId, playerB.id, '房主转让给在线真人玩家乙');
+  assert.equal(srv.rooms.has(room.id), true, '有在线真人时房间不解散');
+  await sleep(400); // 等待残留定时器跑完，避免挂住 worker
+  cleanupServer(srv);
+});
+
+test('房主离线超时且无其他在线真人（仅AI）：终局阶段直接解散房间', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+  send(wa, { type: 'start_game' }); // aiFill 补 3 个 AI 开局
+  assert.equal(room.state, 'playing');
+
+  // 房主断线：启动 60 秒超时定时器
+  wa.handlers.close();
+  assert.ok(room.timers.has('owner:offline'));
+
+  // 模拟牌局已终局（settled），房主是唯一真人且已离线
+  room.state = 'settled';
+  srv._handleOwnerOfflineTimeout(room);
+  assert.equal(srv.rooms.has(room.id), false, '无在线真人时房间直接解散');
+  await sleep(400); // 等待残留定时器跑完，避免挂住 worker
   cleanupServer(srv);
 });
 
