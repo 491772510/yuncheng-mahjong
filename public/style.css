@@ -387,16 +387,16 @@ body {
   .table-center .wall-count b { font-size: 16px; }
   .table-center .turn-info { font-size: 12px; margin-top: 2px; min-height: 15px; }
   .table-center .action-bar { margin-top: 6px; }
-  /* 手牌：换行 + 等比缩小，保证 13-14 张完整可见可点 */
-  .hand { flex-wrap: wrap; }
-  .hand-tiles { flex-wrap: wrap; justify-content: center; row-gap: 4px; }
-  .tile { width: 26px; height: 38px; font-size: 12px; }
-  .tile .n { font-size: 12px; }
-  .tile .s { font-size: 8px; }
-  .tile.small { width: 18px; height: 26px; font-size: 9px; }
-  .tile.small .n { font-size: 10px; }
-  .tile.small .s { font-size: 6px; }
-  .tile.tiny { width: 14px; height: 20px; }
+  /* 手牌：单行展示 + 等比缩小，保证 13-14 张一行完整可见可点 */
+  .hand { flex-wrap: nowrap; }
+  .hand-tiles { flex-wrap: nowrap; justify-content: center; }
+  .tile { width: 20px; height: 30px; font-size: 10px; }
+  .tile .n { font-size: 10px; }
+  .tile .s { font-size: 7px; }
+  .tile.small { width: 15px; height: 22px; font-size: 8px; }
+  .tile.small .n { font-size: 9px; }
+  .tile.small .s { font-size: 5px; }
+  .tile.tiny { width: 12px; height: 18px; }
   .seat-bottom { bottom: 2px; }
   .seat-top { top: 2px; }
   .player-card { padding: 5px 8px; }
