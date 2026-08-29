@@ -18,6 +18,7 @@ const RECONNECT_MS = 60000; // 断线重连窗口
 const OWNER_OFFLINE_MS = 60000; // 房主离线超时：AI 托管打完本局，本局结束后自动解散房间
 const HUMAN_TIMEOUT_MS = 30000; // 真人行动超时（自动托管）
 const RESPONSE_TIMEOUT_MS = 20000; // 响应窗口
+const SETTLE_TIMEOUT_MS = 60000; // 结算确认超时：在线真人 60 秒未点「确定」自动确认
 const MAX_ROOMS = 100;
 const MAX_LOGS = 200;
 const MAX_CHAT = 50;
@@ -191,6 +192,14 @@ class GameServer {
         }
         if (this._shouldAutoAct(room, p.seat)) this._scheduleAutoAct(room, p.seat);
       }
+      // 结算确认阶段掉线：立即自动确认本局结算，避免全员等待该座位
+      if (room.settleConfirms && !room.settleConfirms[p.seat]) {
+        this._clearTimer(room, 'settle:' + p.seat);
+        room.settleConfirms[p.seat] = true;
+        this._log(room, `${p.name} 断线，自动确认本局结算`);
+        this._broadcast(room, { type: 'settlement_confirm', confirms: room.settleConfirms.slice() });
+        this._tryStartNextRound(room);
+      }
       // 房主断线：非 waiting 状态启动 60 秒超时定时器；超时后牌局进行中则 AI 托管打完本局自动解散，牌局未进行（结算确认/终局）则转让房主或解散
       if (p.id === room.ownerId && room.state !== 'waiting' && !room.pendingDisband) {
         room.ownerOfflineSince = Date.now();
@@ -229,6 +238,14 @@ class GameServer {
     } else {
       if (!p.hosted) p.hosted = true;
       this._log(room, `${p.name} 超时未重连，座位已由 AI 托管`);
+      // 结算确认阶段超时未重连：确保该座位已自动确认（掉线时通常已即时确认，此处幂等兜底）
+      if (room.settleConfirms && !room.settleConfirms[p.seat]) {
+        this._clearTimer(room, 'settle:' + p.seat);
+        room.settleConfirms[p.seat] = true;
+        this._log(room, `${p.name} 超时未重连，自动确认本局结算`);
+        this._broadcast(room, { type: 'settlement_confirm', confirms: room.settleConfirms.slice() });
+        this._tryStartNextRound(room);
+      }
       this._broadcastRoomState(room);
       if (room.state === 'playing' && room.game && this._shouldAutoAct(room, p.seat)) {
         this._scheduleAutoAct(room, p.seat);
@@ -1111,6 +1128,8 @@ class GameServer {
     for (let s = 0; s < 4; s++) {
       // AI / 托管 / 断线玩家自动确认；在线真人等待手动点击「确定」
       if (room.players[s] && this._shouldAutoAct(room, s)) room.settleConfirms[s] = true;
+      // 在线真人：启动 60 秒确认超时定时器，超时未点「确定」则自动确认
+      else if (room.players[s]) this._setTimer(room, 'settle:' + s, SETTLE_TIMEOUT_MS, () => this._handleSettleTimeout(room, s));
     }
     this._broadcast(room, { type: 'settlement_confirm', confirms: room.settleConfirms.slice() });
     this._broadcastRoomState(room);
@@ -1120,6 +1139,19 @@ class GameServer {
 
   // ============ 结算确认 ============
 
+  /** 在线真人 60 秒未点「确定」：自动确认本局结算 */
+  _handleSettleTimeout(room, seat) {
+    this._clearTimer(room, 'settle:' + seat); // 回调已触发，清理防重入
+    if (!room.settleConfirms) return; // 已开局 / 终局 / 房间销毁
+    if (room.settleConfirms[seat]) return; // 已确认（掉线自动确认等）幂等忽略
+    const p = room.players[seat];
+    if (!p) return;
+    room.settleConfirms[seat] = true;
+    this._log(room, `${p.name} 60 秒未确认，系统自动确认本局结算`);
+    this._broadcast(room, { type: 'settlement_confirm', confirms: room.settleConfirms.slice() });
+    this._tryStartNextRound(room);
+  }
+
   _settleConfirm(p) {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
@@ -1127,6 +1159,7 @@ class GameServer {
     if (room.players[p.seat] !== p) return this._err(p, '您不在本局座位中');
     if (room.settleConfirms[p.seat]) return; // 幂等：已确认直接忽略
     room.settleConfirms[p.seat] = true;
+    this._clearTimer(room, 'settle:' + p.seat); // 手动确认后取消本人超时定时器
     this._log(room, `${p.name} 已确认本局结算`);
     this._broadcast(room, { type: 'settlement_confirm', confirms: room.settleConfirms.slice() });
     this._tryStartNextRound(room);
@@ -1136,6 +1169,8 @@ class GameServer {
     if (!room.settleConfirms) return;
     if (!room.settleConfirms.every(Boolean)) return;
     room.settleConfirms = null;
+    // 全员确认：清理所有结算确认超时定时器
+    for (let s = 0; s < 4; s++) this._clearTimer(room, 'settle:' + s);
     this._log(room, '所有玩家已确认，开始下一局');
     this._dealRound(room);
   }
