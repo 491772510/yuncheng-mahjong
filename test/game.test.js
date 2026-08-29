@@ -377,6 +377,13 @@ function makeHuRoom(srv, extraSettings = {}) {
 }
 
 function setupHuState(room, winnerSeat, hand13, tile) {
+  // 清空房间残留 AI 定时器链：makeHuRoom 调 start_game 后 AI 定时器仍在运行，
+  // 若不阻断可能推进到 winnerSeat 摸牌使 13 张手牌变 14 张，与断言竞速导致偶发失败。
+  // 这些用例均直接调 _settleHu 断言结算，不依赖任何定时器，清空安全。
+  for (const timeoutId of room.timers.values()) {
+    clearTimeout(timeoutId);
+  }
+  room.timers.clear();
   const g = room.game;
   g.hands[winnerSeat] = hand13.slice(); // 点炮/抢杠时手牌 13 张（不含打出的胡牌）
   g.melds[winnerSeat] = [];
