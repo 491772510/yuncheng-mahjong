@@ -811,7 +811,8 @@ test('一炮一响：下家与下下家都能点炮胡时，仅最近下家胡�
   g.hands[3] = ['w1', 'w2', 'w3', 't1', 't2', 't3', 'b1', 'b2', 'b3', 'e', 's', 'x', 'n'];
   g.melds = [[], [], [], []];
   g.kouPoints = [1, 1, 1, 1];
-  g.tingSeats = [];
+  // 两家先报听才能胡（规则：仅报听玩家可胡牌）
+  g.tingSeats = [1, 2];
   g.lastAction = null;
   g.lastDiscard = { tile: 'b7', seat: 0 };
 
@@ -829,6 +830,71 @@ test('一炮一响：下家与下下家都能点炮胡时，仅最近下家胡�
   assert.equal(g.winners.winnerSeat, 1, '一炮一响：仅最近下家胡牌');
   assert.equal(g.winners.discarder, 0, '放炮者为房主');
   await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  cleanupServer(srv);
+});
+
+// ============ 功能7.5：仅报听玩家才能胡牌 ============
+// 规则：未报听玩家无论自摸/点炮/抢杠均不得胡，报听玩家按原有点数门槛不变。
+
+test('未报听玩家不能点炮胡：g.tingSeats 为空时点炮不产生胡响应', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  const wb = makeWs();
+  const wc = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  srv.handleConnection(wc);
+  send(wc, { type: 'join_lobby', name: '玩家丙' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+  send(wb, { type: 'join_room', roomId: room.id });
+  send(wc, { type: 'join_room', roomId: room.id });
+  send(wa, { type: 'start_game' }); // AI 补 seat3 后开局
+  assert.equal(room.state, 'playing');
+
+  const g = room.game;
+  // 听 b7 的七对 13 张：手牌 + b7 即胡，但未报听不能胡
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  g.hands[1] = hand13.slice();
+  g.hands[2] = hand13.slice();
+  g.hands[3] = ['w1', 'w2', 'w3', 't1', 't2', 't3', 'b1', 'b2', 'b3', 'e', 's', 'x', 'n'];
+  g.melds = [[], [], [], []];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = []; // 未报听
+  g.lastAction = null;
+  g.lastDiscard = { tile: 'b7', seat: 0 };
+
+  // 房主（seat0）打出 b7，未报听玩家均不能胡
+  srv._afterDiscard(room, 0);
+  const responders = g.pending ? g.pending.responders : [];
+  for (const r of responders) {
+    assert.equal(r.canHu, false, '未报听玩家点炮胡 canHu 必须为 false');
+  }
+  assert.ok(!g.winners, '未报听玩家不能点炮胡结算');
+  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  cleanupServer(srv);
+});
+
+test('未报听玩家摸到自摸牌不能胡：_buildDrawPrompt 不提供 hu 动作', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const seat = 0;
+  const g = room.game;
+  // 摸牌后 14 张：b7 对子补齐七对可自摸（b7 点数 7 ≥ 3），但未报听不能胡
+  g.hands[seat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
+  g.melds[seat] = [];
+  g.drawnTile = 'b7';
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = []; // 未报听
+  g.lastAction = null;
+
+  const prompt = srv._buildDrawPrompt(room, seat);
+  assert.equal(prompt.canHu, false, '未报听玩家自摸 canHu 必须为 false');
+  assert.ok(!prompt.actions.includes('hu'), '未报听玩家 actions 不得包含 hu');
+  assert.ok(prompt.actions.includes('play'), '未报听玩家仍可出牌');
+  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 

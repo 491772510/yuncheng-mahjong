@@ -706,8 +706,8 @@ class GameServer {
     const responders = [];
     for (let s = 0; s < 4; s++) {
       if (!room.players[s] || s === discarder) continue;
-      // 胡牌受点数限制（6 点及以上才可点炮胡）；报听玩家可胡/可杠，不能碰
-      const canHu = rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
+      // 胡牌受点数限制（6 点及以上才可点炮胡）；仅报听玩家可胡/可杠，不能碰
+      const canHu = g.tingSeats.includes(s) && rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
       // 报听玩家杠不能破坏听张：杠牌若在当前听口中则不允许明杠
       const canGang = g.tingSeats.includes(s)
         ? (rules.canGang(g.hands[s], tile) && !rules.isTing(g.hands[s], g.melds[s]).includes(tile))
@@ -900,8 +900,8 @@ class GameServer {
     const grabbers = [];
     for (let s = 0; s < 4; s++) {
       if (s === seat || !room.players[s]) continue;
-      // 抢杠胡算点炮，受点数限制（6 点及以上才可胡）；报听玩家可抢杠；明牌区刻子计入已成型面子
-      const canHu = rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'qianggang');
+      // 抢杠胡算点炮，受点数限制（6 点及以上才可胡）；仅报听玩家可抢杠；明牌区刻子计入已成型面子
+      const canHu = g.tingSeats.includes(s) && rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'qianggang');
       if (canHu) grabbers.push(s);
     }
     if (grabbers.length > 0) {
@@ -1617,8 +1617,8 @@ class GameServer {
       };
     }
     if (g.drawnTile !== null) {
-      // 自摸胡受点数限制：1/2 点不能胡（自摸也不允许），3/4/5 点可自摸；明牌区刻子计入已成型面子
-      const canSelfHu = rules.checkHu(hand, g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo');
+      // 自摸胡受点数限制：1/2 点不能胡（自摸也不允许），3/4/5 点可自摸；明牌区刻子计入已成型面子；仅报听玩家可自摸胡
+      const canSelfHu = g.tingSeats.includes(seat) && rules.checkHu(hand, g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo');
       if (canSelfHu) actions.push('hu');
       // 报听玩家：自摸可胡（满足点数限制），不胡则系统摸打（给“过”）；手牌锁死不换牌
       if (g.tingSeats.includes(seat)) {
