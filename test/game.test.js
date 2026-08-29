@@ -346,6 +346,7 @@ test('开局扣点阶段：在线真人超时未选自动补扣点，不卡 koup
   // 模拟超时回调触发：自动补 1-4 扣点
   srv._autoFillKoupoint(room, seatA);
   assert.ok(g.kouPoints[seatA] >= 1 && g.kouPoints[seatA] <= 4, '超时后自动补扣点');
+  assert.equal(room.players[seatA].hosted, true, '在线真人超时未确认后进入 AI 托管');
   assert.ok(g.kouPoints.every((x) => x != null), '四座扣点全部填满');
   assert.equal(g.stage, 'draw', '扣点填满后正常开局，不卡 koupoint');
 

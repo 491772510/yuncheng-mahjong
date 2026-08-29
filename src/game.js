@@ -544,6 +544,13 @@ class GameServer {
     if (g.kouPoints[seat] != null) return;
     g.kouPoints[seat] = 1 + Math.floor(Math.random() * 4);
     this._log(room, `${this._pName(room, seat)} 未选择扣点，系统自动暗扣（${g.kouPoints[seat]} 点）`);
+    const pl = room.players[seat];
+    if (pl && !pl.isAI && !pl.hosted) {
+      // 在线真人超时未确认：进入托管，由 AI 代打后续出牌
+      pl.hosted = true;
+      this._log(room, `${this._pName(room, seat)} 扣点阶段未确认，已由 AI 托管`);
+      this._broadcastRoomState(room);
+    }
     this._broadcastGameState(room);
     if (g.kouPoints.every((x) => x != null)) this._tryStartAfterKouPoint(room);
   }
