@@ -363,6 +363,7 @@ class GameServer {
       logs: [],
       chat: [],
       timers: new Map(),
+      autoSeq: 0, // AI 自动行动定时器唯一 key 递增序号
       nextAiNo: 1,
     };
     this.rooms.set(id, room);
@@ -1475,8 +1476,14 @@ class GameServer {
     const pl = room.players[seat];
     if (!pl) return;
     pl._auto = (pl._auto || 0) + 1;
-    setTimeout(() => {
-      try {
+    // 纳入 room.timers 统一跟踪：唯一 key（seat + 递增序号）支持同一座位并发多定时器，
+    // 不使用 _setTimer（会 clear 旧 key），回调触发后自行删除本 key。
+    const autoKey = 'auto:' + seat + ':' + (++room.autoSeq);
+    room.timers.set(
+      autoKey,
+      setTimeout(() => {
+        room.timers.delete(autoKey);
+        try {
         if (!room.players[seat]) return;
         if (room.state !== 'playing' || !room.game) {
           pl._auto = Math.max(0, (pl._auto || 0) - 1);
@@ -1511,7 +1518,8 @@ class GameServer {
         // 异常也要递减计数，避免 _auto 泄漏导致后续不再代打
         pl._auto = Math.max(0, (pl._auto || 0) - 1);
       }
-    }, 80);
+      }, 80)
+    );
   }
 
   // ============ 构建视图 / 消息 ============
