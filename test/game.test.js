@@ -7,13 +7,20 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { GameServer } = require('../src/game');
+const { GameServer, HEARTBEAT_MAX_MISS } = require('../src/game');
 
 // ---------- 测试工具：伪 WebSocket 客户端 ----------
 function makeWs() {
-  const ws = { readyState: 1, sent: [], handlers: {} };
+  const ws = { readyState: 1, sent: [], handlers: {}, pingCount: 0, terminated: false };
   ws.on = (type, cb) => { ws.handlers[type] = cb; };
   ws.send = (data) => { ws.sent.push(JSON.parse(data)); };
+  ws.ping = () => { ws.pingCount += 1; };
+  ws.terminate = () => {
+    if (ws.terminated) return;
+    ws.terminated = true;
+    ws.readyState = 3;
+    if (ws.handlers.close) ws.handlers.close();
+  };
   return ws;
 }
 
@@ -39,6 +46,12 @@ function cleanupServer(srv) {
   for (const room of srv.rooms.values()) {
     for (const t of room.timers.values()) clearTimeout(t);
     room.timers.clear();
+  }
+  for (const ws of srv.wsPlayers.keys()) {
+    if (ws._heartbeatTimer) {
+      clearInterval(ws._heartbeatTimer);
+      ws._heartbeatTimer = null;
+    }
   }
   for (const p of srv.players.values()) {
     if (p.disconnectTimer) {
@@ -965,6 +978,68 @@ test('房间销毁后全局 players 清理：AI 与掉线超时真人被移除�
   const pA = humanPls.find((x) => x.id === room.ownerId);
   assert.ok(srv.players.has(pA.id), '在线房主保留在全局 players 中（可重连）');
   await sleep(400);
+  cleanupServer(srv);
+});
+
+// ============ 心跳保活（ping/pong） ============
+test('心跳：正常连接每周期回 pong 不会被误杀', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '心跳甲' });
+
+  assert.ok(wa._heartbeatTimer, 'handleConnection 后应创建心跳定时器');
+  // 模拟多个心跳周期，客户端每次均回 pong
+  for (let i = 0; i < 10; i++) {
+    srv._heartbeatTick(wa);
+    wa.handlers.pong();
+  }
+  assert.equal(wa.terminated, false, '正常回 pong 不应被 terminate');
+  assert.equal(wa.readyState, 1, '连接保持打开');
+  assert.ok(wa.pingCount >= 10, '服务端已发送 ping');
+
+  cleanupServer(srv);
+});
+
+test('心跳：连续超过 HEARTBEAT_MAX_MISS 次未回 pong 判定死连接并 terminate，走断线清理', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '心跳乙' });
+  const pid = srv.wsPlayers.get(wa);
+  assert.ok(pid);
+
+  // 不响应 pong：前 HEARTBEAT_MAX_MISS 次只发 ping 不 terminate
+  for (let i = 0; i < HEARTBEAT_MAX_MISS; i++) {
+    srv._heartbeatTick(wa);
+    assert.equal(wa.terminated, false, `第 ${i + 1} 次 miss 不应立刻 terminate`);
+    assert.ok(wa.pingCount >= i + 1, 'miss 期间仍在发 ping');
+  }
+  // 超过阈值：下一次 tick 应 terminate
+  srv._heartbeatTick(wa);
+  assert.equal(wa.terminated, true, '超过阈值未回 pong 应 terminate');
+
+  // terminate 触发 close → _onWsClose 断线清理（connected=false / ws 置空，可重连）
+  assert.equal(srv.players.get(pid).connected, false, '死连接已走断线清理');
+  assert.equal(srv.players.get(pid).ws, null, 'ws 已从玩家解除绑定');
+
+  cleanupServer(srv);
+});
+
+test('心跳：连接关闭后心跳定时器被清理，不泄漏', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '心跳丙' });
+  assert.ok(wa._heartbeatTimer, '应创建心跳定时器');
+
+  // 模拟真实 close（如正常断线）
+  wa.handlers.close();
+  assert.equal(wa._heartbeatTimer, null, 'close 后心跳定时器已清理');
+  // 定时器清理后再 tick 不应报错、也不应 terminate
+  srv._heartbeatTick(wa);
+  assert.equal(wa.terminated, false);
+
   cleanupServer(srv);
 });
 

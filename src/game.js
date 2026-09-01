@@ -15,6 +15,8 @@ const rules = require('./rules');
 const ai = require('./ai');
 
 const RECONNECT_MS = 60000; // 断线重连窗口
+const HEARTBEAT_INTERVAL_MS = 30000; // 心跳 ping 间隔
+const HEARTBEAT_MAX_MISS = 3; // 连续 3 次未收到 pong（约 90s）判定死连接
 const OWNER_OFFLINE_MS = 60000; // 房主离线超时：AI 托管打完本局，本局结束后自动解散房间
 const HUMAN_TIMEOUT_MS = 30000; // 真人行动超时（自动托管）
 const RESPONSE_TIMEOUT_MS = 20000; // 响应窗口
@@ -41,6 +43,28 @@ class GameServer {
     ws.on('message', (raw) => this.handleMessage(ws, raw.toString()));
     ws.on('close', () => this._onWsClose(ws));
     ws.on('error', () => {});
+    this._startHeartbeat(ws);
+  }
+
+  // ---------- 心跳保活（ping/pong） ----------
+  _startHeartbeat(ws) {
+    if (!ws || typeof ws.ping !== 'function' || ws._heartbeatTimer) return;
+    ws._pongMiss = 0;
+    // ws 库收到 pong 帧自动触发 'pong' 事件（客户端浏览器/ws 库均自动回 pong，无需改协议）
+    ws.on('pong', () => { ws._pongMiss = 0; });
+    ws._heartbeatTimer = setInterval(() => this._heartbeatTick(ws), HEARTBEAT_INTERVAL_MS);
+  }
+
+  // 每个心跳周期：累计 miss，超过阈值判定半开/死连接
+  _heartbeatTick(ws) {
+    if (!ws || ws.readyState !== 1) return;
+    ws._pongMiss = (ws._pongMiss || 0) + 1;
+    if (ws._pongMiss > HEARTBEAT_MAX_MISS) {
+      // 连续超过阈值未收到 pong：强制断开，触发 close → _onWsClose 走既有断线重连流程
+      try { ws.terminate(); } catch (e) { console.error('[game] heartbeat terminate error:', e); }
+      return;
+    }
+    try { ws.ping(); } catch (e) { console.error('[game] heartbeat ping error:', e); }
   }
 
   handleMessage(ws, raw) {
@@ -162,6 +186,11 @@ class GameServer {
   }
 
   _onWsClose(ws) {
+    // 连接关闭即清理心跳定时器，避免泄漏
+    if (ws._heartbeatTimer) {
+      clearInterval(ws._heartbeatTimer);
+      ws._heartbeatTimer = null;
+    }
     const playerId = this.wsPlayers.get(ws);
     if (!playerId) return;
     this.wsPlayers.delete(ws);
@@ -1948,4 +1977,4 @@ class GameServer {
   }
 }
 
-module.exports = { GameServer };
+module.exports = { GameServer, HEARTBEAT_INTERVAL_MS, HEARTBEAT_MAX_MISS };
