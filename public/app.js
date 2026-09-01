@@ -1116,13 +1116,14 @@
 
   // ================= 语音播报 =================
   // Web Speech API（zh-CN）：出牌报牌名，碰/杠/暗杠/补杠/吃/胡报动作词；
-  // 声音选择存 localStorage('kd.voice')：male 男声 / female 女声 / mute 无声，默认男声；
+  // 声音选择存 localStorage('kd.voice')：male 男声 / female 女声 / mute 无声，默认无声；
+  // 已有用户保存过男声/女声则保持其选择不变（仅影响未设置过的新用户默认值）；
   // AI（isAI 座位）打牌/碰/杠/胡等动作不播报，仅真人玩家动作播报
   const VOICE_KEY = 'kd.voice';
   const VOICE_GAP_MS = 500; // 同一事件 500ms 内不重复播报
   function readVoiceMode() {
     const v = localStorage.getItem(VOICE_KEY);
-    return (v === 'female' || v === 'mute') ? v : 'male';
+    return (v === 'male' || v === 'female' || v === 'mute') ? v : 'mute';
   }
   const voiceState = {
     mode: readVoiceMode(),
@@ -1165,7 +1166,7 @@
   }
 
   function setVoiceMode(mode) {
-    voiceState.mode = (mode === 'female' || mode === 'mute') ? mode : 'male';
+    voiceState.mode = (mode === 'male' || mode === 'female' || mode === 'mute') ? mode : 'mute';
     localStorage.setItem(VOICE_KEY, voiceState.mode);
     // 切换后立即刷新目标语音缓存，下次播报即用新声音
     voiceState.femaleVoice = pickVoice('female');
