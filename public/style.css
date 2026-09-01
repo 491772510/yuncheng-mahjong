@@ -133,6 +133,28 @@ body {
 .seat-left { left: 6px; top: 50%; transform: translateY(-50%); }
 .seat-right { right: 6px; top: 50%; transform: translateY(-50%); }
 
+/* ---------- 聊天消息气泡 ---------- */
+.bubble-layer {
+  position: absolute; z-index: 6; display: flex; flex-direction: column;
+  align-items: center; gap: 4px; pointer-events: none; max-width: 46%;
+}
+.bubble {
+  position: relative; background: rgba(0,0,0,.85); color: #fff;
+  border: 1px solid rgba(255,255,255,.18); border-radius: 10px;
+  padding: 5px 9px; font-size: 12.5px; line-height: 1.35;
+  max-width: 220px; word-break: break-all; white-space: pre-wrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,.4);
+  animation: bubble-in .22s ease-out;
+}
+.bubble .b-who { font-weight: 700; color: #ffd75e; margin-right: 5px; }
+.bubble::after { content: ''; position: absolute; width: 0; height: 0; border: 6px solid transparent; }
+.bubble.dir-bottom::after { bottom: -12px; left: 50%; margin-left: -6px; border-top-color: rgba(0,0,0,.85); }
+.bubble.dir-top::after { top: -12px; left: 50%; margin-left: -6px; border-bottom-color: rgba(0,0,0,.85); }
+.bubble.dir-left::after { left: -12px; top: 50%; margin-top: -6px; border-right-color: rgba(0,0,0,.85); }
+.bubble.dir-right::after { right: -12px; top: 50%; margin-top: -6px; border-left-color: rgba(0,0,0,.85); }
+.bubble.leaving { opacity: 0; transform: translateY(-4px) scale(.96); transition: opacity .35s ease, transform .35s ease; }
+@keyframes bubble-in { from { opacity: 0; transform: translateY(4px) scale(.95); } to { opacity: 1; transform: none; } }
+
 .player-card { background: rgba(0,0,0,.22); border-radius: 12px; padding: 8px 10px; border: 2px solid transparent; }
 .player-card.active-turn { border-color: #ffd75e; box-shadow: 0 0 10px rgba(255,215,94,.5); }
 .player-card.winner { border-color: #ffb400; background: rgba(255,180,0,.18); }
@@ -427,6 +449,9 @@ body {
   .score-row .rs { width: 58px; font-size: 11px; }
   .score-row .sc { font-size: 13px; }
   .score-row .tag { font-size: 10px; padding: 1px 4px; }
+  /* 聊天气泡：手机竖屏更紧凑，避免遮挡手牌与操作按钮 */
+  .bubble-layer { max-width: 60%; }
+  .bubble { font-size: 11px; padding: 4px 7px; max-width: 140px; }
 }
 
 /* ---------- 手机横屏适配 ---------- */
@@ -478,6 +503,9 @@ body {
   .modal-box { padding: 14px; width: min(92vw, 460px); max-height: 86vh; max-height: 86dvh; overflow-y: auto; }
   .settle-hands .row { font-size: 12px; gap: 4px; }
   .settle-hands .tile.tiny { width: 13px; height: 19px; }
+  /* 聊天气泡：横屏高度有限，进一步缩小并限制宽度避免遮挡牌区 */
+  .bubble-layer { max-width: 38%; }
+  .bubble { font-size: 10.5px; padding: 3px 6px; max-width: 130px; }
 }
 
 /* ================= 136 模式：扣点弹窗 / 报听扣牌 / 设置开关 / 杠分明细 ================= */

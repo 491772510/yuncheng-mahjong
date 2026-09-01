@@ -183,6 +183,10 @@
         break;
       case 'chat':
         renderChat(msg.chat);
+        {
+          const cm = (msg.chat && msg.chat.length) ? msg.chat[msg.chat.length - 1] : null;
+          if (cm) showChatBubble(cm.from, cm.text);
+        }
         break;
       case 'error':
         toast(msg.message || '操作失败', true);
@@ -342,10 +346,14 @@
       html += '</div>';
     }
     html += '</div>';
+    // 保留已弹出的聊天气泡层（renderTable 整桌重绘，气泡需跨重绘存活）
+    const layers = [...wrap.querySelectorAll('.bubble-layer')];
     wrap.innerHTML = html;
+    for (const l of layers) wrap.appendChild(l);
     bindTileClicks();
     bindCancelHosted();
     renderActions();
+    syncBubbleLayers();
   }
 
   function bindCancelHosted() {
@@ -735,6 +743,112 @@
     box.innerHTML = (chat || []).map((m) => `
       <div class="chat-msg"><span class="who">${esc(m.from)}</span><span class="txt">${esc(m.text)}</span></div>`).join('');
     box.scrollTop = box.scrollHeight;
+  }
+
+  // ================= 聊天消息气泡 =================
+  // 服务端 chat 只带 from 昵称，按昵称反查座位号挂气泡；
+  // 气泡层挂在 table-wrap 顶层，renderTable 重绘时由调用方保留再同步定位
+  const bubbleLayers = new Map(); // seat -> 气泡层 DOM
+
+  function seatOfName(name) {
+    const pls = state.room && state.room.players;
+    if (!pls) return -1;
+    for (let i = 0; i < pls.length; i++) {
+      if (pls[i] && pls[i].name === name) return i;
+    }
+    return -1;
+  }
+
+  function seatDir(seat) {
+    const wrap = $('#table-wrap');
+    const el = wrap && wrap.querySelector(`.seat[data-seat="${seat}"]`);
+    if (!el) return 'bottom';
+    if (el.className.includes('seat-top')) return 'top';
+    if (el.className.includes('seat-left')) return 'left';
+    if (el.className.includes('seat-right')) return 'right';
+    return 'bottom';
+  }
+
+  function getBubbleLayer(seat) {
+    let layer = bubbleLayers.get(seat);
+    if (!layer || !layer.parentNode) {
+      layer = document.createElement('div');
+      layer.className = 'bubble-layer';
+      bubbleLayers.set(seat, layer);
+      const wrap = $('#table-wrap');
+      if (wrap) wrap.appendChild(layer);
+    }
+    return layer;
+  }
+
+  // 气泡浮在座位朝向牌桌中央的一侧（bottom=上方 / top=下方 / left=右侧 / right=左侧）
+  function repositionBubbleLayer(seat, layer) {
+    const wrap = $('#table-wrap');
+    const seatEl = wrap && wrap.querySelector(`.seat[data-seat="${seat}"]`);
+    if (!wrap || !seatEl) return;
+    const sr = seatEl.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    const cx = sr.left - wr.left + sr.width / 2;
+    const cy = sr.top - wr.top + sr.height / 2;
+    const cls = seatEl.className;
+    if (cls.includes('seat-bottom')) {
+      layer.style.left = cx + 'px';
+      layer.style.bottom = (wr.bottom - sr.top + 6) + 'px';
+      layer.style.top = 'auto';
+      layer.style.right = 'auto';
+      layer.style.transform = 'translateX(-50%)';
+    } else if (cls.includes('seat-top')) {
+      layer.style.top = (sr.bottom - wr.top + 6) + 'px';
+      layer.style.left = cx + 'px';
+      layer.style.bottom = 'auto';
+      layer.style.right = 'auto';
+      layer.style.transform = 'translateX(-50%)';
+    } else if (cls.includes('seat-left')) {
+      layer.style.left = (sr.right - wr.left + 6) + 'px';
+      layer.style.top = cy + 'px';
+      layer.style.bottom = 'auto';
+      layer.style.right = 'auto';
+      layer.style.transform = 'translateY(-50%)';
+    } else { // seat-right
+      layer.style.right = (wr.right - sr.left + 6) + 'px';
+      layer.style.top = cy + 'px';
+      layer.style.bottom = 'auto';
+      layer.style.left = 'auto';
+      layer.style.transform = 'translateY(-50%)';
+    }
+  }
+
+  function syncBubbleLayers() {
+    const wrap = $('#table-wrap');
+    if (!wrap) return;
+    for (const [seat, layer] of bubbleLayers) {
+      if (!layer.parentNode) wrap.appendChild(layer);
+      repositionBubbleLayer(seat, layer);
+    }
+  }
+
+  function showChatBubble(from, text) {
+    if (!state.game) return;
+    const seat = seatOfName(from);
+    if (seat < 0) return;
+    const wrap = $('#table-wrap');
+    if (!wrap || !wrap.querySelector(`.seat[data-seat="${seat}"]`)) return;
+    const layer = getBubbleLayer(seat);
+    // 同一座位最多叠 3 条：超出直接移除最旧（避免遮牌）
+    const olds = layer.querySelectorAll('.bubble');
+    for (let i = 0; i < olds.length - 2; i++) {
+      if (olds[i]._timer) clearTimeout(olds[i]._timer);
+      olds[i].remove();
+    }
+    const b = document.createElement('div');
+    b.className = 'bubble dir-' + seatDir(seat);
+    b.innerHTML = `<span class="b-who">${esc(from)}</span>${esc(text)}`;
+    layer.prepend(b);
+    repositionBubbleLayer(seat, layer);
+    b._timer = setTimeout(() => {
+      b.classList.add('leaving');
+      setTimeout(() => { b.remove(); }, 380);
+    }, 3000);
   }
 
   // ================= 结算 =================
