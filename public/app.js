@@ -81,6 +81,7 @@
           state.game = null;
           state.prompt = null;
           hideConnMask();
+          resetVoiceBaseline();
           // 回到大厅，重新同步昵称与大厅状态
           renderLobby();
           return;
@@ -140,6 +141,7 @@
           }
         }
         if (state.room && state.room.state === 'playing') {
+          checkSpeakEvents(msg.game);
           renderTable();
           renderSidePanel();
         }
@@ -1112,6 +1114,169 @@
     }[c]));
   }
 
+  // ================= 语音播报 =================
+  // Web Speech API（zh-CN）：出牌报牌名，碰/杠/暗杠/补杠/吃/胡报动作词；
+  // 声音选择存 localStorage('kd.voice')：male 男声 / female 女声，默认男声
+  const VOICE_KEY = 'kd.voice';
+  const VOICE_GAP_MS = 500; // 同一事件 500ms 内不重复播报
+  const voiceState = {
+    gender: localStorage.getItem(VOICE_KEY) === 'female' ? 'female' : 'male',
+    maleVoice: null,
+    femaleVoice: null,
+    lastSpeakAt: new Map(), // eventKey -> timestamp
+    baselineReady: false,
+    prevDiscardCounts: [],
+    prevMelds: [],
+    hadWinners: false,
+  };
+
+  const SPEECH_NUM_CN = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  const SPEECH_HONOR = { e: '东风', s: '南风', x: '西风', n: '北风', z: '红中', f: '发财', p: '白板' };
+  // zh-CN 语音按名称启发式匹配性别：常见女声（Huihui/Yaoyao/Xiaoxiao/Yunxi 等）与男声（YunJian/YunYang 等）
+  const SPEECH_FEMALE_RE = /huihui|yaoyao|xiaoxiao|yunxi|xiaoyi|meijia|tingting|female|女/i;
+  const SPEECH_MALE_RE = /yunjian|yunyang|kangkang|male|男/i;
+
+  function speechSupported() {
+    return !!(window.speechSynthesis && typeof window.speechSynthesis.speak === 'function');
+  }
+
+  // 牌码 -> 播报文本："w5" -> "五万"、"z" -> "红中"
+  function tileSpeech(t) {
+    if (!t || t === 'back') return '';
+    if (SPEECH_HONOR[t]) return SPEECH_HONOR[t];
+    const num = Number(t.slice(1));
+    const suit = t[0] === 'w' ? '万' : t[0] === 't' ? '条' : '筒';
+    return (SPEECH_NUM_CN[num] || num) + suit;
+  }
+
+  function pickVoice(gender) {
+    if (!speechSupported()) return null;
+    let voices = [];
+    try { voices = window.speechSynthesis.getVoices() || []; } catch (e) { voices = []; }
+    const zh = voices.filter((v) => /^zh/i.test(v.lang || ''));
+    if (!zh.length) return null;
+    const re = gender === 'female' ? SPEECH_FEMALE_RE : SPEECH_MALE_RE;
+    return zh.find((v) => re.test(v.name || '')) || zh[0];
+  }
+
+  function setVoiceGender(gender) {
+    voiceState.gender = gender === 'female' ? 'female' : 'male';
+    localStorage.setItem(VOICE_KEY, voiceState.gender);
+    // 切换后立即刷新目标语音缓存，下次播报即用新声音
+    voiceState.femaleVoice = pickVoice('female');
+    voiceState.maleVoice = pickVoice('male');
+  }
+
+  function speakText(text, eventKey) {
+    if (!text) return;
+    // 页面不可见：静默跳过
+    if (document.hidden || document.visibilityState === 'hidden') return;
+    // 同一事件 500ms 内不重复
+    const now = Date.now();
+    if (eventKey) {
+      const last = voiceState.lastSpeakAt.get(eventKey);
+      if (last != null && now - last < VOICE_GAP_MS) return;
+      voiceState.lastSpeakAt.set(eventKey, now);
+    }
+    // 无 Web Speech 支持/无声卡：静默降级，不抛错不阻塞交互
+    if (!speechSupported()) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN';
+      u.rate = 1;
+      const v = voiceState.gender === 'female' ? voiceState.femaleVoice : voiceState.maleVoice;
+      if (v) u.voice = v;
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* 静默降级 */ }
+  }
+
+  function refreshVoicesCache() {
+    voiceState.femaleVoice = pickVoice('female');
+    voiceState.maleVoice = pickVoice('male');
+  }
+
+  function initVoice() {
+    refreshVoicesCache();
+    if (speechSupported() && window.speechSynthesis.addEventListener) {
+      window.speechSynthesis.addEventListener('voiceschanged', refreshVoicesCache);
+    }
+    // 大厅声音选择控件（进大厅前选择，默认男声）
+    const seg = $('#seg-voice');
+    if (seg) {
+      seg.querySelectorAll('.seg-item').forEach((b) => {
+        b.classList.toggle('active', b.dataset.value === voiceState.gender);
+        b.onclick = () => {
+          seg.querySelectorAll('.seg-item').forEach((x) => x.classList.remove('active'));
+          b.classList.add('active');
+          setVoiceGender(b.dataset.value);
+        };
+      });
+    }
+  }
+
+  function resetVoiceBaseline() {
+    voiceState.baselineReady = false;
+    voiceState.prevDiscardCounts = [];
+    voiceState.prevMelds = [];
+    voiceState.hadWinners = false;
+  }
+
+  function meldSig(m) {
+    return (m.type || '') + ':' + (m.tile || '') + ':' + ((m.tiles || []).join(''));
+  }
+
+  // 基于每次 game_state 广播做增量检测：出牌、碰/杠/吃、胡
+  function checkSpeakEvents(game) {
+    if (!game || !game.players) return;
+    if (!voiceState.baselineReady) {
+      // 首次进入牌局：只建立基线，不播报历史动作，避免把已发生的出牌/明面全报一遍
+      for (let seat = 0; seat < game.players.length; seat++) {
+        const p = game.players[seat];
+        if (!p) continue;
+        voiceState.prevDiscardCounts[seat] = (p.discards || []).length;
+        voiceState.prevMelds[seat] = (p.melds || []).map(meldSig);
+      }
+      voiceState.hadWinners = !!game.winners;
+      voiceState.baselineReady = true;
+      return;
+    }
+    // 出牌：废牌堆新增非牌背牌（'back' 为报听暗扣，不播报）
+    for (let seat = 0; seat < game.players.length; seat++) {
+      const p = game.players[seat];
+      if (!p) continue;
+      const discs = p.discards || [];
+      const prev = voiceState.prevDiscardCounts[seat] || 0;
+      if (discs.length > prev) {
+        const last = discs[discs.length - 1];
+        if (last && last !== 'back') speakText(tileSpeech(last), 'discard:' + seat + ':' + last);
+      }
+      voiceState.prevDiscardCounts[seat] = discs.length;
+    }
+    // 碰/杠/暗杠/补杠/吃：明面新增（补杠表现为同一明面由 peng 转为 bugang）
+    for (let seat = 0; seat < game.players.length; seat++) {
+      const p = game.players[seat];
+      if (!p) continue;
+      const cur = (p.melds || []).map(meldSig);
+      const prev = voiceState.prevMelds[seat] || [];
+      for (const cs of cur) {
+        if (!prev.includes(cs)) {
+          const type = cs.split(':')[0];
+          const word = type === 'peng' ? '碰' : type === 'gang' ? '杠' : type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : type === 'chi' ? '吃' : '';
+          if (word) speakText(word, 'meld:' + seat + ':' + cs);
+        }
+      }
+      voiceState.prevMelds[seat] = cur;
+    }
+    // 胡：winners 由无到有（点炮/自摸/抢杠胡）
+    if (game.winners && !voiceState.hadWinners) {
+      if (game.winners.type === 'hu') {
+        const wt = game.winners.winType;
+        speakText(wt === 'zimo' ? '自摸' : wt === 'qianggang' ? '抢杠胡' : '胡了', 'hu:' + game.roundNo);
+      }
+    }
+    voiceState.hadWinners = !!game.winners;
+  }
+
   // ================= 事件绑定 =================
   function bindEvents() {
     $('#join-lobby-btn').onclick = () => {
@@ -1179,6 +1344,7 @@
   function init() {
     $('#nick-input').value = state.name;
     initCreateModal();
+    initVoice();
     bindEvents();
     connect();
     // 浏览器工具栏显隐有延迟，多等几次再校准高度，避免刚进入房间时底部被盖

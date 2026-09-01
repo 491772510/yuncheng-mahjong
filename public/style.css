@@ -30,6 +30,10 @@ body {
 .logo { font-size: 40px; text-align: center; margin-bottom: 4px; text-shadow: 0 2px 10px rgba(0,0,0,.35); }
 .slogan { text-align: center; opacity: .8; margin-bottom: 26px; font-size: 14px; }
 .entry-box { display: flex; gap: 10px; margin-bottom: 14px; }
+.voice-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin: -2px 0 16px; font-size: 14px; color: rgba(255,255,255,.92); }
+.voice-row .voice-label { white-space: nowrap; }
+.voice-row .seg { flex: 0 0 auto; }
+.voice-seg .seg-item { flex: 0 0 auto; min-width: 76px; }
 .entry-box input, .join-box input, #nick-input {
   flex: 1; border: none; border-radius: 8px; padding: 12px 14px; font-size: 15px;
   background: rgba(255,255,255,.95); color: #222; outline: none;
@@ -440,6 +444,9 @@ body {
   .discard-area { max-width: 200px; }
   .seat-left .discard-area, .seat-right .discard-area { max-width: 100px; }
   .logo { font-size: 28px; }
+  /* 语音播报选择：竖屏紧凑适配 */
+  .voice-row { margin: -2px 0 14px; font-size: 13px; }
+  .voice-seg .seg-item { min-width: 64px; padding: 7px 12px; font-size: 13px; }
   .act { min-width: 44px; padding: 8px 10px; font-size: 13px; flex: 0 1 auto; }
   .action-bar { gap: 6px; }
   /* 结算弹窗与积分榜手机端防溢出 */
@@ -494,6 +501,10 @@ body {
   .action-bar { gap: 5px; }
   .pc-ting { font-size: 12px; padding: 1px 6px; letter-spacing: 1px; }
   .logo { font-size: 24px; }
+  /* 横屏矮高度：压缩大厅纵向间距，减少滚动 */
+  .lobby-inner { padding: 16px 0; }
+  .slogan { margin-bottom: 16px; }
+  .voice-row { margin: -2px 0 12px; }
   .room-header { padding: 6px 12px; }
   .room-id { font-size: 13px; }
   .room-id b { font-size: 17px; }
