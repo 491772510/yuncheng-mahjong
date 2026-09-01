@@ -24,11 +24,11 @@ function hashOf(text, voice) {
 }
 
 test('PRESET_TEXTS：覆盖 34 种牌名与动作词', () => {
-  assert.equal(PRESET_TEXTS.length, 34 + 8, '34 牌名 + 8 动作词');
+  assert.equal(PRESET_TEXTS.length, 34 + 9, '34 牌名 + 9 动作词');
   for (const w of ['一万', '九万', '一条', '九条', '一筒', '九筒', '东风', '南风', '西风', '北风', '红中', '发财', '白板']) {
     assert.ok(PRESET_TEXTS.includes(w), '包含牌名 ' + w);
   }
-  for (const a of ['碰', '杠', '暗杠', '补杠', '吃', '自摸', '抢杠胡', '胡了']) {
+  for (const a of ['碰', '杠', '暗杠', '补杠', '吃', '自摸', '抢杠胡', '胡了', '报听']) {
     assert.ok(PRESET_TEXTS.includes(a), '包含动作词 ' + a);
   }
 });

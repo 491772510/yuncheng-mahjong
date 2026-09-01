@@ -416,7 +416,7 @@
       const isNew = newTile === t && p.hand.indexOf(t) === i;
       return tileHtml(t, '', ting, canDiscard, isNew);
     }).join('');
-    const meldHtml = renderMelds(p.melds);
+    const meldHtml = renderMelds(p.melds, true);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
     const kp = game.kouPoints && game.kouPoints[seat];
     return `<div class="player-card ${isTurn ? 'active-turn' : ''}">
@@ -436,12 +436,14 @@
     </div>`;
   }
 
-  function renderMelds(melds) {
+  function renderMelds(melds, isMine = false) {
     if (!melds || !melds.length) return '';
     return melds.map((m) => {
-      const tiles = m.type === 'angang'
-        ? '<span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span>'
-        : m.tiles.map((t) => tileHtml(t, 'tiny')).join('');
+      const tiles = m.type === 'angang' && isMine
+        ? tileHtml(m.tiles[0], 'tiny') + '<span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span>'
+        : m.type === 'angang'
+          ? '<span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span>'
+          : m.tiles.map((t) => tileHtml(t, 'tiny')).join('');
       return `<div class="meld">${tiles}</div>`;
     }).join('');
   }
@@ -1141,6 +1143,7 @@
     baselineReady: false,
     prevDiscardCounts: [],
     prevMelds: [],
+    prevTing: [],
     hadWinners: false,
   };
 
@@ -1260,6 +1263,7 @@
     voiceState.baselineReady = false;
     voiceState.prevDiscardCounts = [];
     voiceState.prevMelds = [];
+    voiceState.prevTing = [];
     voiceState.hadWinners = false;
   }
 
@@ -1277,6 +1281,7 @@
         if (!p) continue;
         voiceState.prevDiscardCounts[seat] = (p.discards || []).length;
         voiceState.prevMelds[seat] = (p.melds || []).map(meldSig);
+        voiceState.prevTing[seat] = !!p.ting;
       }
       voiceState.hadWinners = !!game.winners;
       voiceState.baselineReady = true;
@@ -1293,6 +1298,16 @@
         if (last && last !== 'back') speakText(tileSpeech(last), 'discard:' + seat + ':' + last);
       }
       voiceState.prevDiscardCounts[seat] = discs.length;
+    }
+    // 报听：非 AI 玩家由未报听 -> 报听（ting false -> true）时播报
+    for (let seat = 0; seat < game.players.length; seat++) {
+      const p = game.players[seat];
+      if (!p) continue;
+      const nowTing = !!p.ting;
+      if (nowTing && !voiceState.prevTing[seat] && !p.isAI) {
+        speakText('报听', 'ting:' + seat);
+      }
+      voiceState.prevTing[seat] = nowTing;
     }
     // 碰/杠/暗杠/补杠/吃：明面新增（补杠表现为同一明面由 peng 转为 bugang）；AI 动作不播报
     for (let seat = 0; seat < game.players.length; seat++) {
