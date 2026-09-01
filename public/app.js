@@ -1115,18 +1115,17 @@
   }
 
   // ================= 语音播报 =================
-  // 播报优先走本地运城话 TTS 服务（POST /api/tts，engine=edge，dialect=true），
+  // 播报走后端预合成缓存：同源 GET /api/tts/audio?text=&voice= 返回已缓存音频 URL（/tts/<voice>/<hash>.mp3），
+  // 由麻将 Node 服务在后台调用独立 TTS 服务预合成落盘，前端不再实时跨端口合成，消除出牌播报延迟；
   // 请求失败（服务未启动/网络错误/非 2xx）时降级 Web Speech API（zh-CN）；
   // 出牌报牌名，碰/杠/暗杠/补杠/吃/胡报动作词；
   // 声音选择存 localStorage('kd.voice')：male 男声 / female 女声 / mute 无声，默认无声；
-  // TTS 服务地址默认 http://<hostname>:8000，可用 localStorage('kd.ttsUrl') 覆盖；
   // 已有用户保存过男声/女声则保持其选择不变（仅影响未设置过的新用户默认值）；
+  // 页面加载即 fire-and-forget 触发 /api/tts/warmup 预热常用播报文本；
   // AI（isAI 座位）打牌/碰/杠/胡等动作不播报，仅真人玩家动作播报
   const VOICE_KEY = 'kd.voice';
   const VOICE_GAP_MS = 500; // 同一事件 500ms 内不重复播报
-  const TTS_KEY = 'kd.ttsUrl';
-  const TTS_PORT = 8000;
-  const ttsCache = new Map(); // key: text|voice -> audio_url，同文本同性别不重复合成
+  const ttsCache = new Map(); // key: text|voice -> audio_url，同文本同性别不重复请求
   function readVoiceMode() {
     const v = localStorage.getItem(VOICE_KEY);
     return (v === 'male' || v === 'female' || v === 'mute') ? v : 'mute';
@@ -1179,30 +1178,19 @@
     voiceState.maleVoice = pickVoice('male');
   }
 
-  // TTS 服务地址：优先 localStorage 覆盖值，否则自动推断 http://<hostname>:8000
-  function ttsBaseUrl() {
-    const override = localStorage.getItem(TTS_KEY);
-    if (override) return String(override).replace(/\/+$/, '');
-    return 'http://' + window.location.hostname + ':' + TTS_PORT;
-  }
-
-  // 本地 TTS 合成并播放；失败时抛出，由调用方降级到 Web Speech
+  // 同源请求后端预合成缓存音频并播放；失败时抛出，由调用方降级到 Web Speech
   async function playViaTTS(text) {
     const key = text + '|' + voiceState.mode;
     let audioUrl = ttsCache.get(key);
     if (!audioUrl) {
-      const resp = await fetch(ttsBaseUrl() + '/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice: voiceState.mode, dialect: true, engine: 'edge' }),
-      });
+      const resp = await fetch('/api/tts/audio?text=' + encodeURIComponent(text) + '&voice=' + encodeURIComponent(voiceState.mode));
       if (!resp.ok) throw new Error('TTS http ' + resp.status);
       const data = await resp.json();
-      if (!data || !data.audio_url) throw new Error('TTS no audio_url');
-      audioUrl = data.audio_url;
+      if (!data || !data.url) throw new Error('TTS no url');
+      audioUrl = data.url;
       ttsCache.set(key, audioUrl);
     }
-    const audio = new Audio(ttsBaseUrl() + audioUrl);
+    const audio = new Audio(audioUrl);
     audio.play().catch(() => { /* 播放失败静默 */ });
   }
 
@@ -1246,6 +1234,10 @@
     refreshVoicesCache();
     if (speechSupported() && window.speechSynthesis.addEventListener) {
       window.speechSynthesis.addEventListener('voiceschanged', refreshVoicesCache);
+    }
+    // 页面加载即触发后端预合成预热（fire-and-forget，不等待不阻塞）
+    if (window.fetch) {
+      fetch('/api/tts/warmup').catch(() => { /* 预热失败静默，播报时按需合成 */ });
     }
     // 大厅声音选择控件（进大厅前选择，默认无声）
     const seg = $('#seg-voice');

@@ -2,7 +2,7 @@
 
 // ============ 运城扣点点麻将：前端语音播报 jsdom 单测 ============
 // 1) 大厅声音选择：默认无声 / 选择保存 localStorage / 读取已保存声音
-// 2) 本地 TTS 播报：出牌/碰/杠/吃/胡 触发 POST /api/tts 并播放 audio（voice/dialect/engine 参数）
+// 2) 后端预合成 TTS 播报：出牌/碰/杠/吃/胡 触发同源 GET /api/tts/audio?text=&voice= 并播放 audio
 // 3) 播报触发：出牌报牌名、碰/杠/暗杠/补杠/吃/胡（点炮/自摸/抢杠）报动作词
 // 4) 节流与降级：同事件 500ms 内不重复、页面不可见静默跳过、TTS 失败降级 speechSynthesis、语音不可用静默
 // 5) 男女声匹配：切换声音后立即生效（TTS voice 参数 / 降级 speech 选择对应 voice）
@@ -18,7 +18,7 @@ const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
 const appJs = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
 
 function createEnv(opts = {}) {
-  const { withSpeech = true, storedVoice = null, withFetch = true, withAudio = true, ttsFail = false, ttsUrl = null } = opts;
+  const { withSpeech = true, storedVoice = null, withFetch = true, withAudio = true, ttsFail = false } = opts;
   const dom = new JSDOM(html, {
     url: 'http://localhost:3100/',
     runScripts: 'outside-only',
@@ -28,7 +28,6 @@ function createEnv(opts = {}) {
   const { document } = window;
 
   if (storedVoice) window.localStorage.setItem('kd.voice', storedVoice);
-  if (ttsUrl) window.localStorage.setItem('kd.ttsUrl', ttsUrl);
 
   const spoken = [];
   const utterances = [];
@@ -57,16 +56,22 @@ function createEnv(opts = {}) {
     };
   }
 
-  // 模拟本地 TTS 服务：POST /api/tts 返回 audio_url，记录请求体
+  // 模拟麻将后端 TTS 接口：同源 GET /api/tts/audio?text=&voice= 返回 {url}，warmup 直接成功；
+  // 记录 audio 请求参数（warmup 不计入 ttsTexts，避免污染播报断言）
   if (withFetch) {
     window.fetch = (url, init) => {
       fetchCalls.push({ url, init });
-      let body = {};
-      try { body = JSON.parse((init && init.body) || '{}'); } catch (e) { /* ignore */ }
-      ttsTexts.push(body);
+      const u = String(url);
+      if (u.startsWith('/api/tts/warmup')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ started: true }) });
+      }
+      const params = new URLSearchParams(u.includes('?') ? u.split('?')[1] : '');
+      const text = params.get('text') || '';
+      const voice = params.get('voice') || '';
+      ttsTexts.push({ text, voice });
       if (ttsFail === 'reject') return Promise.reject(new Error('TTS not reachable'));
       if (ttsFail === 'http') return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
-      return Promise.resolve({ ok: true, status: 200, json: async () => ({ audio_url: '/audio/' + ttsTexts.length + '.mp3' }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ url: '/tts/' + voice + '/' + ttsTexts.length + '.mp3' }) });
     };
   }
 
@@ -96,6 +101,11 @@ function broadcast(env, msg) {
 // 等待 fetch/json/Audio 等微任务与宏任务完成，使 TTS 链路结果可断言
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// 过滤出真正的播报音频请求（页面加载时的 warmup 不算）
+function ttsAudioCalls(env) {
+  return env.fetchCalls.filter((c) => String(c.url).startsWith('/api/tts/audio'));
 }
 
 function roomStateMsg(overrides = {}) {
@@ -170,7 +180,7 @@ test('语音选择：默认无声，选择女声后保存到 localStorage 并立
   await flush();
   assert.equal(env.ttsTexts[0].text, '五万');
   assert.equal(env.ttsTexts[0].voice, 'female', 'TTS 请求使用女声');
-  assert.ok(env.plays[0].startsWith('http://localhost:8000/audio/'), '播放 TTS 音频');
+  assert.ok(env.plays[0].startsWith('/tts/female/'), '播放后端缓存音频 URL');
 });
 
 test('语音选择：读取已保存的 localStorage 声音（女声）', () => {
@@ -210,7 +220,7 @@ test('无声：选择无声后所有播报静默（出牌/胡均不触发）', (
   broadcast(env, gameStateMsg(makePlayers({ 1: ['w5', 'z'] })));
   broadcast(env, gameStateMsg(makePlayers({ 1: ['w5', 'z', 'e'] }), { winners: { type: 'hu', winType: 'zimo', winnerSeat: 1, tile: 'w5' } }));
   assert.equal(env.spoken.length, 0, '无声模式下不播报任何动作');
-  assert.equal(env.fetchCalls.length, 0, '无声模式不请求 TTS');
+  assert.equal(ttsAudioCalls(env).length, 0, '无声模式不请求 TTS');
 });
 
 test('无声：切回男声后播报立即恢复', async () => {
@@ -379,21 +389,24 @@ test('播报：自摸与抢杠胡', async () => {
   assert.deepEqual(env2.ttsTexts.map((r) => r.text), ['抢杠胡']);
 });
 
-// ---------- 本地 TTS ----------
-test('TTS：男声出牌触发 POST /api/tts（方言文本）并播放 audio', async () => {
+// ---------- 后端预合成 TTS ----------
+test('TTS：男声出牌触发同源 GET /api/tts/audio（方言文本）并播放缓存音频', async () => {
   const env = createEnv({ storedVoice: 'male' });
   enterRoom(env);
   broadcast(env, gameStateMsg(makePlayers())); // 基线
   broadcast(env, gameStateMsg(makePlayers({ 1: ['w5'] })));
   await flush();
-  assert.equal(env.fetchCalls.length, 1);
-  assert.equal(env.fetchCalls[0].url, 'http://localhost:8000/api/tts', '自动推断 http://hostname:8000');
-  assert.equal(env.fetchCalls[0].init.method, 'POST');
-  assert.deepEqual(env.ttsTexts[0], { text: '五万', voice: 'male', dialect: true, engine: 'edge' }, '请求带方言文本与方言开关');
-  assert.deepEqual(env.plays, ['http://localhost:8000/audio/1.mp3'], '播放 TTS 返回的音频');
+  const calls = ttsAudioCalls(env);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].url.startsWith('/api/tts/audio'), '同源相对路径请求');
+  assert.equal(calls[0].init, undefined, 'GET 请求无 body/method');
+  const params = new URLSearchParams(calls[0].url.split('?')[1]);
+  assert.equal(params.get('text'), '五万', '请求携带方言文本');
+  assert.equal(params.get('voice'), 'male', '请求使用男声');
+  assert.deepEqual(env.plays, ['/tts/male/1.mp3'], '播放后端缓存音频');
 });
 
-test('TTS：女声出牌 voice=female，拼完整音频 URL', async () => {
+test('TTS：女声出牌 voice=female，播放对应声音缓存音频', async () => {
   const env = createEnv({ storedVoice: 'female' });
   enterRoom(env);
   broadcast(env, gameStateMsg(makePlayers()));
@@ -401,17 +414,7 @@ test('TTS：女声出牌 voice=female，拼完整音频 URL', async () => {
   await flush();
   assert.equal(env.ttsTexts[0].voice, 'female');
   assert.equal(env.ttsTexts[0].text, '红中');
-  assert.ok(env.plays[0].startsWith('http://localhost:8000/audio/'), '播放完整 TTS 音频 URL');
-});
-
-test('TTS：kd.ttsUrl 可覆盖服务地址', async () => {
-  const env = createEnv({ storedVoice: 'male', ttsUrl: 'http://192.168.1.50:9000' });
-  enterRoom(env);
-  broadcast(env, gameStateMsg(makePlayers()));
-  broadcast(env, gameStateMsg(makePlayers({ 1: ['w5'] })));
-  await flush();
-  assert.equal(env.fetchCalls[0].url, 'http://192.168.1.50:9000/api/tts', '使用覆盖地址');
-  assert.equal(env.plays[0], 'http://192.168.1.50:9000/audio/1.mp3', '播放覆盖地址音频');
+  assert.ok(env.plays[0].startsWith('/tts/female/'), '播放女声缓存音频 URL');
 });
 
 test('TTS：同文本同性别只合成一次（内存缓存）', async () => {
@@ -453,7 +456,7 @@ test('TTS：mute 模式不请求 TTS 也不播放', () => {
   enterRoom(env);
   broadcast(env, gameStateMsg(makePlayers()));
   broadcast(env, gameStateMsg(makePlayers({ 1: ['w5'] })));
-  assert.equal(env.fetchCalls.length, 0, 'mute 不请求 TTS');
+  assert.equal(ttsAudioCalls(env).length, 0, 'mute 不请求 TTS');
   assert.equal(env.plays.length, 0, 'mute 不播放');
   assert.equal(env.spoken.length, 0, 'mute 不播报');
 });
@@ -488,7 +491,7 @@ test('降级：页面不可见时静默跳过播报', () => {
   broadcast(env, gameStateMsg(makePlayers()));
   broadcast(env, gameStateMsg(makePlayers({ 1: ['w5'] })));
   assert.equal(env.spoken.length, 0, '不可见时不播报');
-  assert.equal(env.fetchCalls.length, 0, '不可见时不请求 TTS');
+  assert.equal(ttsAudioCalls(env).length, 0, '不可见时不请求 TTS');
 });
 
 test('降级：TTS 与 speechSynthesis 均不可用时静默跳过，不抛错不阻塞', async () => {
