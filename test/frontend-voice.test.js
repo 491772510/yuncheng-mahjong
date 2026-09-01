@@ -96,7 +96,7 @@ function gameStateMsg(players, overrides = {}) {
   };
 }
 
-function makePlayers(discardsMap = {}, meldsMap = {}) {
+function makePlayers(discardsMap = {}, meldsMap = {}, aiSeats = []) {
   return [0, 1, 2, 3].map((seat) => ({
     seat,
     name: 'P' + seat,
@@ -106,7 +106,7 @@ function makePlayers(discardsMap = {}, meldsMap = {}) {
     score: 0,
     roundScore: 0,
     connected: true,
-    isAI: false,
+    isAI: aiSeats.includes(seat),
     isDealer: false,
     ting: false,
     hosted: false,
@@ -145,6 +145,97 @@ test('语音选择：读取已保存的 localStorage 声音（女声）', () => 
   const female = env.document.querySelector('#seg-voice .seg-item[data-value="female"]');
   assert.ok(female.classList.contains('active'), '已保存女声时女声高亮');
   assert.ok(!male.classList.contains('active'), '男声不高亮');
+});
+
+test('语音选择：选择无声后保存到 localStorage，重新加载仍为无声', () => {
+  const env = createEnv();
+  const male = env.document.querySelector('#seg-voice .seg-item[data-value="male"]');
+  const female = env.document.querySelector('#seg-voice .seg-item[data-value="female"]');
+  const mute = env.document.querySelector('#seg-voice .seg-item[data-value="mute"]');
+  assert.ok(mute, '存在无声选项');
+  assert.ok(male.classList.contains('active'), '默认仍为男声');
+
+  mute.click();
+  assert.ok(mute.classList.contains('active'), '点击后无声高亮');
+  assert.ok(!male.classList.contains('active'), '男声取消高亮');
+  assert.ok(!female.classList.contains('active'), '女声取消高亮');
+  assert.equal(env.window.localStorage.getItem('kd.voice'), 'mute', '选择写入 localStorage');
+
+  // 重新加载：无声仍高亮
+  const env2 = createEnv({ storedVoice: 'mute' });
+  const mute2 = env2.document.querySelector('#seg-voice .seg-item[data-value="mute"]');
+  assert.ok(mute2.classList.contains('active'), '重新加载后无声高亮');
+});
+
+test('无声：选择无声后所有播报静默（出牌/胡均不触发）', () => {
+  const env = createEnv();
+  env.document.querySelector('#seg-voice .seg-item[data-value="mute"]').click();
+  enterRoom(env);
+  broadcast(env, gameStateMsg(makePlayers())); // 基线
+  broadcast(env, gameStateMsg(makePlayers({ 1: ['w5'] })));
+  broadcast(env, gameStateMsg(makePlayers({ 1: ['w5', 'z'] })));
+  broadcast(env, gameStateMsg(makePlayers({ 1: ['w5', 'z', 'e'] }), { winners: { type: 'hu', winType: 'zimo', winnerSeat: 1, tile: 'w5' } }));
+  assert.equal(env.spoken.length, 0, '无声模式下不播报任何动作');
+});
+
+test('无声：切回男声后播报立即恢复', () => {
+  const env = createEnv();
+  const mute = env.document.querySelector('#seg-voice .seg-item[data-value="mute"]');
+  const male = env.document.querySelector('#seg-voice .seg-item[data-value="male"]');
+  mute.click();
+  male.click();
+  assert.equal(env.window.localStorage.getItem('kd.voice'), 'male', '切回男声写入 localStorage');
+  enterRoom(env);
+  broadcast(env, gameStateMsg(makePlayers()));
+  broadcast(env, gameStateMsg(makePlayers({ 2: ['b6'] })));
+  assert.deepEqual(env.spoken, ['六筒'], '切回后播报恢复');
+});
+
+// ---------- AI 动作静默 ----------
+test('AI：AI 出牌不播报，真人出牌正常播报', () => {
+  const env = createEnv();
+  enterRoom(env);
+  broadcast(env, gameStateMsg(makePlayers())); // 基线
+  // AI（seat1）出牌：不播报
+  broadcast(env, gameStateMsg(makePlayers({ 1: ['w5'] }, {}, [1])));
+  assert.equal(env.spoken.length, 0, 'AI 出牌不播报');
+  // 真人（seat2）出牌：正常播报
+  broadcast(env, gameStateMsg(makePlayers({ 1: ['w5'], 2: ['z'] }, {}, [1])));
+  assert.deepEqual(env.spoken, ['红中'], '真人出牌正常播报');
+  // 同帧 AI 再出牌 + 真人出牌：仅真人播报
+  broadcast(env, gameStateMsg(makePlayers({ 1: ['w5', 'b9'], 2: ['z', 'e'] }, {}, [1])));
+  assert.deepEqual(env.spoken, ['红中', '东风'], 'AI 再出牌仍不播报');
+});
+
+test('AI：AI 碰/杠不播报，真人碰正常播报', () => {
+  const env = createEnv();
+  enterRoom(env);
+  broadcast(env, gameStateMsg(makePlayers())); // 基线
+  // AI（seat1）碰：不播报
+  broadcast(env, gameStateMsg(makePlayers({}, { 1: [{ type: 'peng', tile: 'w5', tiles: ['w5', 'w5', 'w5'] }] }, [1])));
+  assert.equal(env.spoken.length, 0, 'AI 碰不播报');
+  // 真人（seat2）碰：正常播报
+  broadcast(env, gameStateMsg(makePlayers({}, {
+    1: [{ type: 'peng', tile: 'w5', tiles: ['w5', 'w5', 'w5'] }],
+    2: [{ type: 'gang', tile: 't2', tiles: ['t2', 't2', 't2', 't2'] }],
+  }, [1])));
+  assert.deepEqual(env.spoken, ['杠'], '真人杠正常播报，AI 明面不重复播报');
+});
+
+test('AI：AI 胡牌不播报，真人胡牌正常播报', () => {
+  const env = createEnv();
+  enterRoom(env);
+  broadcast(env, gameStateMsg(makePlayers())); // 基线
+  // AI（seat1）胡：不播报
+  broadcast(env, gameStateMsg(makePlayers({}, {}, [1]), { winners: { type: 'hu', winType: 'zimo', winnerSeat: 1, tile: 'w5' } }));
+  assert.equal(env.spoken.length, 0, 'AI 胡牌不播报');
+
+  const env2 = createEnv();
+  enterRoom(env2);
+  broadcast(env2, gameStateMsg(makePlayers())); // 基线
+  // 真人（seat2）胡：正常播报
+  broadcast(env2, gameStateMsg(makePlayers({}, {}, [1]), { winners: { type: 'hu', winType: 'dianpao', winnerSeat: 2, tile: 'w5' } }));
+  assert.deepEqual(env2.spoken, ['胡了'], '真人胡牌正常播报');
 });
 
 test('语音选择：默认男声播报使用男声 voice', () => {

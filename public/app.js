@@ -1116,11 +1116,16 @@
 
   // ================= 语音播报 =================
   // Web Speech API（zh-CN）：出牌报牌名，碰/杠/暗杠/补杠/吃/胡报动作词；
-  // 声音选择存 localStorage('kd.voice')：male 男声 / female 女声，默认男声
+  // 声音选择存 localStorage('kd.voice')：male 男声 / female 女声 / mute 无声，默认男声；
+  // AI（isAI 座位）打牌/碰/杠/胡等动作不播报，仅真人玩家动作播报
   const VOICE_KEY = 'kd.voice';
   const VOICE_GAP_MS = 500; // 同一事件 500ms 内不重复播报
+  function readVoiceMode() {
+    const v = localStorage.getItem(VOICE_KEY);
+    return (v === 'female' || v === 'mute') ? v : 'male';
+  }
   const voiceState = {
-    gender: localStorage.getItem(VOICE_KEY) === 'female' ? 'female' : 'male',
+    mode: readVoiceMode(),
     maleVoice: null,
     femaleVoice: null,
     lastSpeakAt: new Map(), // eventKey -> timestamp
@@ -1159,9 +1164,9 @@
     return zh.find((v) => re.test(v.name || '')) || zh[0];
   }
 
-  function setVoiceGender(gender) {
-    voiceState.gender = gender === 'female' ? 'female' : 'male';
-    localStorage.setItem(VOICE_KEY, voiceState.gender);
+  function setVoiceMode(mode) {
+    voiceState.mode = (mode === 'female' || mode === 'mute') ? mode : 'male';
+    localStorage.setItem(VOICE_KEY, voiceState.mode);
     // 切换后立即刷新目标语音缓存，下次播报即用新声音
     voiceState.femaleVoice = pickVoice('female');
     voiceState.maleVoice = pickVoice('male');
@@ -1169,6 +1174,8 @@
 
   function speakText(text, eventKey) {
     if (!text) return;
+    // 无声：全局静默跳过（不占用节流 key，切回后立即恢复）
+    if (voiceState.mode === 'mute') return;
     // 页面不可见：静默跳过
     if (document.hidden || document.visibilityState === 'hidden') return;
     // 同一事件 500ms 内不重复
@@ -1184,7 +1191,7 @@
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'zh-CN';
       u.rate = 1;
-      const v = voiceState.gender === 'female' ? voiceState.femaleVoice : voiceState.maleVoice;
+      const v = voiceState.mode === 'female' ? voiceState.femaleVoice : voiceState.maleVoice;
       if (v) u.voice = v;
       window.speechSynthesis.speak(u);
     } catch (e) { /* 静默降级 */ }
@@ -1204,11 +1211,11 @@
     const seg = $('#seg-voice');
     if (seg) {
       seg.querySelectorAll('.seg-item').forEach((b) => {
-        b.classList.toggle('active', b.dataset.value === voiceState.gender);
+        b.classList.toggle('active', b.dataset.value === voiceState.mode);
         b.onclick = () => {
           seg.querySelectorAll('.seg-item').forEach((x) => x.classList.remove('active'));
           b.classList.add('active');
-          setVoiceGender(b.dataset.value);
+          setVoiceMode(b.dataset.value);
         };
       });
     }
@@ -1240,38 +1247,43 @@
       voiceState.baselineReady = true;
       return;
     }
-    // 出牌：废牌堆新增非牌背牌（'back' 为报听暗扣，不播报）
+    // 出牌：废牌堆新增非牌背牌（'back' 为报听暗扣，不播报）；AI 动作不播报
     for (let seat = 0; seat < game.players.length; seat++) {
       const p = game.players[seat];
       if (!p) continue;
       const discs = p.discards || [];
       const prev = voiceState.prevDiscardCounts[seat] || 0;
-      if (discs.length > prev) {
+      if (discs.length > prev && !p.isAI) {
         const last = discs[discs.length - 1];
         if (last && last !== 'back') speakText(tileSpeech(last), 'discard:' + seat + ':' + last);
       }
       voiceState.prevDiscardCounts[seat] = discs.length;
     }
-    // 碰/杠/暗杠/补杠/吃：明面新增（补杠表现为同一明面由 peng 转为 bugang）
+    // 碰/杠/暗杠/补杠/吃：明面新增（补杠表现为同一明面由 peng 转为 bugang）；AI 动作不播报
     for (let seat = 0; seat < game.players.length; seat++) {
       const p = game.players[seat];
       if (!p) continue;
       const cur = (p.melds || []).map(meldSig);
       const prev = voiceState.prevMelds[seat] || [];
-      for (const cs of cur) {
-        if (!prev.includes(cs)) {
-          const type = cs.split(':')[0];
-          const word = type === 'peng' ? '碰' : type === 'gang' ? '杠' : type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : type === 'chi' ? '吃' : '';
-          if (word) speakText(word, 'meld:' + seat + ':' + cs);
+      if (!p.isAI) {
+        for (const cs of cur) {
+          if (!prev.includes(cs)) {
+            const type = cs.split(':')[0];
+            const word = type === 'peng' ? '碰' : type === 'gang' ? '杠' : type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : type === 'chi' ? '吃' : '';
+            if (word) speakText(word, 'meld:' + seat + ':' + cs);
+          }
         }
       }
       voiceState.prevMelds[seat] = cur;
     }
-    // 胡：winners 由无到有（点炮/自摸/抢杠胡）
+    // 胡：winners 由无到有（点炮/自摸/抢杠胡）；AI 胡牌不播报
     if (game.winners && !voiceState.hadWinners) {
       if (game.winners.type === 'hu') {
-        const wt = game.winners.winType;
-        speakText(wt === 'zimo' ? '自摸' : wt === 'qianggang' ? '抢杠胡' : '胡了', 'hu:' + game.roundNo);
+        const winner = game.players[game.winners.winnerSeat];
+        if (!winner || !winner.isAI) {
+          const wt = game.winners.winType;
+          speakText(wt === 'zimo' ? '自摸' : wt === 'qianggang' ? '抢杠胡' : '胡了', 'hu:' + game.roundNo);
+        }
       }
     }
     voiceState.hadWinners = !!game.winners;
