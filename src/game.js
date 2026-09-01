@@ -209,11 +209,19 @@ class GameServer {
       if (room.state === 'playing' && room.game) this._broadcastGameState(room);
     }
     if (!p.disconnectTimer) {
-      p.disconnectTimer = setTimeout(() => this._handleDisconnectTimeout(p), RECONNECT_MS);
+      p.disconnectTimer = setTimeout(() => {
+        try {
+          this._handleDisconnectTimeout(p);
+        } catch (e) {
+          console.error('[game] disconnect timer error:', e);
+        }
+      }, RECONNECT_MS);
     }
   }
 
   _handleDisconnectTimeout(p) {
+    // 超时已触发：无论是否重连都置空，便于下次断线重新计时；同时作为「已超时」标记供清理判断
+    p.disconnectTimer = null;
     if (p.connected) return;
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) {
@@ -1439,18 +1447,18 @@ class GameServer {
     if (!pl) return;
     pl._auto = (pl._auto || 0) + 1;
     setTimeout(() => {
-      if (!room.players[seat]) return;
-      if (room.state !== 'playing' || !room.game) {
-        pl._auto = Math.max(0, (pl._auto || 0) - 1);
-        return;
-      }
-      const g = room.game;
-      // 真人已接管（取消托管/重连）：跳过本次代打，避免与真人操作并发
-      if (pl._auto <= 0 || !this._shouldAutoAct(room, seat)) {
-        pl._auto = Math.max(0, (pl._auto || 0) - 1);
-        return;
-      }
       try {
+        if (!room.players[seat]) return;
+        if (room.state !== 'playing' || !room.game) {
+          pl._auto = Math.max(0, (pl._auto || 0) - 1);
+          return;
+        }
+        const g = room.game;
+        // 真人已接管（取消托管/重连）：跳过本次代打，避免与真人操作并发
+        if (pl._auto <= 0 || !this._shouldAutoAct(room, seat)) {
+          pl._auto = Math.max(0, (pl._auto || 0) - 1);
+          return;
+        }
         if (g.stage === 'draw' && g.turn === seat) {
           const decision = ai.decideDrawAction(g, room, seat);
           if (decision.type === 'hu') this._hu(pl, {});
@@ -1467,11 +1475,13 @@ class GameServer {
             else this._pass(pl);
           }
         }
+        // 动作执行完毕（动作期间 _auto>0 不会恢复真人控制），再递减
+        pl._auto = Math.max(0, (pl._auto || 0) - 1);
       } catch (e) {
         console.error('[game] AI action error:', e);
+        // 异常也要递减计数，避免 _auto 泄漏导致后续不再代打
+        pl._auto = Math.max(0, (pl._auto || 0) - 1);
       }
-      // 动作执行完毕（动作期间 _auto>0 不会恢复真人控制），再递减
-      pl._auto = Math.max(0, (pl._auto || 0) - 1);
     }, 80);
   }
 
@@ -1782,12 +1792,19 @@ class GameServer {
   _destroyRoom(room) {
     for (const pl of room.players) {
       if (pl) {
+        // 掉线超时（disconnectTimer 已触发且未重连）的真人已无重连可能，可安全从全局移除
+        const timedOut = !pl.isAI && !pl.connected && pl.disconnectTimer === null;
         pl.roomId = null;
         pl.seat = null;
         pl.hosted = false;
         if (pl.disconnectTimer) {
           clearTimeout(pl.disconnectTimer);
           pl.disconnectTimer = null;
+        }
+        // AI 与掉线超时玩家无重连可能：从全局 players 移除，避免内存泄漏；在线/短暂离线真人保留可重连
+        if (pl.isAI || timedOut) {
+          this.players.delete(pl.id);
+          this.wsPlayers.delete(pl.ws);
         }
         this._send(pl, { type: 'room_state', room: null });
         this._sendLobbyState(pl);
@@ -1805,7 +1822,11 @@ class GameServer {
       key,
       setTimeout(() => {
         room.timers.delete(key);
-        fn();
+        try {
+          fn();
+        } catch (e) {
+          console.error('[game] timer error (' + key + '):', e);
+        }
       }, ms)
     );
   }

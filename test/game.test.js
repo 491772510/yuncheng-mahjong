@@ -905,3 +905,66 @@ test('未报听玩家摸到自摸牌不能胡：_buildDrawPrompt 不提供 hu �
   cleanupServer(srv);
 });
 
+// ============ 代码审查修复：定时器异常保护 + 房间销毁清理 players ============
+test('定时器回调抛错不崩溃：_setTimer 回调异常被捕获，进程与房间状态不受影响', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+
+  // 注册一个必抛错的定时器：修复前该异常会 uncaught 直接崩掉测试进程
+  srv._setTimer(room, 'test:boom', 20, () => {
+    throw new Error('boom');
+  });
+
+  await sleep(80); // 等待定时器触发
+  // 进程未崩溃：房间仍存在且可继续正常操作
+  assert.ok(srv.rooms.has(room.id), '异常被捕获后进程存活、房间保留');
+  assert.equal(room.timers.has('test:boom'), false, '定时器触发后已从 timers 移除');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('房间销毁后全局 players 清理：AI 与掉线超时真人被移除，在线真人保留', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  const wb = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+  send(wb, { type: 'join_room', roomId: room.id });
+  send(wa, { type: 'start_game' }); // AI 补位后开局
+  assert.equal(room.state, 'playing');
+
+  const aiPls = room.players.filter(Boolean).filter((x) => x.isAI);
+  const humanPls = room.players.filter(Boolean).filter((x) => !x.isAI);
+  assert.equal(aiPls.length, 2, '应有 2 个 AI 补位');
+  assert.equal(humanPls.length, 2, '应有 2 个真人');
+  assert.ok(aiPls.every((x) => srv.players.has(x.id)), 'AI 注册在全局 players 中');
+
+  // 玩家乙（非房主真人）断线并超时未重连
+  const pB = humanPls.find((x) => x.id !== room.ownerId);
+  wb.handlers.close();
+  assert.equal(pB.connected, false, '断线后 connected=false');
+  assert.ok(pB.disconnectTimer, '断线后已启动 disconnect 定时器');
+  // 模拟 RECONNECT_MS 超时（直接触发回调，无需真实等待 60 秒）
+  srv._handleDisconnectTimeout(pB);
+  assert.equal(pB.disconnectTimer, null, '超时触发后 disconnectTimer 置空标记');
+
+  // 销毁房间
+  srv._destroyRoom(room);
+  assert.ok(!srv.rooms.has(room.id), '房间已销毁');
+  assert.ok(!srv.players.has(aiPls[0].id), 'AI1 已从全局 players 移除');
+  assert.ok(!srv.players.has(aiPls[1].id), 'AI2 已从全局 players 移除');
+  assert.ok(!srv.players.has(pB.id), '掉线超时真人已从全局 players 移除');
+  const pA = humanPls.find((x) => x.id === room.ownerId);
+  assert.ok(srv.players.has(pA.id), '在线房主保留在全局 players 中（可重连）');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
