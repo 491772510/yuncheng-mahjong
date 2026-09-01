@@ -132,6 +132,26 @@ function canFormMelds(cnt, n) {
   return false;
 }
 
+/**
+ * 公共找将：遍历牌计数找可作将牌的牌（c>=2），移除 2 张后尝试把剩余牌拆成面子。
+ * checkHu 与 checkHuWithMelds 末尾共用同一循环，抽取避免重复实现，行为完全等价。
+ * @param {Map<string, number>} cnt 手牌计数（已排序）
+ * @param {number} meldCount 需要拆出的面子数 = (hand.length - 2) / 3
+ * @returns {boolean} 是否存在某张牌作将后剩余牌可全部组成面子
+ */
+function _tryPairAsEye(cnt, meldCount) {
+  for (const [tile, c] of cnt) {
+    if (c >= 2) {
+      const c2 = new Map(cnt);
+      const r = c - 2;
+      if (r === 0) c2.delete(tile);
+      else c2.set(tile, r);
+      if (canFormMelds(c2, meldCount)) return true;
+    }
+  }
+  return false;
+}
+
 /** 是否七对（14 张全部成对） */
 function isQiDui(hand) {
   if (hand.length !== 14) return false;
@@ -187,16 +207,7 @@ function checkHu(hand, melds) {
   if (isQiDui(hand)) return true;
   const cnt = countTiles(sortTiles(hand));
   const meldCount = (hand.length - 2) / 3;
-  for (const [tile, c] of cnt) {
-    if (c >= 2) {
-      const c2 = new Map(cnt);
-      const r = c - 2;
-      if (r === 0) c2.delete(tile);
-      else c2.set(tile, r);
-      if (canFormMelds(c2, meldCount)) return true;
-    }
-  }
-  return false;
+  return _tryPairAsEye(cnt, meldCount);
 }
 
 /**
@@ -220,16 +231,7 @@ function checkHuWithMelds(hand, melds) {
   if (hand.length !== need) return false;
   const cnt = countTiles(sortTiles(hand));
   const meldCount = (hand.length - 2) / 3;
-  for (const [tile, c] of cnt) {
-    if (c >= 2) {
-      const c2 = new Map(cnt);
-      const r = c - 2;
-      if (r === 0) c2.delete(tile);
-      else c2.set(tile, r);
-      if (canFormMelds(c2, meldCount)) return true;
-    }
-  }
-  return false;
+  return _tryPairAsEye(cnt, meldCount);
 }
 
 /** 胡某张牌：hand（通常 13 张）+ tile 是否成胡；melds 非空时按带明牌判定 */

@@ -893,59 +893,89 @@
     </div>`;
   }
 
-  function showSettlement(result) {
-    if (!result) return;
-    const title = $('#settle-title');
-    const content = $('#settle-content');
-    // ===== 136 张玩法结算：点数 × 牌型倍数 × 扣点 =====
-    if (result.type === 'draw') {
-      // 流局：剩 6 墩无人胡，公开听牌者 / 扣点 / 杠分
-      title.textContent = '流局';
-      const ting = (result.tingSeats || []).map((s) => result.hands[s] ? result.hands[s].name : '').join('、');
-      const kouText = (result.kouPoints || []).map((v, s) => {
-        const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
-        return `${esc(nm)} 扣${v}点`;
-      }).join(' · ');
-      const flowLabel = state.room && state.room.settings && state.room.settings.dealerFlow === 'keep' ? '庄家连庄' : '下家接庄';
-      content.innerHTML = `
-        <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，${flowLabel}）</div></div>
-        <div class="settle-sub">${ting ? '听牌者：' + ting : '无人听牌'}</div>
-        <div class="settle-sub">扣点：${kouText}</div>
-        ${paymentTableHtml(result)}
-        <div class="settle-hands">${result.hands.map((h) => h ? `
-          <div class="row"><b>${esc(h.name)}</b>
-            ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
-            ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
-          </div>` : '').join('')}</div>`;
-      $('#settle-modal').classList.remove('hidden');
-      return;
-    }
-    const winner = result.hands && result.hands[result.winnerSeat];
-    const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-    title.textContent = `${winner ? winner.name : ''} ${winLabel}！`;
-    const multText = (result.multNames && result.multNames.length ? result.multNames.join('、') : '平胡');
+  /**
+   * 结算详情公共渲染：单局结算（showSettlement）与房间结算"最后一局"（showSettleModal）共用，
+   * 消除约 60+ 行重复模板。内部复用 paymentTableHtml / tileText / tileHtml / renderMelds / esc。
+   * @param {object} result 结算数据（type='hu'|'draw'，含 hands/kouPoints/winnerSeat/payments 等）
+   * @param {object} [opts]
+   * @param {string} [opts.prefix='']  头部前缀，房间结算用"最后一局："
+   * @param {string} [opts.winnerLabel='（胡）'] 胜者手牌标记，单局结算"（胡）"、房间结算"（赢）"
+   * @param {boolean} [opts.compact=false] 紧凑单行模式（房间结算），hu 分支分数并入首行、放炮者说明用全角括号；
+   *                                        draw 分支省略"牌墙剩 6 墩/听牌者/扣点/支付明细"细节行
+   * @returns {string} settle-head + 支付明细 + settle-hands 的 HTML
+   */
+  function buildSettleHtml(result, opts = {}) {
+    const prefix = opts.prefix || '';
+    const winnerLabel = opts.winnerLabel || '（胡）';
+    const compact = !!opts.compact;
     const kouText = (result.kouPoints || []).map((v, s) => {
       const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
       return `${esc(nm)} 扣${v}点`;
     }).join(' · ');
+    const handsHtml = (withScore) => (result.hands || []).map((h) => h ? `
+        <div class="row">
+          <b>${esc(h.name)}${h.seat === result.winnerSeat ? winnerLabel : ''}</b>
+          ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
+          ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
+          ${withScore ? `<span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>` : ''}
+        </div>` : '').join('');
+    const settleHands = `<div class="settle-hands">${handsHtml(result.type === 'hu')}</div>`;
+    if (result.type === 'draw') {
+      const ting = (result.tingSeats || []).map((s) => result.hands[s] ? result.hands[s].name : '').join('、');
+      const flowLabel = state.room && state.room.settings && state.room.settings.dealerFlow === 'keep' ? '庄家连庄' : '下家接庄';
+      if (compact) {
+        return `<div class="settle-head"><div class="settle-sub">${prefix}流局（${flowLabel}）${ting ? '，听牌者：' + ting : ''}</div></div>` + settleHands;
+      }
+      return `
+        <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，${flowLabel}）</div></div>
+        <div class="settle-sub">${ting ? '听牌者：' + ting : '无人听牌'}</div>
+        <div class="settle-sub">扣点：${kouText}</div>
+        ${paymentTableHtml(result)}
+        ${settleHands}`;
+    }
+    const winner = result.hands && result.hands[result.winnerSeat];
+    const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+    const multText = (result.multNames && result.multNames.length ? result.multNames.join('、') : '平胡');
     const calcText = result.winType === 'zimo'
       ? `${result.tilePoints}点 × 2 × ${result.mult}倍 × 扣${result.kouPoint}点`
       : `${result.tilePoints}点 × ${result.mult}倍 × 扣${result.kouPoint}点`;
-    content.innerHTML = `
+    const shooterNote = result.winType !== 'zimo'
+      ? (result.discarderTing ? ' · 放炮者已报听，三家各出1份' : ' · 放炮者未报听，独赔3份')
+      : '';
+    const shooterNoteParen = result.winType !== 'zimo'
+      ? (result.discarderTing ? '（放炮者已报听，三家各出1份）' : '（放炮者未报听，独赔3份）')
+      : '';
+    if (compact) {
+      return `<div class="settle-head">
+        <div class="settle-sub">${prefix}${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)} · ${multText} · ${calcText}${shooterNoteParen} → ${result.score >= 0 ? '+' : ''}${result.score} 分</div>
+        <div class="settle-sub">扣点：${kouText}</div>
+      </div>${paymentTableHtml(result)}` + settleHands;
+    }
+    return `
       <div class="settle-head">
         <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
         <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}（×${result.mult}）</div>
-        <div class="settle-sub">${calcText}${result.winType !== 'zimo' ? (result.discarderTing ? ' · 放炮者已报听，三家各出1份' : ' · 放炮者未报听，独赔3份') : ''}</div>
+        <div class="settle-sub">${calcText}${shooterNote}</div>
         <div class="settle-sub">扣点：${kouText}</div>
       </div>
       ${paymentTableHtml(result)}
-      <div class="settle-hands">${result.hands.map((h) => h ? `
-        <div class="row">
-          <b>${esc(h.name)}${h.seat === result.winnerSeat ? '（胡）' : ''}</b>
-          ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
-          ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
-          <span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>
-        </div>` : '').join('')}</div>`;
+      ${settleHands}`;
+  }
+
+  function showSettlement(result) {
+    if (!result) return;
+    const title = $('#settle-title');
+    const content = $('#settle-content');
+    // ===== 136 张玩法结算：点数 × 牌型倍数 × 扣点（详情统一由 buildSettleHtml 渲染）=====
+    if (result.type === 'draw') {
+      // 流局：剩 6 墩无人胡，公开听牌者 / 扣点 / 杠分
+      title.textContent = '流局';
+    } else {
+      const winner = result.hands && result.hands[result.winnerSeat];
+      const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+      title.textContent = `${winner ? winner.name : ''} ${winLabel}！`;
+    }
+    content.innerHTML = buildSettleHtml(result, { winnerLabel: '（胡）' });
     $('#settle-modal').classList.remove('hidden');
   }
 
@@ -1004,36 +1034,9 @@
     const w = state.game && state.game.winners;
     if (w) {
       if (w.type === 'hu') {
-        const winner = w.hands && w.hands[w.winnerSeat];
-        const winLabel = w.winType === 'zimo' ? '自摸' : w.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-        const multText = (w.multNames && w.multNames.length ? w.multNames.join('、') : '平胡');
-        const kouText = (w.kouPoints || []).map((v, s) => {
-          const nm = w.hands && w.hands[s] ? w.hands[s].name : '座位' + s;
-          return `${esc(nm)} 扣${v}点`;
-        }).join(' · ');
-        const calcText = w.winType === 'zimo'
-          ? `${w.tilePoints}点 × 2 × ${w.mult}倍 × 扣${w.kouPoint}点`
-          : `${w.tilePoints}点 × ${w.mult}倍 × 扣${w.kouPoint}点`;
-        html += `<div class="settle-head">
-          <div class="settle-sub">最后一局：${winner ? winner.name : ''} ${winLabel} ${tileText(w.tile)} · ${multText} · ${calcText}${w.winType !== 'zimo' ? (w.discarderTing ? '（放炮者已报听，三家各出1份）' : '（放炮者未报听，独赔3份）') : ''} → ${w.score >= 0 ? '+' : ''}${w.score} 分</div>
-          <div class="settle-sub">扣点：${kouText}</div>
-        </div>${paymentTableHtml(w)}` +
-          `<div class="settle-hands">${w.hands.map((h) => h ? `
-          <div class="row">
-            <b>${esc(h.name)}${h.seat === w.winnerSeat ? '（赢）' : ''}</b>
-            ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
-            ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
-            <span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>
-          </div>` : '').join('')}</div>`;
+        html += buildSettleHtml(w, { prefix: '最后一局：', winnerLabel: '（赢）', compact: true });
       } else {
-        const ting = (w.tingSeats || []).map((s) => w.hands[s] ? w.hands[s].name : '').join('、');
-        const flowLabel = room.settings && room.settings.dealerFlow === 'keep' ? '庄家连庄' : '下家接庄';
-        html += `<div class="settle-head"><div class="settle-sub">最后一局：流局（${flowLabel}）${ting ? '，听牌者：' + ting : ''}</div></div>` +
-          `<div class="settle-hands">${w.hands.map((h) => h ? `
-          <div class="row"><b>${esc(h.name)}</b>
-            ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
-            ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
-          </div>` : '').join('')}</div>`;
+        html += buildSettleHtml(w, { prefix: '最后一局：', compact: true });
       }
     }
     html += sorted.map((p, i) => `
