@@ -1115,12 +1115,18 @@
   }
 
   // ================= 语音播报 =================
-  // Web Speech API（zh-CN）：出牌报牌名，碰/杠/暗杠/补杠/吃/胡报动作词；
+  // 播报优先走本地运城话 TTS 服务（POST /api/tts，engine=edge，dialect=true），
+  // 请求失败（服务未启动/网络错误/非 2xx）时降级 Web Speech API（zh-CN）；
+  // 出牌报牌名，碰/杠/暗杠/补杠/吃/胡报动作词；
   // 声音选择存 localStorage('kd.voice')：male 男声 / female 女声 / mute 无声，默认无声；
+  // TTS 服务地址默认 http://<hostname>:8000，可用 localStorage('kd.ttsUrl') 覆盖；
   // 已有用户保存过男声/女声则保持其选择不变（仅影响未设置过的新用户默认值）；
   // AI（isAI 座位）打牌/碰/杠/胡等动作不播报，仅真人玩家动作播报
   const VOICE_KEY = 'kd.voice';
   const VOICE_GAP_MS = 500; // 同一事件 500ms 内不重复播报
+  const TTS_KEY = 'kd.ttsUrl';
+  const TTS_PORT = 8000;
+  const ttsCache = new Map(); // key: text|voice -> audio_url，同文本同性别不重复合成
   function readVoiceMode() {
     const v = localStorage.getItem(VOICE_KEY);
     return (v === 'male' || v === 'female' || v === 'mute') ? v : 'mute';
@@ -1173,6 +1179,47 @@
     voiceState.maleVoice = pickVoice('male');
   }
 
+  // TTS 服务地址：优先 localStorage 覆盖值，否则自动推断 http://<hostname>:8000
+  function ttsBaseUrl() {
+    const override = localStorage.getItem(TTS_KEY);
+    if (override) return String(override).replace(/\/+$/, '');
+    return 'http://' + window.location.hostname + ':' + TTS_PORT;
+  }
+
+  // 本地 TTS 合成并播放；失败时抛出，由调用方降级到 Web Speech
+  async function playViaTTS(text) {
+    const key = text + '|' + voiceState.mode;
+    let audioUrl = ttsCache.get(key);
+    if (!audioUrl) {
+      const resp = await fetch(ttsBaseUrl() + '/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice: voiceState.mode, dialect: true, engine: 'edge' }),
+      });
+      if (!resp.ok) throw new Error('TTS http ' + resp.status);
+      const data = await resp.json();
+      if (!data || !data.audio_url) throw new Error('TTS no audio_url');
+      audioUrl = data.audio_url;
+      ttsCache.set(key, audioUrl);
+    }
+    const audio = new Audio(ttsBaseUrl() + audioUrl);
+    audio.play().catch(() => { /* 播放失败静默 */ });
+  }
+
+  // Web Speech 降级播报
+  function speakViaSpeech(text) {
+    // 无 Web Speech 支持/无声卡：静默降级，不抛错不阻塞交互
+    if (!speechSupported()) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN';
+      u.rate = 1;
+      const v = voiceState.mode === 'female' ? voiceState.femaleVoice : voiceState.maleVoice;
+      if (v) u.voice = v;
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* 静默降级 */ }
+  }
+
   function speakText(text, eventKey) {
     if (!text) return;
     // 无声：全局静默跳过（不占用节流 key，切回后立即恢复）
@@ -1186,16 +1233,8 @@
       if (last != null && now - last < VOICE_GAP_MS) return;
       voiceState.lastSpeakAt.set(eventKey, now);
     }
-    // 无 Web Speech 支持/无声卡：静默降级，不抛错不阻塞交互
-    if (!speechSupported()) return;
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'zh-CN';
-      u.rate = 1;
-      const v = voiceState.mode === 'female' ? voiceState.femaleVoice : voiceState.maleVoice;
-      if (v) u.voice = v;
-      window.speechSynthesis.speak(u);
-    } catch (e) { /* 静默降级 */ }
+    // 优先本地 TTS；请求失败降级 Web Speech；两者皆不可用时静默不抛错
+    playViaTTS(text).catch(() => speakViaSpeech(text));
   }
 
   function refreshVoicesCache() {
@@ -1208,7 +1247,7 @@
     if (speechSupported() && window.speechSynthesis.addEventListener) {
       window.speechSynthesis.addEventListener('voiceschanged', refreshVoicesCache);
     }
-    // 大厅声音选择控件（进大厅前选择，默认男声）
+    // 大厅声音选择控件（进大厅前选择，默认无声）
     const seg = $('#seg-voice');
     if (seg) {
       seg.querySelectorAll('.seg-item').forEach((b) => {
