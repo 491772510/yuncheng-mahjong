@@ -78,6 +78,18 @@ function countTiles(hand) {
   return cnt;
 }
 
+/** 牌计数减 k（减到 0 则删除键，保持 Map 内无 0 值，与旧实现 new Map 语义一致） */
+function decCount(cnt, tile, k) {
+  const r = (cnt.get(tile) || 0) - k;
+  if (r <= 0) cnt.delete(tile);
+  else cnt.set(tile, r);
+}
+
+/** 牌计数加 k */
+function incCount(cnt, tile, k) {
+  cnt.set(tile, (cnt.get(tile) || 0) + k);
+}
+
 /** 递归拆面子：能否把 cnt 中的牌全部拆成 n 组面子（刻子或顺子） */
 function canFormMelds(cnt, n) {
   if (n === 0) {
@@ -92,26 +104,29 @@ function canFormMelds(cnt, n) {
   const s = suitOf(first);
   const num = numOf(first);
 
-  // 尝试刻子
+  // 尝试刻子：临时扣减后递归，返回时恢复，避免每层 new Map 全量拷贝
   if (cnt.get(first) >= 3) {
-    const c2 = new Map(cnt);
-    const rest = c2.get(first) - 3;
-    if (rest === 0) c2.delete(first);
-    else c2.set(first, rest);
-    if (canFormMelds(c2, n - 1)) return true;
+    decCount(cnt, first, 3);
+    if (canFormMelds(cnt, n - 1)) { incCount(cnt, first, 3); return true; }
+    incCount(cnt, first, 3);
   }
   // 尝试顺子（同花色连续三张）
   if (num <= 7) {
     const a = s + (num + 1);
     const b = s + (num + 2);
     if ((cnt.get(a) || 0) > 0 && (cnt.get(b) || 0) > 0) {
-      const c2 = new Map(cnt);
-      for (const t of [first, a, b]) {
-        const r = c2.get(t) - 1;
-        if (r === 0) c2.delete(t);
-        else c2.set(t, r);
+      decCount(cnt, first, 1);
+      decCount(cnt, a, 1);
+      decCount(cnt, b, 1);
+      if (canFormMelds(cnt, n - 1)) {
+        incCount(cnt, first, 1);
+        incCount(cnt, a, 1);
+        incCount(cnt, b, 1);
+        return true;
       }
-      if (canFormMelds(c2, n - 1)) return true;
+      incCount(cnt, first, 1);
+      incCount(cnt, a, 1);
+      incCount(cnt, b, 1);
     }
   }
   return false;

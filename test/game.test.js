@@ -8,6 +8,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { GameServer, HEARTBEAT_MAX_MISS } = require('../src/game');
+const rules = require('../src/rules');
 
 // ---------- 测试工具：伪 WebSocket 客户端 ----------
 function makeWs() {
@@ -521,7 +522,13 @@ test('点炮胡结算展示：赢家补入胡牌 tile 显示 14 张，原始手�
   assert.equal(winnerView.hand.filter((t) => t === 'b7').length, 2, '展示手牌应含两张 b7（13 张真实手牌 + 胡牌）');
   assert.equal(g.hands[winnerSeat].length, 13, 'g.hands 原始手牌仍为 13 张，展示补牌不落库');
   const otherView = g.winners.hands.find((r) => r && r.seat !== winnerSeat);
-  assert.equal(otherView.hand.length, 13, '其他玩家展示手牌不受补牌影响（AI 13 张）');
+  // 其他玩家展示手牌不受补牌影响：展示长度等于真实手牌长度（随机庄家可能为 14 张，故与 g.hands 对比而非写死 13）
+  assert.equal(otherView.hand.length, g.hands[otherView.seat].length, '其他玩家展示手牌不受补牌影响');
+  assert.deepEqual(
+    otherView.hand,
+    rules.sortTiles(g.hands[otherView.seat]),
+    '其他玩家展示手牌应与真实手牌排序一致'
+  );
   await sleep(400);
   cleanupServer(srv);
 });
@@ -1039,6 +1046,82 @@ test('心跳：连接关闭后心跳定时器被清理，不泄漏', () => {
   // 定时器清理后再 tick 不应报错、也不应 terminate
   srv._heartbeatTick(wa);
   assert.equal(wa.terminated, false);
+
+  cleanupServer(srv);
+});
+
+// ============ tingHints 听口提示缓存 ============
+// 手牌状态（摸牌后 14 张，打出某张后听口含字牌 10 点，保证 hints 有实际内容）
+const TING_HAND = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 't1', 't2', 't3', 'b1', 'b2', 'b3', 'e', 'e'];
+
+function makeDrawTurn(room, seat) {
+  // 清空房间残留 AI 定时器链（同 setupHuState 惯例），避免广播期间 AI 代打推进牌局
+  for (const timeoutId of room.timers.values()) {
+    clearTimeout(timeoutId);
+  }
+  room.timers.clear();
+  const g = room.game;
+  g.stage = 'draw';
+  g.turn = seat;
+  g.tingSeats = [];
+  g.hands[seat] = TING_HAND.slice();
+  g.melds[seat] = [];
+  g.kouTiles[seat] = null;
+  // 重置缓存统计：makeHuRoom 中 start_game 广播可能已触发过听口计算，避免计数基线漂移
+  g.tingCacheStats = { hit: 0, miss: 0 };
+  return g;
+}
+
+test('tingHints 缓存：相同手牌重复广播命中缓存，不重算', () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = makeDrawTurn(room, 0);
+
+  const v1 = srv._buildGameView(room, 0);
+  assert.equal(g.tingCacheStats.miss, 1, '首次计算为 miss');
+  assert.equal(g.tingCacheStats.hit, 0);
+  assert.ok(v1.tingHints && Object.keys(v1.tingHints).length > 0, '听口提示应有实际内容');
+
+  const v2 = srv._buildGameView(room, 0);
+  assert.equal(g.tingCacheStats.miss, 1, '手牌未变化时不再重算');
+  assert.equal(g.tingCacheStats.hit, 1, '第二次应命中缓存');
+  assert.deepEqual(v2.tingHints, v1.tingHints, '命中缓存返回与首次一致的结果');
+
+  cleanupServer(srv);
+});
+
+test('tingHints 缓存：手牌变化后自动失效重算', () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = makeDrawTurn(room, 0);
+  const v1 = srv._buildGameView(room, 0);
+  assert.equal(g.tingCacheStats.miss, 1);
+
+  // 摸牌/换牌导致手牌变化：缓存 key 变化，必须重算
+  g.hands[0] = ['w1', 'w1', 'w2', 'w2', 'w3', 'w4', 't1', 't2', 't3', 'b1', 'b2', 'b3', 'e', 'e'];
+  const v2 = srv._buildGameView(room, 0);
+  assert.equal(g.tingCacheStats.miss, 2, '手牌变化后应重算（miss+1）');
+  assert.equal(g.tingCacheStats.hit, 0, '手牌变化后不命中缓存');
+  // 手牌变化后听口可能不同，但此处只断言结果对象独立、非缓存残留
+  assert.notDeepEqual(v2.tingHints, v1.tingHints, '手牌变化后听口提示应更新');
+
+  cleanupServer(srv);
+});
+
+test('tingHints 缓存：清缓存后重算结果与缓存结果一致', () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = makeDrawTurn(room, 0);
+  const v1 = srv._buildGameView(room, 0);
+  const v2 = srv._buildGameView(room, 0);
+  assert.equal(g.tingCacheStats.hit, 1);
+
+  // 清空缓存强制重算：结果必须与缓存内容完全一致
+  g.tingHintsCache.clear();
+  const v3 = srv._buildGameView(room, 0);
+  assert.equal(g.tingCacheStats.miss, 2, '清缓存后应重算');
+  assert.deepEqual(v3.tingHints, v2.tingHints, '重算结果与缓存结果一致');
+  assert.deepEqual(v3.tingHints, v1.tingHints, '重算结果与首次结果一致');
 
   cleanupServer(srv);
 });

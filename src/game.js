@@ -1615,29 +1615,56 @@ class GameServer {
     };
     if (isDrawTurn && !g.tingSeats.includes(viewerSeat)) {
       // 听牌提示：打出某张后，听口剩余可胡张数（4 - 已见张数）
-      const hints = {};
-      const hand = g.hands[viewerSeat];
-      // 统计已见牌：自己手牌 + 各家弃牌(牌背不统计) + 明牌区(碰/杠) + 报听扣牌(自己视角可知)
-      const seen = new Map();
-      const addSeen = (t) => {
-        if (t && t !== 'back') seen.set(t, (seen.get(t) || 0) + 1);
-      };
-      for (const t of hand) addSeen(t);
-      for (const d of g.discards) for (const t of d) addSeen(t);
-      for (const m of g.melds) for (const meld of m) for (const t of meld.tiles) addSeen(t);
-      if (g.kouTiles[viewerSeat]) addSeen(g.kouTiles[viewerSeat]);
-      for (const t of [...new Set(hand)]) {
-        const rest = hand.slice();
-        rest.splice(rest.indexOf(t), 1);
-        const ting = rules.isTing(rest, g.melds[viewerSeat]);
-        // 只提示可报听的选项：听口中须至少含一张 ≥6 点牌，与 canDeclareTing136 保持一致
-        if (ting.length > 0 && ting.some((x) => rules.tilePoints(x) >= 6)) {
-          hints[t] = ting.reduce((sum, x) => sum + Math.max(0, 4 - (seen.get(x) || 0)), 0);
+      // 性能优化：以 手牌牌型/自身明牌/已见牌 快照为 key 缓存，手牌未变化时直接复用，
+      // 避免每次广播对整副牌型做 去重手牌×34牌型×checkHu 回溯重算（约 2000 次 checkHu）。
+      if (!g.tingHintsCache) g.tingHintsCache = new Map();
+      if (!g.tingCacheStats) g.tingCacheStats = { hit: 0, miss: 0 };
+      const cacheKey = this._buildTingHintsKey(g, viewerSeat);
+      const cached = g.tingHintsCache.get(cacheKey);
+      if (cached !== undefined) {
+        g.tingCacheStats.hit++;
+        view.tingHints = { ...cached };
+      } else {
+        g.tingCacheStats.miss++;
+        const hints = {};
+        const hand = g.hands[viewerSeat];
+        // 统计已见牌：自己手牌 + 各家弃牌(牌背不统计) + 明牌区(碰/杠) + 报听扣牌(自己视角可知)
+        const seen = new Map();
+        const addSeen = (t) => {
+          if (t && t !== 'back') seen.set(t, (seen.get(t) || 0) + 1);
+        };
+        for (const t of hand) addSeen(t);
+        for (const d of g.discards) for (const t of d) addSeen(t);
+        for (const m of g.melds) for (const meld of m) for (const t of meld.tiles) addSeen(t);
+        if (g.kouTiles[viewerSeat]) addSeen(g.kouTiles[viewerSeat]);
+        for (const t of [...new Set(hand)]) {
+          const rest = hand.slice();
+          rest.splice(rest.indexOf(t), 1);
+          const ting = rules.isTing(rest, g.melds[viewerSeat]);
+          // 只提示可报听的选项：听口中须至少含一张 ≥6 点牌，与 canDeclareTing136 保持一致
+          if (ting.length > 0 && ting.some((x) => rules.tilePoints(x) >= 6)) {
+            hints[t] = ting.reduce((sum, x) => sum + Math.max(0, 4 - (seen.get(x) || 0)), 0);
+          }
         }
+        g.tingHintsCache.set(cacheKey, hints);
+        view.tingHints = hints;
       }
-      view.tingHints = hints;
     }
     return view;
+  }
+
+  // tingHints 缓存 key：覆盖所有影响听口结果的输入（手牌牌型、自身明牌结构、已见牌），
+  // 摸牌/出牌/杠/报听等任何手牌或牌面变化都会改变 key，从而自动失效。
+  _buildTingHintsKey(g, seat) {
+    const parts = [];
+    parts.push('h:' + rules.sortTiles(g.hands[seat]).join(','));
+    parts.push('m:' + g.melds[seat].map((mm) => mm.type + mm.tile + mm.tiles.join('')).join(';'));
+    const seen = [];
+    for (const d of g.discards) seen.push(d.join(''));
+    for (const ms of g.melds) for (const mm of ms) seen.push(mm.tiles.join(''));
+    if (g.kouTiles[seat]) seen.push(g.kouTiles[seat]);
+    parts.push('s:' + seen.join(';'));
+    return parts.join('|');
   }
 
   _buildDrawPrompt(room, seat) {
