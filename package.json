@@ -8,7 +8,11 @@
     "test": "node --test"
   },
   "dependencies": {
+    "selfsigned": "^5.5.0",
     "ws": "^8.18.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  }
 }

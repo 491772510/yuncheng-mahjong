@@ -38,6 +38,7 @@
     };
     ws.onclose = () => {
       state.connected = false;
+      voiceDisable();
       if (!state.room) {
         // 大厅中：显示重连遮罩但不打扰（自动恢复）
       }
@@ -82,6 +83,7 @@
           state.prompt = null;
           hideConnMask();
           resetVoiceBaseline();
+          voiceDisable();
           // 回到大厅，重新同步昵称与大厅状态
           renderLobby();
           return;
@@ -193,9 +195,191 @@
       case 'error':
         toast(msg.message || '操作失败', true);
         break;
+      case 'voice_signal':
+        handleVoiceSignal(msg);
+        break;
       default:
         break;
     }
+  }
+
+  // ================= 实时语音对讲（WebRTC mesh） =================
+  let voiceEnabled = false; // 语音开关状态
+  let voiceLocalStream = null; // 本地麦克风音轨
+  const voicePcs = new Map(); // targetId -> RTCPeerConnection
+  const voiceAudioEls = new Map(); // targetId -> <audio>
+  const speakingSeats = new Set(); // 正在说话的座位号
+
+  // 房间内其他真人玩家（排除自己与 AI）
+  function roomHumanPeers() {
+    const out = [];
+    if (!state.room || !state.room.players) return out;
+    for (const pl of state.room.players) {
+      if (pl && pl.id !== state.playerId && !pl.isAI && pl.connected) out.push(pl);
+    }
+    return out;
+  }
+
+  function seatOfPlayerId(pid) {
+    if (!state.room || !state.room.players) return null;
+    for (let s = 0; s < state.room.players.length; s++) {
+      const pl = state.room.players[s];
+      if (pl && pl.id === pid) return s;
+    }
+    return null;
+  }
+
+  // 开启语音：校验安全上下文 -> 取麦克风 -> 对每个真人对手建 pc/offer
+  async function voiceEnable() {
+    if (voiceEnabled) return;
+    if (!window.isSecureContext) {
+      const host = location.hostname || 'IP';
+      toast('语音对讲需通过 https://' + host + ':3443 访问', true);
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast('当前浏览器不支持麦克风，请使用 Chrome/Safari 等现代浏览器', true);
+      return;
+    }
+    try {
+      voiceLocalStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+    } catch (e) {
+      toast('无法获取麦克风权限，请检查浏览器授权', true);
+      return;
+    }
+    voiceEnabled = true;
+    updateVoiceBtn();
+    for (const peer of roomHumanPeers()) {
+      await voiceCreatePeer(peer);
+    }
+  }
+
+  async function voiceCreatePeer(peer) {
+    if (!voiceEnabled || !voiceLocalStream || voicePcs.has(peer.id)) return;
+    const pc = new RTCPeerConnection();
+    voicePcs.set(peer.id, pc);
+    pc.onicecandidate = (ev) => {
+      if (ev.candidate) {
+        send({ type: 'voice_signal', target: peer.id, sig: { kind: 'ice', candidate: ev.candidate } });
+      }
+    };
+    pc.ontrack = (ev) => voiceOnTrack(peer.id, ev);
+    voiceLocalStream.getTracks().forEach((t) => pc.addTrack(t, voiceLocalStream));
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      send({ type: 'voice_signal', target: peer.id, sig: { kind: 'offer', sdp: pc.localDescription } });
+    } catch (e) {
+      console.error('[voice] createOffer error:', e);
+      voiceRemovePeer(peer.id);
+    }
+  }
+
+  function voiceOnTrack(fromId, ev) {
+    const seat = seatOfPlayerId(fromId);
+    if (seat == null) return;
+    let audio = voiceAudioEls.get(fromId);
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.autoplay = true;
+      document.body.appendChild(audio);
+      voiceAudioEls.set(fromId, audio);
+      audio.addEventListener('play', () => { speakingSeats.add(seat); syncSpeaking(); });
+      audio.addEventListener('pause', () => { speakingSeats.delete(seat); syncSpeaking(); });
+      audio.addEventListener('ended', () => { speakingSeats.delete(seat); syncSpeaking(); });
+    }
+    audio.srcObject = ev.streams[0];
+    audio.play().catch(() => {});
+  }
+
+  function voiceRemovePeer(targetId) {
+    const pc = voicePcs.get(targetId);
+    if (pc) {
+      try { pc.close(); } catch (e) { /* ignore */ }
+      voicePcs.delete(targetId);
+    }
+    const audio = voiceAudioEls.get(targetId);
+    if (audio) {
+      try { audio.pause(); audio.srcObject = null; audio.remove(); } catch (e) { /* ignore */ }
+      voiceAudioEls.delete(targetId);
+    }
+    const seat = seatOfPlayerId(targetId);
+    if (seat != null) { speakingSeats.delete(seat); syncSpeaking(); }
+  }
+
+  // 收到信令：offer -> 建 pc + answer；answer -> setRemoteDescription；ice -> addIceCandidate
+  async function handleVoiceSignal(msg) {
+    const fromId = msg.from;
+    const sig = msg.sig || {};
+    if (!fromId || !sig || typeof sig !== 'object') return;
+    if (sig.kind === 'offer') {
+      if (!voiceEnabled || !voiceLocalStream) return; // 未开启语音则忽略对端邀请
+      let pc = voicePcs.get(fromId);
+      if (!pc) {
+        pc = new RTCPeerConnection();
+        voicePcs.set(fromId, pc);
+        pc.onicecandidate = (ev) => {
+          if (ev.candidate) {
+            send({ type: 'voice_signal', target: fromId, sig: { kind: 'ice', candidate: ev.candidate } });
+          }
+        };
+        pc.ontrack = (ev) => voiceOnTrack(fromId, ev);
+        voiceLocalStream.getTracks().forEach((t) => pc.addTrack(t, voiceLocalStream));
+      }
+      try {
+        await pc.setRemoteDescription(sig.sdp);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        send({ type: 'voice_signal', target: fromId, sig: { kind: 'answer', sdp: pc.localDescription } });
+      } catch (e) {
+        console.error('[voice] answer error:', e);
+        voiceRemovePeer(fromId);
+      }
+    } else if (sig.kind === 'answer') {
+      const pc = voicePcs.get(fromId);
+      if (pc && sig.sdp) {
+        try { await pc.setRemoteDescription(sig.sdp); } catch (e) { console.error('[voice] setRemote error:', e); }
+      }
+    } else if (sig.kind === 'ice') {
+      const pc = voicePcs.get(fromId);
+      if (pc && sig.candidate) {
+        try { await pc.addIceCandidate(sig.candidate); } catch (e) { /* 竞态忽略 */ }
+      }
+    }
+  }
+
+  // 关闭语音：关闭所有 pc、停止本地音轨、清空说话指示
+  function voiceDisable() {
+    if (!voiceEnabled && voicePcs.size === 0 && !voiceLocalStream) return;
+    voiceEnabled = false;
+    for (const id of [...voicePcs.keys()]) voiceRemovePeer(id);
+    if (voiceLocalStream) {
+      voiceLocalStream.getTracks().forEach((t) => t.stop());
+      voiceLocalStream = null;
+    }
+    speakingSeats.clear();
+    syncSpeaking();
+    updateVoiceBtn();
+  }
+
+  function updateVoiceBtn() {
+    const btn = $('#btn-voice');
+    if (!btn) return;
+    btn.classList.toggle('voice-on', voiceEnabled);
+    btn.textContent = voiceEnabled ? '语音开' : '语音';
+  }
+
+  // renderTable 重绘后恢复"正在说话"指示
+  function syncSpeaking() {
+    const seats = document.querySelectorAll('#table-wrap .seat[data-seat]');
+    seats.forEach((el) => {
+      const card = el.querySelector('.player-card');
+      if (!card) return;
+      const seat = Number(el.getAttribute('data-seat'));
+      card.classList.toggle('pc-speaking', speakingSeats.has(seat));
+    });
   }
 
   // ================= 视图切换 =================
@@ -273,6 +457,7 @@
     } else {
       html += `<button class="btn small" id="btn-leave">退出房间</button>`;
     }
+    html += `<button class="btn small${voiceEnabled ? ' voice-on' : ''}" id="btn-voice">${voiceEnabled ? '语音开' : '语音'}</button>`;
     box.innerHTML = html;
     const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
     on('btn-add-ai', () => send({ type: 'add_ai' }));
@@ -282,6 +467,10 @@
       if (confirm('确定解散房间吗？所有玩家都会被移出。')) send({ type: 'dissolve' });
     });
     on('btn-leave', () => send({ type: 'leave_room' }));
+    on('btn-voice', () => {
+      if (voiceEnabled) voiceDisable();
+      else voiceEnable();
+    });
   }
 
   function renderWaitingRoom() {
@@ -356,6 +545,7 @@
     bindCancelHosted();
     renderActions();
     syncBubbleLayers();
+    syncSpeaking();
   }
 
   function bindCancelHosted() {

@@ -7,14 +7,21 @@
  */
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const selfsigned = require('selfsigned');
 const { WebSocketServer } = require('ws');
 const { GameServer } = require('./src/game');
 const { createTtsBridge } = require('./src/tts-bridge');
 
 const PORT = Number(process.env.PORT || 3100);
+const PORT_HTTPS = Number(process.env.PORT_HTTPS || 3443);
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const CERTS_DIR = path.join(__dirname, 'certs');
+const CERT_FILE = path.join(CERTS_DIR, 'server.crt');
+const KEY_FILE = path.join(CERTS_DIR, 'server.key');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -35,7 +42,8 @@ const MIME = {
 // 后端 TTS 预合成桥接：独立 TTS 服务合成 -> 落盘 public/tts -> 同源 URL 供前端播放
 const ttsBridge = createTtsBridge();
 
-const server = http.createServer((req, res) => {
+// 静态文件 + TTS 路由共用请求处理器（HTTP/HTTPS 双协议复用同一套逻辑）
+function requestHandler(req, res) {
   try {
     // 静态服务前的 TTS 路由（预合成缓存，消除前端实时合成延迟）
     if (req.url && req.url.startsWith('/api/tts/')) {
@@ -93,14 +101,52 @@ const server = http.createServer((req, res) => {
     res.writeHead(500);
     res.end('Server Error');
   }
-});
+}
+
+// 生成/复用自签证书（持久化到 certs/，已存在则复用）
+async function ensureSelfSignedCert() {
+  if (fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE)) {
+    return {
+      cert: fs.readFileSync(CERT_FILE),
+      key: fs.readFileSync(KEY_FILE),
+    };
+  }
+  fs.mkdirSync(CERTS_DIR, { recursive: true });
+  const attrs = [{ name: 'commonName', value: 'localhost' }];
+  const pems = await selfsigned.generate(attrs, {
+    days: 365,
+    keySize: 2048,
+    algorithm: 'sha256',
+    extensions: [{ name: 'basicConstraints', cA: true }],
+  });
+  fs.writeFileSync(CERT_FILE, pems.cert);
+  fs.writeFileSync(KEY_FILE, pems.private);
+  return { cert: pems.cert, key: pems.private };
+}
+
+// 获取本机局域网 IPv4 地址（用于提示 https://<IP>:PORT 访问）
+function localIPv4() {
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const info of ifaces[name] || []) {
+      if (info.family === 'IPv4' && !info.internal) return info.address;
+    }
+  }
+  return '127.0.0.1';
+}
 
 const game = new GameServer();
 
-const wss = new WebSocketServer({ server });
-wss.on('connection', (ws) => {
-  game.handleConnection(ws);
-});
+function attachWs(server) {
+  const wss = new WebSocketServer({ server });
+  wss.on('connection', (ws) => {
+    game.handleConnection(ws);
+  });
+  return wss;
+}
+
+const server = http.createServer(requestHandler);
+attachWs(server);
 
 server.listen(PORT, () => {
   console.log(`[server] 运城扣点点麻将服务已启动: http://localhost:${PORT}`);
@@ -109,3 +155,18 @@ server.listen(PORT, () => {
     .then((r) => console.log(`[server] TTS 预热完成: ${r.total} 条已检查`))
     .catch(() => { /* 预热失败静默 */ });
 });
+
+// HTTPS 服务（自签证书，供手机浏览器麦克风权限使用）
+(async () => {
+  try {
+    const creds = await ensureSelfSignedCert();
+    const httpsServer = https.createServer(creds, requestHandler);
+    attachWs(httpsServer);
+    httpsServer.listen(PORT_HTTPS, () => {
+      console.log(`[server] HTTPS 服务已启动: https://localhost:${PORT_HTTPS}`);
+      console.log(`[server] 语音对讲请访问 https://${localIPv4()}:${PORT_HTTPS}`);
+    });
+  } catch (e) {
+    console.error('[server] HTTPS 启动失败（语音对讲不可用）:', e);
+  }
+})();

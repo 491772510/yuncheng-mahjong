@@ -106,6 +106,7 @@ class GameServer {
         case 'cancel_hosted': return this._cancelHosted(p);
         case 'settle_confirm': return this._settleConfirm(p);
         case 'chat': return this._chat(p, msg);
+        case 'voice_signal': return this._voiceSignal(p, msg);
         default: return this._send(p, { type: 'error', message: '未知消息类型' });
       }
     } catch (e) {
@@ -1435,6 +1436,34 @@ class GameServer {
     room.chat.push({ from: p.name, text, time: nowTime() });
     if (room.chat.length > MAX_CHAT) room.chat.shift();
     this._broadcast(room, { type: 'chat', chat: room.chat.slice(-MAX_CHAT) });
+  }
+
+  // 实时语音对讲信令转发（WebRTC mesh：信令走 WS，媒体走 P2P）
+  // 校验：发起者在房间内；目标为同房间真人玩家（非 AI、有可用 ws）；sig 序列化 ≤ 64KB
+  _voiceSignal(p, msg) {
+    const room = p.roomId ? this.rooms.get(p.roomId) : null;
+    if (!room || !room.players || room.players[p.seat] !== p) return; // 不在房间，静默忽略
+    const targetId = String((msg && msg.target) || '');
+    const target = this.players.get(targetId);
+    // 目标必须是同房间真人玩家（非 AI、有可用 ws），否则静默忽略
+    if (!target || target.isAI || !target.ws || target.ws.readyState !== 1) return;
+    if (target.roomId !== room.id || !room.players || room.players[target.seat] !== target) return;
+    const sig = (msg && msg.sig) || null;
+    if (!sig || typeof sig !== 'object') return;
+    let sigJson;
+    try {
+      sigJson = JSON.stringify(sig);
+    } catch {
+      return; // 序列化失败（循环引用等）直接忽略
+    }
+    if (sigJson.length > 64 * 1024) return; // 超限拒绝，防滥用
+    this._send(target, {
+      type: 'voice_signal',
+      from: p.id,
+      fromName: p.name,
+      fromSeat: p.seat,
+      sig,
+    });
   }
 
   // ============ AI 自动行动 ============
