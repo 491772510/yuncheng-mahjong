@@ -80,9 +80,10 @@ function requestHandler(req, res) {
     }
     let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
     if (urlPath === '/') urlPath = '/index.html';
-    // 防路径穿越
+    // 防路径穿越：严格边界（等于根目录或以路径分隔符开头才放行）
     const filePath = path.normalize(path.join(PUBLIC_DIR, urlPath));
-    if (!filePath.startsWith(PUBLIC_DIR)) {
+    const ok = filePath === PUBLIC_DIR || filePath.startsWith(PUBLIC_DIR + path.sep);
+    if (!ok) {
       res.writeHead(403);
       res.end('Forbidden');
       return;
