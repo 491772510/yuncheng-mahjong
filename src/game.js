@@ -803,13 +803,13 @@ class GameServer {
     const gangList = pending.responders.filter((r) => r.choice === 'gang');
     if (gangList.length > 0) {
       const pick = this._nearestSeat(gangList.map((r) => r.seat), pending.discarder);
-      this._doGangFromDiscard(room, pick, pending.tile);
+      this._doGangFromDiscard(room, pick, pending.tile, pending.discarder);
       return;
     }
     const pengList = pending.responders.filter((r) => r.choice === 'peng');
     if (pengList.length > 0) {
       const pick = this._nearestSeat(pengList.map((r) => r.seat), pending.discarder);
-      this._doPeng(room, pick, pending.tile);
+      this._doPeng(room, pick, pending.tile, pending.discarder);
       return;
     }
     g.lastAction = null;
@@ -829,7 +829,7 @@ class GameServer {
     return best;
   }
 
-  _doPeng(room, seat, tile) {
+  _doPeng(room, seat, tile, discarder) {
     const g = room.game;
     const hand = g.hands[seat];
     let removed = 0;
@@ -838,6 +838,16 @@ class GameServer {
         hand.splice(i, 1);
         i--;
         removed++;
+      }
+    }
+    // 从打出者弃牌区移除被碰的牌（打出者最近打出的牌位于数组末尾，从末尾向前找最后一张同值牌）
+    if (discarder != null && g.discards[discarder]) {
+      const arr = g.discards[discarder];
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i] === tile) {
+          arr.splice(i, 1);
+          break;
+        }
       }
     }
     g.melds[seat].push({ type: 'peng', tile, tiles: [tile, tile, tile] });
@@ -893,7 +903,7 @@ class GameServer {
     return pays;
   }
 
-  _doGangFromDiscard(room, seat, tile) {
+  _doGangFromDiscard(room, seat, tile, discarder) {
     const g = room.game;
     const hand = g.hands[seat];
     let removed = 0;
@@ -902,6 +912,16 @@ class GameServer {
         hand.splice(i, 1);
         i--;
         removed++;
+      }
+    }
+    // 从打出者弃牌区移除被明杠的牌（从末尾向前找最后一张同值牌）
+    if (discarder != null && g.discards[discarder]) {
+      const arr = g.discards[discarder];
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i] === tile) {
+          arr.splice(i, 1);
+          break;
+        }
       }
     }
     g.melds[seat].push({ type: 'gang', tile, tiles: [tile, tile, tile, tile] });

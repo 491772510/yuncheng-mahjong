@@ -1126,3 +1126,98 @@ test('tingHints 缓存：清缓存后重算结果与缓存结果一致', () => {
   cleanupServer(srv);
 });
 
+// ============ 碰/明杠后从打出者弃牌区移除被拿牌 ============
+// Bug 背景：_doPeng/_doGangFromDiscard 只从碰/杠者手牌移除牌并加入 melds，
+// 未从打出者弃牌区 g.discards[discarder] 移除被拿走的牌，导致前端同一张牌在
+// 弃牌区和明牌区重复显示。修复：两方法增加 discarder 参数，从弃牌区末尾向前
+// 移除最后一张同值牌；暗杠/补杠不涉及弃牌区，必须不受影响。
+
+function makeMeldedState(room) {
+  // 清空房间残留 AI 定时器链（同 setupHuState 惯例），避免 AI 托管推进牌局竞速
+  for (const timeoutId of room.timers.values()) {
+    clearTimeout(timeoutId);
+  }
+  room.timers.clear();
+  const g = room.game;
+  g.discards = [['t1'], ['b1', 'b7'], ['w2'], []];
+  g.melds = [[], [], [], []];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = []; // 无人报听，避免补杠触发抢杠胡分支
+  g.lastAction = null;
+  g.newTiles = [null, null, null, null];
+  return g;
+}
+
+test('碰后从打出者弃牌区移除被碰的牌：g.discards[discarder] 不再含该牌，明牌区出现碰组', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = makeMeldedState(room);
+  const seat = 0;
+  const discarder = 1;
+  g.hands[seat] = ['b7', 'b7', 'w1', 'w3', 't1', 't2', 't3', 'w5', 'w6', 'b2', 'b3', 't7', 't8'];
+
+  srv._doPeng(room, seat, 'b7', discarder);
+
+  assert.ok(!g.discards[discarder].includes('b7'), '打出者弃牌区应移除被碰的牌 b7');
+  assert.deepEqual(g.discards[discarder], ['b1'], '弃牌区保留其余牌');
+  assert.equal(g.melds[seat].length, 1, '碰者明牌区新增一组');
+  assert.equal(g.melds[seat][0].type, 'peng');
+  assert.deepEqual(g.melds[seat][0].tiles, ['b7', 'b7', 'b7'], '碰组显示完整三张');
+  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  cleanupServer(srv);
+});
+
+test('明杠后从打出者弃牌区移除被明杠的牌：g.discards[discarder] 不再含该牌，明牌区出现杠组', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = makeMeldedState(room);
+  const seat = 0;
+  const discarder = 1;
+  g.hands[seat] = ['b7', 'b7', 'b7', 'w1', 'w3', 't1', 't2', 't3', 'w5', 'w6', 'b2', 'b3', 't7'];
+
+  srv._doGangFromDiscard(room, seat, 'b7', discarder);
+
+  assert.ok(!g.discards[discarder].includes('b7'), '打出者弃牌区应移除被明杠的牌 b7');
+  assert.deepEqual(g.discards[discarder], ['b1'], '弃牌区保留其余牌');
+  assert.equal(g.melds[seat].length, 1, '明杠者明牌区新增一组');
+  assert.equal(g.melds[seat][0].type, 'gang');
+  assert.deepEqual(g.melds[seat][0].tiles, ['b7', 'b7', 'b7', 'b7'], '杠组显示完整四张');
+  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  cleanupServer(srv);
+});
+
+test('暗杠不触及弃牌区：g.discards[discarder] 原样保留', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = makeMeldedState(room);
+  const seat = 0;
+  g.hands[seat] = ['b7', 'b7', 'b7', 'b7', 'w1', 'w3', 't1', 't2', 't3', 'w5', 'w6', 'b2', 'b3'];
+  const discardsBefore = g.discards.map((arr) => arr.slice());
+
+  srv._doAnGang(room, seat, 'b7');
+
+  assert.deepEqual(g.discards.map((arr) => arr.slice()), discardsBefore, '暗杠不得改动任何弃牌区');
+  assert.equal(g.melds[seat][0].type, 'angang', '暗杠组进入明牌区');
+  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  cleanupServer(srv);
+});
+
+test('补杠不触及弃牌区：g.discards[discarder] 原样保留', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = makeMeldedState(room);
+  const seat = 0;
+  g.hands[seat] = ['b7', 'w1', 'w3', 't1', 't2', 't3', 'w5', 'w6', 'b2', 'b3', 't7', 't8', 'w9'];
+  g.melds[seat] = [{ type: 'peng', tile: 'b7', tiles: ['b7', 'b7', 'b7'] }];
+  const discardsBefore = g.discards.map((arr) => arr.slice());
+
+  srv._doBuGang(room, seat, 'b7');
+
+  assert.deepEqual(g.discards.map((arr) => arr.slice()), discardsBefore, '补杠不得改动任何弃牌区');
+  assert.equal(g.melds[seat][0].type, 'bugang', '碰组升级为补杠组');
+  assert.deepEqual(g.melds[seat][0].tiles, ['b7', 'b7', 'b7', 'b7']);
+  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  cleanupServer(srv);
+});
+
+
