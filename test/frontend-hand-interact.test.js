@@ -102,9 +102,9 @@ function makePlayers(discardsMap = {}, meldsMap = {}, aiSeats = []) {
 
 // 进入对局并置于本家摸牌出牌阶段（isDrawTurn=true、prompt.type='draw'）
 function setupDrawTurn(env, opts = {}) {
-  const { hand = ['w1', 'w2', 'w3'], turn = 0, meTing = false, tingHints = null, promptOverrides = {} } = opts;
+  const { hand = ['w1', 'w2', 'w3'], turn = 0, meTing = false, tingHints = null, promptOverrides = {}, meldsMap = {} } = opts;
   broadcast(env, roomStateMsg());
-  const players = makePlayers({ 1: ['t1', 'w1'] }, {}, [1, 2, 3]);
+  const players = makePlayers({ 1: ['t1', 'w1'] }, meldsMap, [1, 2, 3]);
   players[0].hand = hand;
   players[0].ting = meTing;
   const gameOverrides = { yourSeat: 0, turn, isDrawTurn: true };
@@ -127,6 +127,9 @@ function selectedTiles(env) {
 }
 function weakHighlighted(env) {
   return Array.from(env.document.querySelectorAll('#table-wrap .discard-area .tile.weak-highlight'));
+}
+function meldWeakHighlighted(env) {
+  return Array.from(env.document.querySelectorAll('#table-wrap .melds .meld .tile.weak-highlight'));
 }
 function lastSent(env) {
   const sent = env.ws.sent;
@@ -316,4 +319,76 @@ test('本局结束（winners 出现）时清除选中态', () => {
   players[0].hand = ['w1', 'w2', 'w3'];
   broadcast(env, gameStateMsg(players, { yourSeat: 0, turn: 0, winners: [0] }));
   assert.equal(selectedTiles(env).length, 0);
+});
+
+// ---------- 功能5：选中后明牌区同种牌弱高亮（碰/明杠/暗杠真牌/补杠） ----------
+// 需求：选中一张手牌后，除弃牌区外，场上所有玩家明牌区（.melds .meld）中的同种牌也加
+// .weak-highlight，一眼看全该牌已见张数。暗杠他人视角为牌背（无 data-tile）自动跳过。
+
+function meldedEnv() {
+  const env = createEnv();
+  // 自己：暗杠 w1（自己视角 1 真牌+3 牌背）、补杠 w1（4 张）、明杠 w1（4 张）
+  // P1：碰 w1（3 张）、明杠 w2（4 张，不同牌不应高亮）
+  // P2：暗杠 w1（他人视角 4 张牌背，无 data-tile）
+  const meldsMap = {
+    0: [
+      { type: 'angang', tile: 'w1', tiles: ['w1', 'w1', 'w1', 'w1'] },
+      { type: 'bugang', tile: 'w1', tiles: ['w1', 'w1', 'w1', 'w1'] },
+      { type: 'gang', tile: 'w1', tiles: ['w1', 'w1', 'w1', 'w1'] },
+    ],
+    1: [
+      { type: 'peng', tile: 'w1', tiles: ['w1', 'w1', 'w1'] },
+      { type: 'gang', tile: 'w2', tiles: ['w2', 'w2', 'w2', 'w2'] },
+    ],
+    2: [
+      { type: 'angang', tile: 'w1', tiles: ['w1', 'w1', 'w1', 'w1'] },
+    ],
+  };
+  setupDrawTurn(env, { hand: ['w1', 'w2', 'w3'], meldsMap });
+  return env;
+}
+
+test('选中手牌后：明牌区碰/明杠/暗杠真牌/补杠同种牌全部弱高亮，其他牌不高亮', () => {
+  const env = meldedEnv();
+
+  clickHandTile(env, 0); // 选中 w1
+
+  // 明牌区 w1 真牌应全部高亮：自己暗杠 1 + 补杠 4 + 明杠 4 + P1 碰 3 = 12 张；P2 暗杠为牌背跳过
+  const meldWeak = meldWeakHighlighted(env);
+  assert.equal(meldWeak.length, 12, '明牌区同种 w1 应全部弱高亮（他人暗杠牌背除外）');
+  assert.ok(meldWeak.every((el) => el.dataset.tile === 'w1'), '高亮的明牌区牌均为 w1');
+  // 覆盖各类明牌区：碰（3）、明杠（4）、暗杠真牌（1）、补杠（4）都在其中
+  const meldAll = Array.from(env.document.querySelectorAll('#table-wrap .melds .meld .tile'));
+  assert.equal(meldAll.filter((el) => el.dataset.tile === 'w1').length, 12, '明牌区 w1 真牌总数 12');
+  // P1 明杠 w2 不应高亮
+  assert.ok(meldAll.some((el) => el.dataset.tile === 'w2' && !el.classList.contains('weak-highlight')), '不同牌 w2 不得高亮');
+  // 弃牌区 w1 仍正常高亮（与既有行为一致）
+  const discWeak = weakHighlighted(env);
+  assert.equal(discWeak.length, 1);
+  assert.equal(discWeak[0].dataset.tile, 'w1');
+});
+
+test('取消选中（再次点击出牌）后：明牌区弱高亮全部清除', () => {
+  const env = meldedEnv();
+  clickHandTile(env, 0);
+  assert.equal(meldWeakHighlighted(env).length, 12);
+
+  // 再次点击同一张 = 出牌，清除选中与弱高亮
+  clickHandTile(env, 0);
+  assert.deepEqual(lastSent(env), { type: 'play_tile', tile: 'w1' });
+  assert.equal(meldWeakHighlighted(env).length, 0, '出牌后明牌区弱高亮应全部清除');
+  assert.equal(weakHighlighted(env).length, 0, '出牌后弃牌区弱高亮应全部清除');
+  assert.equal(selectedTiles(env).length, 0);
+});
+
+test('切换选中到其他牌：明牌区弱高亮跟随新选中牌（w2 的明杠被高亮）', () => {
+  const env = meldedEnv();
+  clickHandTile(env, 0); // 选中 w1
+  assert.equal(meldWeakHighlighted(env).length, 12);
+
+  clickHandTile(env, 1); // 切换选中到 w2
+  const meldWeak = meldWeakHighlighted(env);
+  assert.equal(meldWeak.length, 4, '明牌区 w2 明杠 4 张被高亮');
+  assert.ok(meldWeak.every((el) => el.dataset.tile === 'w2'));
+  assert.equal(weakHighlighted(env).length, 0, '弃牌区无 w2，无高亮');
 });

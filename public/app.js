@@ -768,12 +768,14 @@
   function clearTileSelection() {
     state.selectedIndex = null;
     $$('#table-wrap .tile.selected').forEach((el) => el.classList.remove('selected'));
-    $$('#table-wrap .discard-area .tile.weak-highlight').forEach((el) => el.classList.remove('weak-highlight'));
+    // 同时清掉弃牌区与明牌区（碰/明杠/暗杠真牌/补杠）的弱高亮
+    $$('#table-wrap .tile.weak-highlight').forEach((el) => el.classList.remove('weak-highlight'));
   }
 
-  // 弃牌区同种牌弱高亮：仅对当前选中牌同 tile 值的已打出牌加 .weak-highlight
+  // 弃牌区与明牌区同种牌弱高亮：对当前选中牌同 tile 值的已打出牌与明牌区牌加 .weak-highlight，
+  // 一眼看全该牌已见张数（弃牌区+碰/杠区；暗杠他人视角为牌背无 data-tile，自动跳过）
   function applyWeakHighlight() {
-    $$('#table-wrap .discard-area .tile.weak-highlight').forEach((el) => el.classList.remove('weak-highlight'));
+    $$('#table-wrap .tile.weak-highlight').forEach((el) => el.classList.remove('weak-highlight'));
     const sel = state.selectedIndex;
     if (sel == null) return;
     const game = state.game;
@@ -781,7 +783,7 @@
     const p = game.players && game.players[game.yourSeat];
     if (!p || !p.hand || p.hand[sel] == null) return;
     const tile = p.hand[sel];
-    $$('#table-wrap .discard-area .tile').forEach((el) => {
+    $$('#table-wrap .discard-area .tile, #table-wrap .melds .meld .tile').forEach((el) => {
       if (el.dataset.tile === tile) el.classList.add('weak-highlight');
     });
   }

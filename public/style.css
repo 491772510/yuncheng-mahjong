@@ -297,8 +297,8 @@ body {
   z-index: 3;
 }
 .tile.discardable.selected:hover { transform: translateY(-12px); }
-/* 弃牌区同种牌弱高亮：弱光晕提示该牌场上可见张数（不浮起） */
-.discard-area .tile.weak-highlight {
+/* 弃牌区与明牌区（碰/明杠/暗杠真牌/补杠）同种牌弱高亮：弱光晕提示该牌场上可见张数（不浮起） */
+.tile.weak-highlight {
   box-shadow: 0 0 0 2px rgba(255, 215, 94, .55), 0 0 8px rgba(255, 215, 94, .45);
 }
 /* 报听选牌阶段：不可报听（听口无 ≥6 点牌）的选项置灰 */
