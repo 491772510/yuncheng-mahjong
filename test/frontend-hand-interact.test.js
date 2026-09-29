@@ -218,7 +218,7 @@ test('localStorage 预存开启值时进入大厅自动勾选开关', () => {
 });
 
 // ---------- 边界：报听 / 已报听 / 轮次变化 ----------
-test('报听选牌阶段：点击手牌=报听扣牌，不受选中交互与开关影响', () => {
+test('报听选牌阶段：点击可报听手牌=选中，再次点击同一张=确认报听', () => {
   const env = createEnv();
   // 服务端下发听口提示：w1/w2/w3 均可报听
   setupDrawTurn(env, { hand: ['w1', 'w2', 'w3'], tingHints: { w1: 2, w2: 1, w3: 3 }, promptOverrides: { canDeclareTing: true } });
@@ -227,11 +227,60 @@ test('报听选牌阶段：点击手牌=报听扣牌，不受选中交互与开�
   // 进入报听选牌阶段（点击「报听」按钮）
   env.document.querySelector('#action-bar .act-ting').click();
   assert.ok(env.document.querySelector('#table-wrap .hand-tiles').classList.contains('ting-pick'));
+  assert.equal(env.document.querySelector('#action-bar .countdown').textContent, '点击要扣的牌选中，再次点击报听');
 
+  // 首次点击 = 选中，不发报听
+  clickHandTile(env, 0);
+  assert.equal(selectedTiles(env).length, 1);
+  assert.equal(selectedTiles(env)[0].dataset.tile, 'w1');
+  assert.equal(env.ws.sent.some((m) => m.type === 'ting'), false);
+
+  // 再次点击同一张 = 确认报听，清除选中
   clickHandTile(env, 0);
   assert.deepEqual(lastSent(env), { type: 'ting', tile: 'w1' });
   assert.equal(selectedTiles(env).length, 0);
-  assert.equal(weakHighlighted(env).length, 0);
+});
+
+test('报听选牌阶段：选中状态下点击其他可报听牌=切换选中', () => {
+  const env = createEnv();
+  setupDrawTurn(env, { hand: ['w1', 'w2', 'w3'], tingHints: { w1: 2, w2: 1, w3: 3 }, promptOverrides: { canDeclareTing: true } });
+  env.document.querySelector('#action-bar .act-ting').click();
+
+  clickHandTile(env, 0);
+  clickHandTile(env, 1);
+  assert.equal(env.ws.sent.some((m) => m.type === 'ting'), false);
+  const sel = selectedTiles(env);
+  assert.equal(sel.length, 1);
+  assert.equal(sel[0].dataset.tile, 'w2');
+});
+
+test('报听选牌阶段：不可报听的牌置灰不可点、无响应', () => {
+  const env = createEnv();
+  // z（字牌）未进入 tingHints → 不可报听
+  setupDrawTurn(env, { hand: ['w1', 'w2', 'z'], tingHints: { w1: 2, w2: 1 }, promptOverrides: { canDeclareTing: true } });
+  env.document.querySelector('#action-bar .act-ting').click();
+
+  // 可报听牌有 discardable，不可报听牌无 discardable 类
+  assert.equal(handTiles(env).length, 2);
+  const grey = Array.from(env.document.querySelectorAll('#table-wrap .hand-tiles .tile:not(.discardable)'));
+  assert.equal(grey.length, 1);
+  grey[0].click(); // 点击置灰牌：无响应
+  assert.equal(env.ws.sent.some((m) => m.type === 'ting' || m.type === 'play_tile'), false);
+  assert.equal(selectedTiles(env).length, 0);
+});
+
+test('报听选牌阶段：点「取消」退出时清除选中态', () => {
+  const env = createEnv();
+  setupDrawTurn(env, { hand: ['w1', 'w2', 'w3'], tingHints: { w1: 2, w2: 1, w3: 3 }, promptOverrides: { canDeclareTing: true } });
+  env.document.querySelector('#action-bar .act-ting').click();
+  clickHandTile(env, 0);
+  assert.equal(selectedTiles(env).length, 1);
+
+  env.document.querySelector('#action-bar [data-act="ting-cancel"]').click(); // 取消
+  assert.ok(!env.document.querySelector('#table-wrap .hand-tiles').classList.contains('ting-pick'));
+  assert.equal(selectedTiles(env).length, 0);
+  // 退出后回到普通出牌选中交互
+  assert.equal(env.document.querySelector('#action-bar .countdown').textContent, '点击手牌选中，再次点击出牌');
 });
 
 test('已报听玩家摸牌即打：点击直接出牌，不进入选中交互', () => {

@@ -615,8 +615,8 @@
     const canDiscard = state.tingPick ? tH !== undefined : true;
     // 新摸牌标志：与 newTile 同值且为排序后手牌中第一张该牌（其余同值牌不标记）
     const isNew = game.newTile === t && p.hand.indexOf(t) === i;
-    // 选中态：默认交互（开关关闭）且非报听选牌阶段，当前索引被选中时加 .selected
-    const selected = !state.tingPick && !isTapToDiscard() && state.selectedIndex === i;
+    // 选中态：普通出牌受「单击直接出牌」开关影响（开启时不选中）；报听阶段始终走选中交互，不受开关影响
+    const selected = (state.tingPick || !isTapToDiscard()) && state.selectedIndex === i;
     return tileHtml(t, '', ting, canDiscard, isNew, i, selected);
   }
 
@@ -813,14 +813,20 @@
         if (!game || !game.isDrawTurn) return;
         if (!state.prompt || state.prompt.type !== 'draw') return;
         if (state.tingPick) {
-          // 听口：点击手牌即打出该张报听；仅听口含 ≥6 点牌的选项有效
+          // 听口：先选中（.selected），再次点击同一张确认报听；仅听口含 ≥6 点牌的选项有效
           // 注意：tingHints[t] 为 0（该听口牌 4 张已全见，绝听）也算有效可报听，只有未进入提示列表（undefined）才拒绝
           const h = game.tingHints && game.tingHints[tile];
           if (h === undefined || h === null) {
             toast('打出这张后听口不含 ≥6 点牌，不能报听', true);
             return;
           }
-          send({ type: 'ting', tile });
+          if (state.selectedIndex === idx) {
+            clearTileSelection();
+            send({ type: 'ting', tile });
+          } else {
+            state.selectedIndex = idx;
+            renderSelfHandAndHighlight();
+          }
           return;
         }
         // 已报听：摸牌即打，不进入选中交互（与报听阶段语义一致，不受开关影响）
@@ -860,7 +866,7 @@
       if (p.canDeclareTing && !state.tingPick) btns += `<button class="act act-ting" data-act="ting">报听</button>`;
       if (state.tingPick) {
         btns += `<button class="act act-pass" data-act="ting-cancel">取消</button>`;
-        btns += `<span class="countdown" style="align-self:center;">点击要扣的牌报听</span>`;
+        btns += `<span class="countdown" style="align-self:center;">点击要扣的牌选中，再次点击报听</span>`;
       } else {
         btns += `<span class="countdown" style="align-self:center;">${isTapToDiscard() ? '点击手牌出牌' : '点击手牌选中，再次点击出牌'}</span>`;
       }
@@ -904,9 +910,11 @@
     else if (act === 'gang') showGangMenu();
     else if (act === 'ting') {
       state.tingPick = true;
+      state.selectedIndex = null;
       renderTable();
     } else if (act === 'ting-cancel') {
       state.tingPick = false;
+      state.selectedIndex = null;
       renderTable();
     }
   }
