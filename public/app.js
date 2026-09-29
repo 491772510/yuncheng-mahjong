@@ -13,6 +13,8 @@
     game: null,
     prompt: null,
     tingPick: false, // 听口选牌状态：点击手牌表示报听
+    selectedIndex: null, // 手牌选中交互：当前选中的手牌索引（默认模式，开关关闭时生效）
+    _lastTurn: null, // 最近一次 game_state 的 turn，用于检测轮次变化并清除选中态
     reconnectAttempts: 0,
     countdownTimer: null,
     countdownEnd: 0,
@@ -81,6 +83,8 @@
           state.room = null;
           state.game = null;
           state.prompt = null;
+          state.selectedIndex = null;
+          state._lastTurn = null;
           hideConnMask();
           resetVoiceBaseline();
           voiceDisable();
@@ -103,6 +107,13 @@
       case 'game_state':
         state.game = msg.game;
         state.tingPick = false;
+        // 手牌选中态：轮次变化 / 自己不可出牌 / 本局结束任一条件满足即清除，避免残留
+        if (state.selectedIndex != null) {
+          const stillMine = !!msg.game.isDrawTurn && msg.game.turn === msg.game.yourSeat && !msg.game.winners;
+          const turnChanged = state._lastTurn != null && state._lastTurn !== msg.game.turn;
+          if (!stillMine || turnChanged) state.selectedIndex = null;
+        }
+        state._lastTurn = msg.game.turn;
         // 重连兜底：若轮到本玩家出牌或本玩家有未决定的碰/杠/胡响应权，
         // 但服务端未（或消息已丢失）下发 action_prompt，则按 game_state 自行补齐，
         // 避免手牌/操作按钮不可点导致整局卡死
@@ -153,6 +164,7 @@
       case 'action_prompt':
         state.prompt = msg.prompt;
         state.tingPick = false;
+        state.selectedIndex = null;
         if (msg.prompt && msg.prompt.type === 'koupoint') {
           showKoupointModal();
         } else {
@@ -543,6 +555,7 @@
     for (const l of layers) wrap.appendChild(l);
     bindTileClicks();
     bindCancelHosted();
+    applyWeakHighlight();
     renderActions();
     syncBubbleLayers();
     syncSpeaking();
@@ -592,20 +605,25 @@
     </div>`;
   }
 
+  // 单张手牌 HTML：复用与 renderSelfCard 一致的听口/新摸牌/选中态判定，供全量重绘与选中重绘共用
+  function selfTileHtml(p, t, i) {
+    const game = state.game;
+    // tingHints[t] 未定义 = 打出后听口不含 ≥6 点牌（不可报听）；为 0 = 绝听但可报听（仅角标显示剩余 0 张）
+    const tH = game.tingHints ? game.tingHints[t] : undefined;
+    const ting = tH === undefined ? 0 : tH;
+    // 报听选牌阶段：仅进入提示列表（含 ≥6 点听口）的选项可点击，未进入置灰；绝听（tH===0）仍可报听
+    const canDiscard = state.tingPick ? tH !== undefined : true;
+    // 新摸牌标志：与 newTile 同值且为排序后手牌中第一张该牌（其余同值牌不标记）
+    const isNew = game.newTile === t && p.hand.indexOf(t) === i;
+    // 选中态：默认交互（开关关闭）且非报听选牌阶段，当前索引被选中时加 .selected
+    const selected = !state.tingPick && !isTapToDiscard() && state.selectedIndex === i;
+    return tileHtml(t, '', ting, canDiscard, isNew, i, selected);
+  }
+
   function renderSelfCard(p, seat) {
     const game = state.game;
     const isTurn = game.turn === seat && !game.winners;
-    const newTile = game.newTile || null; // 服务端下发：本玩家当前新摸到的牌（仅自己视角）
-    const hand = (p.hand || []).map((t, i) => {
-      // tingHints[t] 未定义 = 打出后听口不含 ≥6 点牌（不可报听）；为 0 = 绝听但可报听（仅角标显示剩余 0 张）
-      const tH = game.tingHints ? game.tingHints[t] : undefined;
-      const ting = tH === undefined ? 0 : tH;
-      // 报听选牌阶段：仅进入提示列表（含 ≥6 点听口）的选项可点击，未进入置灰；绝听（tH===0）仍可报听
-      const canDiscard = state.tingPick ? tH !== undefined : true;
-      // 新摸牌标志：与 newTile 同值且为排序后手牌中第一张该牌（其余同值牌不标记）
-      const isNew = newTile === t && p.hand.indexOf(t) === i;
-      return tileHtml(t, '', ting, canDiscard, isNew);
-    }).join('');
+    const hand = (p.hand || []).map((t, i) => selfTileHtml(p, t, i)).join('');
     const meldHtml = renderMelds(p.melds, true);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
     const kp = game.kouPoints && game.kouPoints[seat];
@@ -640,7 +658,7 @@
 
   const HONOR_NAMES = { e: '東', s: '南', x: '西', n: '北', z: '中', f: '發', p: '白' };
 
-  function tileHtml(tile, size, ting, discardable, isNew) {
+  function tileHtml(tile, size, ting, discardable, isNew, idx, selected) {
     if (!tile) return '';
     if (tile === 'back') return `<span class="tile ${size} back"></span>`;
     const suit = tile[0];
@@ -649,10 +667,12 @@
       (isHonor ? ' honor' : '') +
       (discardable ? ' discardable' : '') +
       (ting ? ' ting-mark' : '') +
-      (isNew ? ' new-tile' : '');
+      (isNew ? ' new-tile' : '') +
+      (selected ? ' selected' : '');
+    const idxAttr = idx != null ? ` data-idx="${idx}"` : '';
     const attr = ting ? ` data-ting="${ting}张"` : '';
     const inner = isHonor ? honorFace(tile) : suitFace(tile);
-    return `<span class="${cls}" data-tile="${tile}"${attr}>${inner}</span>`;
+    return `<span class="${cls}" data-tile="${tile}"${idxAttr}${attr}>${inner}</span>`;
   }
 
   // ===== 传统麻将图案牌面（纯 CSS/HTML，无图片资源）=====
@@ -743,12 +763,52 @@
     return `${num}${suit}`;
   }
 
+  // ===== 手牌选中交互（默认模式，开关关闭时生效）=====
+  // 清除选中态：清空索引并移除 .selected / .weak-highlight 视觉
+  function clearTileSelection() {
+    state.selectedIndex = null;
+    $$('#table-wrap .tile.selected').forEach((el) => el.classList.remove('selected'));
+    $$('#table-wrap .discard-area .tile.weak-highlight').forEach((el) => el.classList.remove('weak-highlight'));
+  }
+
+  // 弃牌区同种牌弱高亮：仅对当前选中牌同 tile 值的已打出牌加 .weak-highlight
+  function applyWeakHighlight() {
+    $$('#table-wrap .discard-area .tile.weak-highlight').forEach((el) => el.classList.remove('weak-highlight'));
+    const sel = state.selectedIndex;
+    if (sel == null) return;
+    const game = state.game;
+    if (!game) return;
+    const p = game.players && game.players[game.yourSeat];
+    if (!p || !p.hand || p.hand[sel] == null) return;
+    const tile = p.hand[sel];
+    $$('#table-wrap .discard-area .tile').forEach((el) => {
+      if (el.dataset.tile === tile) el.classList.add('weak-highlight');
+    });
+  }
+
+  // 选中/切换选中后局部重绘：只更新手牌区与弱高亮，不整桌重绘（避免重置倒计时/操作区）
+  function renderSelfHandAndHighlight() {
+    const game = state.game;
+    if (!game) return;
+    const wrap = $('#table-wrap');
+    const seat = game.yourSeat;
+    const card = wrap.querySelector(`.seat[data-seat="${seat}"] .player-card`);
+    if (!card) return;
+    const p = game.players && game.players[seat];
+    if (!p) return;
+    const handTilesBox = card.querySelector('.hand-tiles');
+    if (handTilesBox) handTilesBox.innerHTML = (p.hand || []).map((t, i) => selfTileHtml(p, t, i)).join('');
+    applyWeakHighlight();
+    bindTileClicks();
+  }
+
   function bindTileClicks() {
     const wrap = $('#table-wrap');
     const tiles = wrap.querySelectorAll('.hand-tiles .tile.discardable');
     tiles.forEach((el) => {
       el.onclick = () => {
         const tile = el.dataset.tile;
+        const idx = Number(el.dataset.idx);
         const game = state.game;
         if (!game || !game.isDrawTurn) return;
         if (!state.prompt || state.prompt.type !== 'draw') return;
@@ -763,7 +823,25 @@
           send({ type: 'ting', tile });
           return;
         }
-        send({ type: 'play_tile', tile });
+        // 已报听：摸牌即打，不进入选中交互（与报听阶段语义一致，不受开关影响）
+        const me = game.players && game.players[game.yourSeat];
+        if (me && me.ting) {
+          send({ type: 'play_tile', tile });
+          return;
+        }
+        // 单击直接出牌开关：一次点击直接打出（给熟手提速）
+        if (isTapToDiscard()) {
+          send({ type: 'play_tile', tile });
+          return;
+        }
+        // 默认选中交互：首次点击选中，再次点击同一张出牌，点击其他张切换选中
+        if (state.selectedIndex === idx) {
+          clearTileSelection();
+          send({ type: 'play_tile', tile });
+        } else {
+          state.selectedIndex = idx;
+          renderSelfHandAndHighlight();
+        }
       };
     });
   }
@@ -784,7 +862,7 @@
         btns += `<button class="act act-pass" data-act="ting-cancel">取消</button>`;
         btns += `<span class="countdown" style="align-self:center;">点击要扣的牌报听</span>`;
       } else {
-        btns += `<span class="countdown" style="align-self:center;">点击手牌出牌</span>`;
+        btns += `<span class="countdown" style="align-self:center;">${isTapToDiscard() ? '点击手牌出牌' : '点击手牌选中，再次点击出牌'}</span>`;
       }
     } else if (p.type === 'response') {
       if (p.canHu) btns += `<button class="act act-hu" data-act="hu">胡</button>`;
@@ -1449,6 +1527,27 @@
     }
   }
 
+  // ===== 手牌点击设置 =====
+  // 「单击直接出牌」个人全局设置：默认关闭（走选中交互），勾选后点击手牌直接打出（给熟手提速）
+  const TAP_KEY = 'kd.tapToDiscard';
+  function isTapToDiscard() {
+    const el = $('#opt-tap-discard');
+    return !!(el && el.checked);
+  }
+  function initTapToDiscard() {
+    const el = $('#opt-tap-discard');
+    if (!el) return;
+    el.checked = localStorage.getItem(TAP_KEY) === '1';
+    el.addEventListener('change', () => {
+      localStorage.setItem(TAP_KEY, el.checked ? '1' : '0');
+      if (el.checked) {
+        // 开启直接出牌：移除已有选中态并重绘
+        clearTileSelection();
+        if (state.room && state.room.state === 'playing' && state.game) renderTable();
+      }
+    });
+  }
+
   function resetVoiceBaseline() {
     voiceState.baselineReady = false;
     voiceState.prevDiscardCounts = [];
@@ -1597,6 +1696,7 @@
     $('#nick-input').value = state.name;
     initCreateModal();
     initVoice();
+    initTapToDiscard();
     bindEvents();
     connect();
     // 浏览器工具栏显隐有延迟，多等几次再校准高度，避免刚进入房间时底部被盖
