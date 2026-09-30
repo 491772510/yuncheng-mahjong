@@ -16,6 +16,9 @@ const SUITS = ['w', 't', 'b']; // 万、条、筒
 const SUIT_NAMES = { w: '万', t: '条', b: '筒' };
 const SUIT_ORDER = { w: 0, t: 1, b: 2 };
 
+/** 红中麻将牌编码（suit=z, rank=0），与扣点点字牌 z(中) 区分 */
+const HONG_ZHONG = 'z0';
+
 /** 字牌（风牌 + 箭牌）：东南西北中发白。只能组成刻子或将牌，不能组成顺子 */
 const HONOR_TILES = ['e', 's', 'x', 'n', 'z', 'f', 'p']; // 东 南 西 北 中 发 白
 const HONOR_NAMES = { e: '东', s: '南', x: '西', n: '北', z: '中', f: '发', p: '白' };
@@ -55,6 +58,7 @@ function shuffle(tiles, rng = Math.random) {
 
 /** 牌排序键：万 < 条 < 筒（数字升序），字牌排最后（东南西北中发白） */
 function rankOf(t) {
+  if (t === HONG_ZHONG) return 0; // 红中排最前（rank=0）
   if (HONOR_ORDER[t] !== undefined) return 30 + HONOR_ORDER[t];
   return SUIT_ORDER[t[0]] * 10 + numOf(t);
 }
@@ -67,6 +71,7 @@ function sortTiles(hand) {
 function suitOf(t) { return t[0]; }
 function numOf(t) { return Number(t[1]); }
 function tileName(t) {
+  if (t === HONG_ZHONG) return '红中';
   if (HONOR_NAMES[t]) return HONOR_NAMES[t];
   return numOf(t) + SUIT_NAMES[suitOf(t)];
 }
@@ -432,6 +437,379 @@ function calcMultiplier136(hand, info = {}, opts = {}, detail = false) {
   return detail ? { mult, names } : mult;
 }
 
+// ============ 红中麻将（西安红中）判定模块 ============
+// 独立于扣点点 136 模式：112 张牌（万筒条 1-9 各 4 + 红中 z0 × 4），红中为万能癞子。
+// 不改动扣点点既有函数行为，仅新增以下红中专用函数。
+
+/** 红中玩法全部 28 种牌型：27 数牌 + 红中 */
+function getHongZhongTileTypes() {
+  const types = ALL_TILE_TYPES.slice(); // w1..w9 / t1..t9 / b1..b9
+  types.push(HONG_ZHONG);
+  return types;
+}
+
+function isHongZhong(t) {
+  return t === HONG_ZHONG;
+}
+
+/** 生成红中麻将完整牌墙：112 张（万筒条 1-9 各 4 + 红中 4） */
+function createTiles112() {
+  const tiles = [];
+  for (const t of ALL_TILE_TYPES) {
+    for (let k = 0; k < 4; k++) tiles.push(t);
+  }
+  for (let k = 0; k < 4; k++) tiles.push(HONG_ZHONG);
+  return tiles;
+}
+
+/** 二五八将判定（万/筒/条 2/5/8） */
+function is258Eye(tile) {
+  if (tile === HONG_ZHONG) return false;
+  const n = numOf(tile);
+  return n === 2 || n === 5 || n === 8;
+}
+
+/** 拆面子（含癞子）：把 cnt（已剔除红中）拆成 n 组面子，缺张可用红中补齐。
+ *  每副面子（顺/刻）由真实牌与 wild 张红中共同组成，红中不能在同一位置重复使用（受 wild 总量约束）。
+ */
+function canFormMeldsWithWild(cnt, n, wild) {
+  if (n === 0) {
+    if (wild !== 0) return false;
+    for (const c of cnt.values()) if (c > 0) return false;
+    return true;
+  }
+  let first = null;
+  for (const [tile, c] of cnt) {
+    if (c > 0) { first = tile; break; }
+  }
+  if (first === null) {
+    // 剩余面子全部由红中补齐（如 3 张红中成刻）
+    return wild >= 3 * n;
+  }
+  const s = suitOf(first);
+  const num = numOf(first);
+
+  // 刻子：真实 first 3-wUsed 张 + wUsed 张红中
+  for (let wUsed = 0; wUsed <= 3 && wUsed <= wild; wUsed++) {
+    const realNeed = 3 - wUsed;
+    if ((cnt.get(first) || 0) >= realNeed) {
+      const c2 = new Map(cnt);
+      decCount(c2, first, realNeed);
+      if (canFormMeldsWithWild(c2, n - 1, wild - wUsed)) return true;
+    }
+  }
+  // 顺子：first 位置消耗 1 张真实牌；后两位置各 1 张，缺张用红中补
+  if (num <= 7) {
+    const tA = s + (num + 1);
+    const tB = s + (num + 2);
+    const realA = cnt.get(tA) || 0;
+    const realB = cnt.get(tB) || 0;
+    for (let wA = 0; wA <= 1 && wA <= wild; wA++) {
+      const needA = 1 - wA;
+      if (needA > realA) continue;
+      for (let wB = 0; wB <= 1 && wB <= wild - wA; wB++) {
+        const needB = 1 - wB;
+        if (needB > realB) continue;
+        const c2 = new Map(cnt);
+        decCount(c2, first, 1);
+        if (needA > 0) decCount(c2, tA, needA);
+        if (needB > 0) decCount(c2, tB, needB);
+        if (canFormMeldsWithWild(c2, n - 1, wild - wA - wB)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** 找将（含癞子）：cnt（已剔除红中）+ wild 张红中，先取一对将，剩余拆 n 组面子。
+ *  @param {boolean} need258 二五八将限制（平胡）：将牌必须为 2/5/8；红中万能，2 张红中可当任意将。
+ */
+function _tryPairAsEyeWithWild(cnt, n, wild, need258) {
+  // 真对作将
+  for (const [tile, c] of cnt) {
+    if (c >= 2) {
+      if (need258 && !is258Eye(tile)) continue;
+      const c2 = new Map(cnt);
+      decCount(c2, tile, 2);
+      if (canFormMeldsWithWild(c2, n, wild)) return true;
+    }
+  }
+  // 1 真 + 1 红中作将
+  if (wild >= 1) {
+    for (const [tile, c] of cnt) {
+      if (c >= 1) {
+        if (need258 && !is258Eye(tile)) continue;
+        const c2 = new Map(cnt);
+        decCount(c2, tile, 1);
+        if (canFormMeldsWithWild(c2, n, wild - 1)) return true;
+      }
+    }
+  }
+  // 2 红中作将（红中可当任意牌，含 2/5/8）
+  if (wild >= 2) {
+    if (canFormMeldsWithWild(new Map(cnt), n, wild - 2)) return true;
+  }
+  return false;
+}
+
+/** 七小对（含癞子）：14 张全部成对，红中可补单张凑对，剩余红中两两成对 */
+function isQiDuiHongZhong(hand) {
+  if (hand.length !== 14) return false;
+  const wild = countTiles(hand).get(HONG_ZHONG) || 0;
+  const cnt = countTiles(hand);
+  cnt.delete(HONG_ZHONG);
+  let need = 0;
+  for (const c of cnt.values()) need += c % 2; // 奇数张的每种需 1 张红中补成对
+  if (need > wild) return false;
+  return (wild - need) % 2 === 0;
+}
+
+/** 龙七对（含癞子）：七对成立，且存在 4 张相同牌（红中可充当） */
+function isLongQiDuiHongZhong(hand) {
+  if (!isQiDuiHongZhong(hand)) return false;
+  const wild = countTiles(hand).get(HONG_ZHONG) || 0;
+  const cnt = countTiles(hand);
+  cnt.delete(HONG_ZHONG);
+  for (const [tile, c] of cnt) {
+    if (c >= 4) return true;
+    const red = 4 - c; // 用 red 张红中把该牌补成 4 张
+    if (red > wild) continue;
+    const restWild = wild - red;
+    let need = 0;
+    for (const [t2, c2] of cnt) {
+      if (t2 !== tile) need += c2 % 2;
+    }
+    if (need <= restWild && (restWild - need) % 2 === 0) return true;
+  }
+  return false;
+}
+
+/** 剩余牌能否拆成 meldCount 副刻子（含癞子）：红中可补刻 */
+function allKezisWithWild(cnt, wild, meldCount) {
+  let realCount = 0;
+  let need = 0;
+  for (const c of cnt.values()) {
+    realCount += c;
+    const r = c % 3;
+    if (r === 1) need += 2;
+    else if (r === 2) need += 1;
+  }
+  if (realCount === 0) return wild >= 3 * meldCount;
+  return need <= wild && (wild - need) % 3 === 0;
+}
+
+/** 碰碰胡（含癞子）：手牌部分（+ 明牌区刻子）拆成 4 刻 + 1 将，红中可补刻/将 */
+function isPengPengHuHongZhong(hand, melds, wild = 0) {
+  const m = (Array.isArray(melds) ? melds : []).filter((x) => x && typeof x === 'object' && x.tile);
+  const meldSets = m.length;
+  const handMeldCount = 4 - meldSets;
+  const cnt = countTiles(sortTiles(hand));
+  cnt.delete(HONG_ZHONG);
+  // 真对作将
+  for (const [tile, c] of cnt) {
+    if (c >= 2) {
+      const c2 = new Map(cnt);
+      decCount(c2, tile, 2);
+      if (allKezisWithWild(c2, wild, handMeldCount)) return true;
+    }
+  }
+  // 1 真 + 1 红中作将
+  if (wild >= 1) {
+    for (const [tile, c] of cnt) {
+      if (c >= 1) {
+        const c2 = new Map(cnt);
+        decCount(c2, tile, 1);
+        if (allKezisWithWild(c2, wild - 1, handMeldCount)) return true;
+      }
+    }
+  }
+  // 2 红中作将
+  if (wild >= 2) {
+    if (allKezisWithWild(new Map(cnt), wild - 2, handMeldCount)) return true;
+  }
+  return false;
+}
+
+/** 花色信息（红中玩法）：非红中牌花色 + 是否含红中 */
+function _suitInfoHongZhong(hand, melds) {
+  const tiles = hand.slice();
+  for (const m of melds || []) {
+    if (m && Array.isArray(m.tiles)) tiles.push(...m.tiles);
+  }
+  const nonWild = tiles.filter((t) => t !== HONG_ZHONG);
+  const hasWild = tiles.some((t) => t === HONG_ZHONG);
+  if (nonWild.length === 0) return { oneSuit: false, suit: null, hasWild };
+  const s = suitOf(nonWild[0]);
+  const oneSuit = nonWild.every((t) => suitOf(t) === s);
+  return { oneSuit, suit: s, hasWild };
+}
+
+/** 清一色：所有非红中牌同一花色，且无红中（红中算字牌，不计入清一色） */
+function isQingYiSeHongZhong(hand, melds) {
+  const si = _suitInfoHongZhong(hand, melds);
+  return si.oneSuit && !si.hasWild;
+}
+
+/** 混一色：所有非红中牌同一花色，且含红中（红中作字牌） */
+function isHunYiSeHongZhong(hand, melds) {
+  const si = _suitInfoHongZhong(hand, melds);
+  return si.oneSuit && si.hasWild;
+}
+
+/**
+ * 红中麻将胡牌判定（核心癞子胡）：
+ *  - 红中(z0)从手牌抽出为癞子 wildCount，可补顺子/刻子/将；
+ *  - 明牌区（碰/杠）为已成型面子，不可被红中替代补成；
+ *  - 支持平胡/碰碰胡/七小对/龙七对/清一色/混一色；
+ *  - opts.need258Eye=true（二五八将开关）：纯平胡的将牌必须为 2/5/8，大胡不受限；
+ *  - 起手 4 张红中直接天胡（开牌即胡）。
+ * @param {string[]} hand 手牌
+ * @param {object[]} [melds] 明牌区（碰/杠）
+ * @param {object} [opts] { need258Eye: boolean }
+ */
+function checkHuHongZhong(hand, melds, opts = {}) {
+  if (!Array.isArray(hand)) return false;
+  const m = (Array.isArray(melds) ? melds : []).filter((x) => x && typeof x === 'object' && x.tile);
+  const meldSets = m.length;
+  if (meldSets > 4) return false;
+  for (const mm of m) {
+    if (mm.type !== 'peng' && mm.type !== 'gang' && mm.type !== 'angang' && mm.type !== 'bugang') {
+      return false;
+    }
+    const c = countTiles(mm.tiles || []).get(mm.tile) || 0;
+    if (c < 3) return false;
+  }
+  const wild = countTiles(hand).get(HONG_ZHONG) || 0;
+  // 天胡：起手 4 张红中直接胡（无明牌区）
+  if (meldSets === 0 && hand.length === 14 && wild === 4) return true;
+  const need = (4 - meldSets) * 3 + 2;
+  if (hand.length !== need) return false;
+  // 门清七小对/龙七对（无明牌区）
+  if (meldSets === 0 && isQiDuiHongZhong(hand)) return true;
+  const cnt = countTiles(sortTiles(hand));
+  cnt.delete(HONG_ZHONG);
+  const meldCount = (hand.length - 2) / 3;
+  const pp = isPengPengHuHongZhong(hand, m, wild);
+  const qing = isQingYiSeHongZhong(hand, m);
+  const hun = isHunYiSeHongZhong(hand, m);
+  const isDaHu = pp || qing || hun; // 大胡不受二五八将限制
+  const need258 = !isDaHu && !!opts.need258Eye;
+  return _tryPairAsEyeWithWild(cnt, meldCount, wild, need258);
+}
+
+/** 摸/吃入某张牌后是否成胡（红中麻将） */
+function canHuHongZhongWith(hand, tile, melds, opts) {
+  return checkHuHongZhong([...hand, tile], melds, opts);
+}
+
+/** 红中玩法听口：摸入哪张可胡（28 种牌型，含红中） */
+function isTingHongZhong(hand, melds, opts) {
+  const res = [];
+  for (const t of getHongZhongTileTypes()) {
+    if (checkHuHongZhong([...hand, t], melds, opts)) res.push(t);
+  }
+  return res;
+}
+
+// 红中可碰/可杠，但不可代碰杠：碰/杠对象必须是真实红中或真实牌，红中不能当万能牌参与碰/杠。
+function canPengHongZhong(hand, tile) {
+  return (countTiles(hand).get(tile) || 0) >= 2;
+}
+
+function canGangHongZhong(hand, tile) {
+  return (countTiles(hand).get(tile) || 0) >= 3;
+}
+
+function canAnGangHongZhong(hand, tile) {
+  return (countTiles(hand).get(tile) || 0) >= 4;
+}
+
+/** 中码牌：1/5/9 万筒条 + 红中 */
+const ZHONG_MA_TILES = ['w1', 'w5', 'w9', 't1', 't5', 't9', 'b1', 'b5', 'b9', HONG_ZHONG];
+
+function isZhongMa(tile) {
+  return ZHONG_MA_TILES.includes(tile);
+}
+
+function countZhongMa(tiles) {
+  return (tiles || []).filter((t) => isZhongMa(t)).length;
+}
+
+/**
+ * 红中麻将番数（底分 1，倍数 = 2^总番）：
+ *  自摸/抢杠 +1、门清 +1、七小对 +2、龙七对 +3、碰碰胡 +2、混一色 +2、清一色 +4、
+ *  明杠(含补杠) +1、暗杠 +2、红中杠 +2（红中杠不再叠加明/暗杠）。
+ * @param {string[]} hand 胡牌手牌
+ * @param {object} info { winType:'zimo'|'dianpao'|'qianggang', menQing, melds }
+ * @param {boolean} [detail] true 时返回 { fan, mult, names }
+ */
+function calcMultiplierHongZhong(hand, info = {}, detail = false) {
+  const m = (Array.isArray(info.melds) ? info.melds : []).filter((x) => x && typeof x === 'object' && x.tile);
+  const wild = countTiles(hand).get(HONG_ZHONG) || 0;
+  let fan = 0;
+  const names = [];
+  // 自摸/抢杠
+  const winType = info.winType || 'zimo';
+  if (winType === 'zimo' || winType === 'qianggang') {
+    fan += 1;
+    names.push('自摸');
+  }
+  // 门清：默认没有碰/明杠/补杠（暗杠不算破门清）
+  const menQing =
+    info.menQing !== undefined
+      ? info.menQing
+      : !m.some((x) => x.type === 'peng' || x.type === 'gang' || x.type === 'bugang');
+  if (menQing) {
+    fan += 1;
+    names.push('门清');
+  }
+  // 牌型
+  let hasShape = false;
+  if (m.length === 0) {
+    if (isLongQiDuiHongZhong(hand)) {
+      fan += 3;
+      names.push('龙七对');
+      hasShape = true;
+    } else if (isQiDuiHongZhong(hand)) {
+      fan += 2;
+      names.push('七小对');
+      hasShape = true;
+    }
+  }
+  if (isPengPengHuHongZhong(hand, m, wild)) {
+    fan += 2;
+    names.push('碰碰胡');
+    hasShape = true;
+  }
+  const si = _suitInfoHongZhong(hand, m);
+  if (si.oneSuit) {
+    if (!si.hasWild) {
+      fan += 4;
+      names.push('清一色');
+    } else {
+      fan += 2;
+      names.push('混一色');
+    }
+    hasShape = true;
+  }
+  if (!hasShape) names.push('平胡');
+  // 杠
+  for (const mm of m) {
+    if (mm.tile === HONG_ZHONG) {
+      fan += 2;
+      names.push('红中杠');
+    } else if (mm.type === 'angang') {
+      fan += 2;
+      names.push('暗杠');
+    } else if (mm.type === 'gang' || mm.type === 'bugang') {
+      fan += 1;
+      names.push('明杠');
+    }
+  }
+  const mult = Math.pow(2, fan);
+  return detail ? { fan, mult, names } : { fan, mult };
+}
+
 module.exports = {
   SUITS,
   SUIT_NAMES,
@@ -464,4 +842,24 @@ module.exports = {
   isYiTiaoLong,
   isShiSanYao,
   calcMultiplier136,
+  // 红中麻将（西安红中）模块
+  HONG_ZHONG,
+  getHongZhongTileTypes,
+  isHongZhong,
+  createTiles112,
+  checkHuHongZhong,
+  canHuHongZhongWith,
+  isTingHongZhong,
+  canPengHongZhong,
+  canGangHongZhong,
+  canAnGangHongZhong,
+  isQiDuiHongZhong,
+  isLongQiDuiHongZhong,
+  isPengPengHuHongZhong,
+  isQingYiSeHongZhong,
+  isHunYiSeHongZhong,
+  calcMultiplierHongZhong,
+  ZHONG_MA_TILES,
+  isZhongMa,
+  countZhongMa,
 };
