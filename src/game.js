@@ -24,6 +24,7 @@ const SETTLE_TIMEOUT_MS = 60000; // 结算确认超时：在线真人 60 秒未�
 const MAX_ROOMS = 100;
 const MAX_LOGS = 200;
 const MAX_CHAT = 50;
+const PAOZI_AMOUNT = 1; // 红中麻将：下炮子炮注（分/炮）
 
 function nowTime() {
   const d = new Date();
@@ -99,6 +100,7 @@ class GameServer {
         case 'play_tile': return this._playTile(p, msg);
         case 'ting': return this._ting(p, msg);
         case 'koupoint': return this._koupoint(p, msg);
+        case 'paozi': return this._paozi(p, msg);
         case 'peng': return this._peng(p);
         case 'gang': return this._gang(p, msg);
         case 'hu': return this._hu(p);
@@ -475,7 +477,8 @@ class GameServer {
       this._broadcastRoomState(room);
       return;
     }
-    this._dealRound(room);
+    if (room.settings.variant === 'hongzhong') this._dealRoundHongZhong(room);
+    else this._dealRound(room);
   }
 
   _addAI(room) {
@@ -609,6 +612,7 @@ class GameServer {
   _koupoint(p, msg) {
     const room = this.rooms.get(p.roomId);
     const g = room && room.game;
+    if (this._isHongZhong(room)) return this._err(p, '红中麻将无扣点玩法');
     if (!room || !g || room.state !== 'playing' || g.stage !== 'koupoint') {
       return this._err(p, '当前不在扣点阶段');
     }
@@ -732,7 +736,8 @@ class GameServer {
     for (let i = 1; i <= 4; i++) {
       const s = (fromSeat + i) % 4;
       if (room.players[s]) {
-        this._drawTile(room, s);
+        if (this._isHongZhong(room)) this._drawTileHongZhong(room, s);
+        else this._drawTile(room, s);
         return;
       }
     }
@@ -740,6 +745,7 @@ class GameServer {
 
   /** 出牌后的响应判定 */
   _afterDiscard(room, discarder) {
+    if (this._isHongZhong(room)) return this._afterDiscardHongZhong(room, discarder);
     const g = room.game;
     const tile = g.lastDiscard.tile;
     const responders = [];
@@ -781,6 +787,7 @@ class GameServer {
   }
 
   _tryResolvePending(room, g, pending) {
+    if (this._isHongZhong(room)) return this._tryResolvePendingHongZhong(room, g, pending);
     if (!pending) return;
     const allDecided = pending.responders.every((r) => r.choice !== null);
     if (!allDecided) return;
@@ -1238,7 +1245,8 @@ class GameServer {
     // 全员确认：清理所有结算确认超时定时器
     for (let s = 0; s < 4; s++) this._clearTimer(room, 'settle:' + s);
     this._log(room, '所有玩家已确认，开始下一局');
-    this._dealRound(room);
+    if (room.settings.variant === 'hongzhong') this._dealRoundHongZhong(room);
+    else this._dealRound(room);
   }
 
   // ============ 玩家操作（全部服务端校验） ============
@@ -1254,7 +1262,7 @@ class GameServer {
     if (g.stage !== 'draw') return this._err(p, '当前不能出牌');
     if (g.turn !== p.seat) return this._err(p, '不是您的回合');
     const tile = String((msg && msg.tile) || '');
-    if (!rules.getTileTypes().includes(tile)) return this._err(p, '非法的牌');
+    if (!this._hzTileTypes(room).includes(tile)) return this._err(p, '非法的牌');
     const hand = g.hands[p.seat];
     const idx = hand.indexOf(tile);
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
@@ -1276,6 +1284,7 @@ class GameServer {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
     const g = room.game;
+    if (this._isHongZhong(room)) return this._err(p, '红中麻将不支持报听玩法');
     if (room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
     if (g.stage !== 'draw') return this._err(p, '当前不能报听');
     if (g.turn !== p.seat) return this._err(p, '不是您的回合');
@@ -1346,8 +1355,8 @@ class GameServer {
       if (!r) return this._err(p, '您没有可响应的操作');
       if (r.choice !== null) return this._err(p, '您已响应过');
       if (!r.canGang) return this._err(p, '不能杠');
-      // 双保险：报听玩家明杠听张（响应判定已过滤，此处防绕过）
-      if (g.tingSeats.includes(p.seat) && rules.isTing(g.hands[p.seat], g.melds[p.seat]).includes(g.pending.tile)) {
+      // 双保险：报听玩家明杠听张（响应判定已过滤，此处防绕过）；红中无报听
+      if (!this._isHongZhong(room) && g.tingSeats.includes(p.seat) && rules.isTing(g.hands[p.seat], g.melds[p.seat]).includes(g.pending.tile)) {
         return this._err(p, '报听后不能杠听张，会破坏听口');
       }
       r.choice = 'gang';
@@ -1361,9 +1370,9 @@ class GameServer {
     if (g.stage === 'draw' && g.turn === p.seat) {
       if (g.drawnTile === null) return this._err(p, '当前不能杠');
       const tile = String((msg && msg.tile) || '');
-      if (!rules.getTileTypes().includes(tile)) return this._err(p, '非法的牌');
-      // 报听后杠不能破坏听张：去掉刚摸的牌后，杠牌若仍在听口中则拒绝
-      if (g.tingSeats.includes(p.seat)) {
+      if (!this._hzTileTypes(room).includes(tile)) return this._err(p, '非法的牌');
+      // 报听后杠不能破坏听张：去掉刚摸的牌后，杠牌若仍在听口中则拒绝；红中无报听
+      if (!this._isHongZhong(room) && g.tingSeats.includes(p.seat)) {
         const base = g.hands[p.seat].slice();
         const di = base.lastIndexOf(g.drawnTile);
         if (di >= 0) base.splice(di, 1);
@@ -1372,6 +1381,17 @@ class GameServer {
         }
       }
       const gangType = msg && msg.gangType === 'bugang' ? 'bugang' : 'angang';
+      // 红中麻将：杠不即时结算杠分，走红中杠流程（暗杠不可抢、补杠触发抢杠）
+      if (this._isHongZhong(room)) {
+        if (gangType === 'angang') {
+          if (!rules.canAnGangHongZhong(g.hands[p.seat], tile)) return this._err(p, '不能暗杠');
+          this._doAnGangHongZhong(room, p.seat, tile);
+        } else {
+          if (!rules.canBuGang(g.hands[p.seat], g.melds[p.seat], tile)) return this._err(p, '不能补杠');
+          this._doBuGangHongZhong(room, p.seat, tile);
+        }
+        return;
+      }
       if (gangType === 'angang') {
         if (!rules.canAnGang(g.hands[p.seat], tile)) return this._err(p, '不能暗杠');
         this._doAnGang(room, p.seat, tile);
@@ -1408,6 +1428,15 @@ class GameServer {
 
     // 行动阶段：自摸
     if (g.stage === 'draw' && g.turn === p.seat && g.drawnTile !== null) {
+      // 红中麻将：癞子胡判定（无点数限制），按红中结算
+      if (this._isHongZhong(room)) {
+        if (!rules.checkHuHongZhong(g.hands[p.seat], g.melds[p.seat], { need258Eye: !!room.settings.need258Eye })) {
+          return this._err(p, '手牌不构成胡牌');
+        }
+        this._settleHuHongZhong(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
+        this._endRound(room);
+        return;
+      }
       if (!rules.checkHu(g.hands[p.seat], g.melds[p.seat])) return this._err(p, '手牌不构成胡牌');
       // 自摸胡点数限制：1/2 点不能胡
       if (!rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo')) {
@@ -1544,8 +1573,13 @@ class GameServer {
           pl._auto = Math.max(0, (pl._auto || 0) - 1);
           return;
         }
-        if (g.stage === 'draw' && g.turn === seat) {
-          const decision = ai.decideDrawAction(g, room, seat);
+        if (g.stage === 'paozi' && g.paozi && g.paozi[seat] == null) {
+          // 红中麻将：下炮阶段 AI / 托管自动下 1 炮
+          this._autoFillPaozi(room, seat);
+        } else if (g.stage === 'draw' && g.turn === seat) {
+          const decision = this._isHongZhong(room)
+            ? this._decideHongZhongDrawAction(g, room, seat)
+            : ai.decideDrawAction(g, room, seat);
           if (decision.type === 'hu') this._hu(pl, {});
           else if (decision.type === 'ting') this._ting(pl, { tile: decision.tile });
           else if (decision.type === 'gang') this._gang(pl, { tile: decision.tile, gangType: decision.gangType });
@@ -1553,7 +1587,9 @@ class GameServer {
         } else if (g.stage === 'response' && g.pending) {
           const r = g.pending.responders.find((x) => x.seat === seat);
           if (r && r.choice === null) {
-            const choice = ai.decideResponse(g, room, seat, r);
+            const choice = this._isHongZhong(room)
+              ? this._decideHongZhongResponse(g, room, seat, r)
+              : ai.decideResponse(g, room, seat, r);
             if (choice === 'hu') this._hu(pl, {});
             else if (choice === 'gang') this._gang(pl, {});
             else if (choice === 'peng') this._peng(pl);
@@ -1643,6 +1679,7 @@ class GameServer {
       kouPoints: g.kouPoints.slice(),
       kouTiles: g.kouTiles.map((t) => (t ? 'back' : null)),
       gangLogs: g.gangLogs.slice(),
+      paozi: g.paozi ? g.paozi.slice() : null, // 红中麻将：下炮子状态（null=未下炮阶段 / 0=不下 / 1=下1炮）
       players,
       pending: g.pending
         ? {
@@ -1662,7 +1699,7 @@ class GameServer {
       settings: room.settings,
       logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
-    if (isDrawTurn && !g.tingSeats.includes(viewerSeat)) {
+    if (isDrawTurn && !this._isHongZhong(room) && !g.tingSeats.includes(viewerSeat)) {
       // 听牌提示：打出某张后，听口剩余可胡张数（4 - 已见张数）
       // 性能优化：以 手牌牌型/自身明牌/已见牌 快照为 key 缓存，手牌未变化时直接复用，
       // 避免每次广播对整副牌型做 去重手牌×34牌型×checkHu 回溯重算（约 2000 次 checkHu）。
@@ -1719,6 +1756,7 @@ class GameServer {
   _buildDrawPrompt(room, seat) {
     const g = room.game;
     const hand = g.hands[seat];
+    if (this._isHongZhong(room)) return this._buildDrawPromptHongZhong(room, seat);
     const actions = ['play'];
     const gangOptions = [];
     // 碰后（未摸牌）也可报听：碰完即听立即识别，不待下一轮摸牌；碰后手牌结构不允许胡/杠，只给 play/ting
@@ -1862,12 +1900,30 @@ class GameServer {
     if (!s || typeof s !== 'object') return null;
     const totalRounds = Number(s.totalRounds);
     if (![0, 4, 8, 12].includes(totalRounds)) return null;
+    const variant = s.variant === 'hongzhong' ? 'hongzhong' : 'koudian';
+    // 红中麻将专属设置：胡牌模式 A/B、二五八将开关、下炮子开关、扎码张数（0=不扎码 / 1/2/4/6）
+    if (variant === 'hongzhong') {
+      const huMode = s.huMode === 'B' ? 'B' : 'A';
+      const zhaMa = Number(s.zhaMa) || 0;
+      if (![0, 1, 2, 4, 6].includes(zhaMa)) return null;
+      return {
+        totalRounds,
+        aiFill: !!s.aiFill,
+        variant,
+        huMode,
+        need258Eye: !!s.need258Eye,
+        enablePaozi: !!s.enablePaozi,
+        zhaMa,
+        dealerFlow: 'keep', // 红中：流局庄家连庄（设计固定）
+      };
+    }
     const qingYiSeMult = Number(s.qingYiSeMult) || 4;
     const yiTiaoLongMult = Number(s.yiTiaoLongMult) || 4;
     const shiSanYaoMult = Number(s.shiSanYaoMult) || 8;
     return {
       totalRounds,
       aiFill: !!s.aiFill,
+      variant,
       allowTing: true, // 报听为 136 必选核心规则
       enableQingYiSe: !!s.enableQingYiSe,
       enableYiTiaoLong: !!s.enableYiTiaoLong,
@@ -2058,6 +2114,588 @@ class GameServer {
   _err(p, message) {
     this._send(p, { type: 'error', message });
     return null;
+  }
+
+  // ============ 红中麻将流程模块（西安红中：112 张无风、庄14闲13、禁吃、癞子胡、抢杠、下炮子、扎码） ============
+
+  _isHongZhong(room) {
+    return !!(room && room.settings && room.settings.variant === 'hongzhong');
+  }
+
+  _hzTileTypes(room) {
+    return rules.getHongZhongTileTypes();
+  }
+
+  _dealRoundHongZhong(room) {
+    room.roundNo = (room.roundNo || 0) + 1;
+    const wall = rules.shuffle(rules.createTiles112());
+    const g = (room.game = {
+      roundNo: room.roundNo,
+      wall,
+      wallPos: 0,
+      hands: [[], [], [], []],
+      melds: [[], [], [], []],
+      discards: [[], [], [], []],
+      kouTiles: [[], [], [], []],
+      kouPoints: [1, 1, 1, 1], // 红中无扣点玩法，固定 1
+      gangLogs: [], // 本局杠分记录（红中杠分并入胡牌番数，这里留记录）
+      turn: -1,
+      stage: 'paozi', // 先下炮子，再进入行牌
+      drawnTile: null,
+      newTiles: [null, null, null, null],
+      lastDiscard: null,
+      lastAction: null,
+      pending: null,
+      dealer: -1,
+      winners: null,
+      tingSeats: [], // 红中无报听，恒空
+      paozi: [null, null, null, null], // 下炮子：null=未选 / 0=不下 / 1=下1炮
+      zhaMaTiles: null, // 本局扎码牌（结算时从牌墙补抓）
+      hzWinners: null, // 红中胡牌赢家明细（一炮多响时多个）
+      startAt: Date.now(),
+    });
+    // 庄家：谁胡谁坐庄；流局连庄（红中固定连庄）；首局随机
+    if (room.lastWinner != null && room.players[room.lastWinner]) {
+      room.dealer = room.lastWinner;
+    } else if (room.dealer == null || !room.players[room.dealer]) {
+      room.dealer = Math.floor(Math.random() * 4);
+    }
+    // 流局：room.dealer 保持不变（连庄）
+    g.dealer = room.dealer;
+    for (const pl of room.players) if (pl) pl.roundScore = 0;
+    room.state = 'playing';
+    this._log(room, `第 ${room.roundNo} 局开始（红中麻将），${this._pName(room, g.dealer)} 坐庄`);
+
+    // 发牌：庄 14 张、闲 13 张
+    for (let i = 0; i < 13; i++) {
+      for (let s = 0; s < 4; s++) g.hands[s].push(g.wall[g.wallPos++]);
+    }
+    g.hands[g.dealer].push(g.wall[g.wallPos++]);
+    this._broadcastRoomState(room);
+    this._broadcastGameState(room);
+
+    // 下炮子阶段（可开关）：每人 0/1 炮，AI/托管/断线自动下 1 炮
+    if (room.settings.enablePaozi) {
+      for (let s = 0; s < 4; s++) {
+        const pl = room.players[s];
+        if (!pl) continue;
+        if (pl.isAI || pl.hosted || !pl.connected) {
+          g.paozi[s] = 1;
+          this._log(room, `${this._pName(room, s)} 自动下炮子 1 炮`);
+        } else {
+          this._setTimer(room, 'paozi:' + s, HUMAN_TIMEOUT_MS, () => this._autoFillPaozi(room, s));
+        }
+      }
+      this._promptPaozi(room);
+      if (g.paozi.every((x) => x != null)) this._tryStartAfterPaozi(room);
+      return;
+    }
+    // 未开启下炮子：全部按 0 处理，直接开始行牌
+    g.paozi = [0, 0, 0, 0];
+    this._startHongZhongPlay(room, g.dealer);
+  }
+
+  _autoFillPaozi(room, seat) {
+    const g = room && room.game;
+    if (!room || !g || room.state !== 'playing' || g.stage !== 'paozi') return;
+    if (g.paozi[seat] != null) return;
+    g.paozi[seat] = 1;
+    this._log(room, `${this._pName(room, seat)} 未选择下炮子，系统自动下 1 炮`);
+    const pl = room.players[seat];
+    if (pl && !pl.isAI && !pl.hosted) {
+      pl.hosted = true;
+      this._log(room, `${this._pName(room, seat)} 下炮子阶段未确认，已由 AI 托管`);
+      this._broadcastRoomState(room);
+    }
+    this._broadcastGameState(room);
+    if (g.paozi.every((x) => x != null)) this._tryStartAfterPaozi(room);
+  }
+
+  _promptPaozi(room) {
+    const g = room.game;
+    for (let s = 0; s < 4; s++) {
+      const pl = room.players[s];
+      if (pl && !pl.isAI && pl.connected && g.paozi[s] == null) {
+        this._send(pl, { type: 'action_prompt', prompt: { type: 'paozi' } });
+      }
+    }
+  }
+
+  _paozi(p, msg) {
+    const room = this.rooms.get(p.roomId);
+    const g = room && room.game;
+    if (!room || !g || room.state !== 'playing' || g.stage !== 'paozi') {
+      return this._err(p, '当前不在下炮子阶段');
+    }
+    if (g.paozi[p.seat] != null) return this._err(p, '本局已选择过炮子');
+    const v = Number(msg && msg.value);
+    if (v !== 0 && v !== 1) return this._err(p, '炮子只能选 0 或 1');
+    g.paozi[p.seat] = v;
+    this._log(room, `${this._pName(room, p.seat)} ${v === 1 ? '下 1 炮' : '不下炮子'}`);
+    this._broadcastGameState(room);
+    if (g.paozi.every((x) => x != null)) this._tryStartAfterPaozi(room);
+  }
+
+  _tryStartAfterPaozi(room) {
+    const g = room.game;
+    if (!g || g.stage !== 'paozi') return;
+    if (!g.paozi.every((x) => x != null)) return;
+    this._startHongZhongPlay(room, g.dealer);
+  }
+
+  /** 炮子完成后正式开局：庄家摸第 14 张开始行牌 */
+  _startHongZhongPlay(room, seat) {
+    const g = room.game;
+    g.stage = 'draw';
+    this._drawTileHongZhong(room, seat);
+  }
+
+  _drawTileHongZhong(room, seat) {
+    const g = room.game;
+    // 牌墙剩 6 墩（12 张）直接流局
+    if (g.wall.length - g.wallPos <= 12) {
+      this._settleDrawHongZhong(room);
+      return;
+    }
+    const tile = g.wall[g.wallPos++];
+    g.hands[seat].push(tile);
+    g.turn = seat;
+    g.stage = 'draw';
+    g.drawnTile = tile;
+    g.lastDiscard = null;
+    g.lastAction = null;
+    g.newTiles[seat] = tile;
+    this._log(room, `${this._pName(room, seat)} 摸到 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 摸牌`);
+    const cur = room.players[seat];
+    if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
+    this._afterTurnStart(room, seat);
+  }
+
+  _drawAfterGangHongZhong(room, seat) {
+    const g = room.game;
+    // 牌墙剩 6 墩（12 张）直接流局
+    if (g.wall.length - g.wallPos <= 12) {
+      this._settleDrawHongZhong(room);
+      return;
+    }
+    const tile = g.wall[g.wallPos++];
+    g.hands[seat].push(tile);
+    g.turn = seat;
+    g.stage = 'draw';
+    g.drawnTile = tile;
+    g.lastDiscard = null;
+    g.lastAction = { type: 'gang' }; // 保持杠标记 → 杠上开花
+    g.newTiles[seat] = tile;
+    this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`);
+    const cur = room.players[seat];
+    if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
+    this._afterTurnStart(room, seat);
+  }
+
+  /** 红中出牌响应：禁吃；胡>杠>碰；模式 B 不允许点炮胡；一炮多响（胡牌可多响，杠/碰取最近） */
+  _afterDiscardHongZhong(room, discarder) {
+    const g = room.game;
+    const tile = g.lastDiscard.tile;
+    const modeB = room.settings.huMode === 'B';
+    const responders = [];
+    for (let s = 0; s < 4; s++) {
+      if (!room.players[s] || s === discarder) continue;
+      const canHu =
+        !modeB &&
+        rules.canHuHongZhongWith(g.hands[s], tile, g.melds[s], { need258Eye: !!room.settings.need258Eye });
+      const canGang = rules.canGangHongZhong(g.hands[s], tile);
+      const canPeng = rules.canPengHongZhong(g.hands[s], tile);
+      if (canHu || canGang || canPeng) {
+        responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
+      }
+    }
+    if (responders.length === 0) {
+      g.lastAction = null;
+      this._nextTurn(room, discarder);
+      return;
+    }
+    g.stage = 'response';
+    g.pending = { type: 'discard', tile, discarder, responders };
+    this._broadcastGameState(room);
+    for (const r of responders) {
+      this._prompt(room, r.seat, this._buildResponsePrompt(room, r));
+      this._setTimer(room, 'resp:' + r.seat, RESPONSE_TIMEOUT_MS, () => {
+        const g2 = room.game;
+        if (room.state === 'playing' && g2 === g && g.pending === r._pendingRef && r.choice === null) {
+          r.choice = 'pass';
+          this._tryResolvePendingHongZhong(room, g, g.pending);
+        }
+      });
+      r._pendingRef = g.pending;
+      if (this._shouldAutoAct(room, r.seat)) this._scheduleAutoAct(room, r.seat);
+    }
+  }
+
+  /** 红中响应收拢：胡牌一炮多响（全部同时胡）；杠/碰取距离最近一家 */
+  _tryResolvePendingHongZhong(room, g, pending) {
+    if (!pending) return;
+    const allDecided = pending.responders.every((r) => r.choice !== null);
+    if (!allDecided) return;
+    for (const r of pending.responders) this._clearTimer(room, 'resp:' + r.seat);
+    g.pending = null;
+
+    const huList = pending.responders.filter((r) => r.choice === 'hu');
+    if (huList.length > 0) {
+      const discarder = pending.discarder;
+      for (const r of huList) {
+        this._settleHuHongZhong(room, r.seat, {
+          winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
+          tile: pending.tile,
+          discarder,
+        });
+      }
+      this._finishHuRoundHongZhong(room);
+      return;
+    }
+    const gangList = pending.responders.filter((r) => r.choice === 'gang');
+    if (gangList.length > 0) {
+      const pick = this._nearestSeat(gangList.map((r) => r.seat), pending.discarder);
+      this._doGangFromDiscardHongZhong(room, pick, pending.tile, pending.discarder);
+      return;
+    }
+    const pengList = pending.responders.filter((r) => r.choice === 'peng');
+    if (pengList.length > 0) {
+      const pick = this._nearestSeat(pengList.map((r) => r.seat), pending.discarder);
+      this._doPeng(room, pick, pending.tile, pending.discarder);
+      return;
+    }
+    g.lastAction = null;
+    this._nextTurn(room, pending.discarder);
+  }
+
+  /** 红中明杠（碰杠）：不可抢，杠分计入番数 */
+  _doGangFromDiscardHongZhong(room, seat, tile, discarder) {
+    const g = room.game;
+    const hand = g.hands[seat];
+    let removed = 0;
+    for (let i = 0; i < hand.length && removed < 3; i++) {
+      if (hand[i] === tile) {
+        hand.splice(i, 1);
+        i--;
+        removed++;
+      }
+    }
+    if (discarder != null && g.discards[discarder]) {
+      const arr = g.discards[discarder];
+      for (let i = arr.length - 1; i >= 0; i--) {
+        if (arr[i] === tile) {
+          arr.splice(i, 1);
+          break;
+        }
+      }
+    }
+    g.melds[seat].push({ type: 'gang', tile, tiles: [tile, tile, tile, tile] });
+    g.lastDiscard = null;
+    g.lastAction = { type: 'gang' };
+    g.turn = seat;
+    g.newTiles[seat] = null;
+    g.gangLogs.push({ seat, tile, type: 'gang', perSeat: 0, points: 0, kou: 1 });
+    this._log(room, `${this._pName(room, seat)} 明杠了 ${rules.tileName(tile)}`);
+    this._drawAfterGangHongZhong(room, seat);
+  }
+
+  /** 红中暗杠：不可抢，杠分计入番数 */
+  _doAnGangHongZhong(room, seat, tile) {
+    const g = room.game;
+    const hand = g.hands[seat];
+    let removed = 0;
+    for (let i = 0; i < hand.length && removed < 4; i++) {
+      if (hand[i] === tile) {
+        hand.splice(i, 1);
+        i--;
+        removed++;
+      }
+    }
+    g.melds[seat].push({ type: 'angang', tile, tiles: [tile, tile, tile, tile] });
+    g.lastAction = { type: 'gang' };
+    g.newTiles[seat] = null;
+    g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 0, points: 0, kou: 1 });
+    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}`);
+    this._drawAfterGangHongZhong(room, seat);
+  }
+
+  /** 红中补杠：唯一可抢杠的杠型；无人抢则正常补杠 */
+  _doBuGangHongZhong(room, seat, tile) {
+    const g = room.game;
+    // 先检查抢杠胡（一炮多响：所有可胡者都能抢）
+    const grabbers = [];
+    for (let s = 0; s < 4; s++) {
+      if (s === seat || !room.players[s]) continue;
+      if (rules.canHuHongZhongWith(g.hands[s], tile, g.melds[s], { need258Eye: !!room.settings.need258Eye })) {
+        grabbers.push(s);
+      }
+    }
+    if (grabbers.length > 0) {
+      g.stage = 'response';
+      g.pending = {
+        type: 'qianggang',
+        tile,
+        discarder: seat,
+        responders: grabbers.map((s) => ({
+          seat: s,
+          canHu: true,
+          canGang: false,
+          canPeng: false,
+          choice: null,
+        })),
+      };
+      this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}，触发抢杠胡判定`);
+      this._broadcastGameState(room);
+      for (const r of g.pending.responders) {
+        this._prompt(room, r.seat, this._buildResponsePrompt(room, r));
+        this._setTimer(room, 'resp:' + r.seat, RESPONSE_TIMEOUT_MS, () => {
+          const g2 = room.game;
+          if (room.state === 'playing' && g2 === g && g.pending === r._pendingRef && r.choice === null) {
+            r.choice = 'pass';
+            this._tryResolvePendingHongZhong(room, g, g.pending);
+          }
+        });
+        r._pendingRef = g.pending;
+        if (this._shouldAutoAct(room, r.seat)) this._scheduleAutoAct(room, r.seat);
+      }
+      return;
+    }
+    // 无人抢杠 → 正常补杠
+    const hand = g.hands[seat];
+    const idx = hand.indexOf(tile);
+    if (idx >= 0) hand.splice(idx, 1);
+    const m = g.melds[seat].find((mm) => mm.type === 'peng' && mm.tile === tile);
+    if (m) {
+      m.type = 'bugang';
+      m.tiles.push(tile);
+    }
+    g.lastAction = { type: 'gang' };
+    g.newTiles[seat] = null;
+    g.gangLogs.push({ seat, tile, type: 'bugang', perSeat: 0, points: 0, kou: 1 });
+    this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}`);
+    this._drawAfterGangHongZhong(room, seat);
+  }
+
+  /** 红中胡牌结算：番数倍数 + 炮子分 + 扎码翻倍；点炮/抢杠由放炮者（被抢杠者）包赔三家；自摸三家各付 */
+  _settleHuHongZhong(room, winnerSeat, info) {
+    const g = room.game;
+    const hand = g.hands[winnerSeat].slice();
+    if (info.winType !== 'zimo') hand.push(info.tile);
+    const calc = rules.calcMultiplierHongZhong(hand, { winType: info.winType, melds: g.melds[winnerSeat] }, true);
+    const fan = calc.fan;
+    const mult = calc.mult;
+    const names = calc.names;
+    const winLabel =
+      info.winType === 'zimo' ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+
+    // 扎码：从牌墙补抓，1/5/9 万筒条 + 红中中码，每张翻一倍
+    let zhaMaCount = 0;
+    const zhaMaTiles = [];
+    if (room.settings.zhaMa > 0 && g.wall.length - g.wallPos > 0) {
+      const n = Math.min(room.settings.zhaMa, g.wall.length - g.wallPos);
+      for (let i = 0; i < n; i++) {
+        const t = g.wall[g.wallPos++];
+        zhaMaTiles.push(t);
+        if (rules.isZhongMa(t)) zhaMaCount++;
+      }
+    }
+    g.zhaMaTiles = zhaMaTiles;
+
+    // 倍数 = 2^总番；炮子分 = 全桌炮子数（每炮 +1 分）；中码每张翻一倍
+    const paoziTotal = g.paozi.reduce((a, b) => a + b, 0);
+    const scorePer = (mult + paoziTotal) * Math.pow(2, zhaMaCount);
+    const maText = zhaMaCount > 0 ? `，中码 ${zhaMaCount} 张翻倍` : '';
+
+    const payments = [];
+    if (info.winType === 'zimo') {
+      // 自摸：三家各付 1 份
+      for (let s = 0; s < 4; s++) {
+        if (s === winnerSeat || !room.players[s]) continue;
+        room.players[s].score -= scorePer;
+        room.players[s].roundScore -= scorePer;
+      }
+      room.players[winnerSeat].score += scorePer * 3;
+      room.players[winnerSeat].roundScore += scorePer * 3;
+      payments.push({
+        kind: 'hu',
+        title: `自摸（${fan}番 ×${mult}倍${maText}）· 三家各付 ${scorePer} 分`,
+        toSeat: winnerSeat,
+        toAmount: scorePer * 3,
+        rows: [0, 1, 2, 3]
+          .filter((s) => s !== winnerSeat)
+          .map((s) => ({ seat: s, amount: -scorePer, role: '闲家' })),
+      });
+    } else {
+      // 点炮/抢杠：放炮者（被抢杠者）包赔三家
+      const loser = room.players[info.discarder];
+      if (loser) {
+        loser.score -= scorePer * 3;
+        loser.roundScore -= scorePer * 3;
+      }
+      room.players[winnerSeat].score += scorePer * 3;
+      room.players[winnerSeat].roundScore += scorePer * 3;
+      const role = info.winType === 'qianggang' ? '被抢杠者（包三家）' : '放炮者（包三家）';
+      payments.push({
+        kind: 'hu',
+        title: `${winLabel}（${fan}番 ×${mult}倍${maText}）· ${role}独赔 ${scorePer * 3} 分`,
+        toSeat: winnerSeat,
+        toAmount: scorePer * 3,
+        rows: [{ seat: info.discarder, amount: -scorePer * 3, role }],
+      });
+    }
+
+    g.hzWinners = g.hzWinners || [];
+    const isMulti = g.hzWinners.length > 0; // 一炮多响：已有赢家记录
+    g.hzWinners.push({
+      winnerSeat,
+      winType: info.winType,
+      tile: info.tile,
+      discarder: info.winType === 'zimo' ? null : info.discarder,
+      fan,
+      mult,
+      names,
+      scorePer,
+      zhaMaCount,
+      zhaMaTiles: zhaMaTiles.slice(),
+    });
+    // 多响时累计各家支付记录（杠支付只在最后一次补上，避免重复）
+    g._accPayments = g._accPayments || [];
+    if (!isMulti) g._accPayments = [];
+    g._accPayments = g._accPayments.concat(payments);
+    const gangPay = this._buildGangPayments(room);
+    const allPayments = isMulti ? g._accPayments.concat(gangPay) : g._accPayments.concat(gangPay);
+    // 兼容结算视图（一炮多响时保留最后一家主信息 + winners 明细列表）
+    g.winners = {
+      type: 'hu',
+      variant: 'hongzhong',
+      winnerSeat,
+      winType: info.winType,
+      winners: g.hzWinners.slice(),
+      totalFan: fan,
+      mult,
+      fanNames: names,
+      zhaMaCount,
+      zhaMaTiles: zhaMaTiles.slice(),
+      paozi: g.paozi.slice(),
+      kouPoints: g.kouPoints.slice(),
+      gangLogs: g.gangLogs.slice(),
+      score: scorePer * 3,
+      tile: info.tile,
+      discarder: info.winType === 'zimo' ? null : info.discarder,
+      payments: allPayments,
+      hands: this._revealHandsWithWinTile(room, winnerSeat, info),
+    };
+    room.lastWinner = winnerSeat;
+    this._log(
+      room,
+      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${fan}番 ×${mult}倍${maText} → ${scorePer * 3} 分）`
+    );
+  }
+
+  /** 红中胡牌收尾：广播状态 + 结算 + 结束本局 */
+  _finishHuRoundHongZhong(room) {
+    this._broadcastGameState(room);
+    this._sendSettlement(room);
+    this._broadcastRoomState(room);
+    this._endRound(room);
+  }
+
+  /** 红中流局：无胡牌支付，庄家连庄 */
+  _settleDrawHongZhong(room) {
+    const g = room.game;
+    g.stage = 'over';
+    g.winners = {
+      type: 'draw',
+      variant: 'hongzhong',
+      mode136: true,
+      kouPoints: g.kouPoints.slice(),
+      gangLogs: g.gangLogs.slice(),
+      payments: [],
+      hands: this._revealHands(room),
+    };
+    room.lastWinner = null; // 红中：流局庄家连庄（room.dealer 保持不变）
+    this._log(room, '牌墙剩 6 墩，流局（红中麻将）');
+    this._broadcastGameState(room);
+    this._sendSettlement(room);
+    this._broadcastRoomState(room);
+    this._endRound(room);
+  }
+
+  /** 红中行牌提示：胡/杠/出牌（无报听、禁吃） */
+  _buildDrawPromptHongZhong(room, seat) {
+    const g = room.game;
+    const hand = g.hands[seat];
+    const actions = ['play'];
+    const gangOptions = [];
+    // 碰后（未摸牌）：手牌结构不允许胡/杠，只给出牌
+    if (g.lastAction && g.lastAction.type === 'peng') {
+      return { type: 'draw', actions, gangOptions, canHu: false, canDeclareTing: false, timeoutMs: HUMAN_TIMEOUT_MS };
+    }
+    const canSelfHu = rules.checkHuHongZhong(hand, g.melds[seat], { need258Eye: !!room.settings.need258Eye });
+    if (canSelfHu) actions.push('hu');
+    const cnt = rules.countTiles(hand);
+    for (const [t, c] of cnt) {
+      if (c === 4) gangOptions.push({ gangType: 'angang', tile: t });
+    }
+    for (const m of g.melds[seat]) {
+      if (m.type === 'peng' && cnt.get(m.tile) >= 1) {
+        gangOptions.push({ gangType: 'bugang', tile: m.tile });
+      }
+    }
+    if (gangOptions.length) actions.push('gang');
+    return {
+      type: 'draw',
+      actions,
+      gangOptions,
+      canHu: canSelfHu,
+      canDeclareTing: false,
+      timeoutMs: HUMAN_TIMEOUT_MS,
+    };
+  }
+
+  // ---- 红中 AI 决策（简易策略：自摸/杠优先，出牌保留红中、优先拆孤张） ----
+
+  _decideHongZhongDrawAction(g, room, seat) {
+    const hand = g.hands[seat];
+    if (rules.checkHuHongZhong(hand, g.melds[seat], { need258Eye: !!room.settings.need258Eye })) {
+      return { type: 'hu' };
+    }
+    const cnt = rules.countTiles(hand);
+    for (const [t, c] of cnt) {
+      if (c === 4) return { type: 'gang', tile: t, gangType: 'angang' };
+    }
+    for (const m of g.melds[seat]) {
+      if (m.type === 'peng' && cnt.get(m.tile) >= 1) {
+        return { type: 'gang', tile: m.tile, gangType: 'bugang' };
+      }
+    }
+    return { type: 'play', tile: this._chooseHongZhongDiscard(g, room, seat) };
+  }
+
+  _chooseHongZhongDiscard(g, room, seat) {
+    const cnt = rules.countTiles(g.hands[seat]);
+    const candidates = [];
+    for (const [t, c] of cnt) {
+      if (t === rules.HONG_ZHONG) continue; // 红中万能牌永不出
+      if (c === 1) candidates.push(t); // 孤张优先
+    }
+    if (candidates.length === 0) {
+      for (const [t, c] of cnt) {
+        if (t === rules.HONG_ZHONG) continue;
+        candidates.push(t);
+      }
+    }
+    candidates.sort((a, b) => rules.numOf(a) - rules.numOf(b));
+    const tile = candidates[0];
+    if (tile) return tile;
+    return g.hands[seat].find((t) => t !== rules.HONG_ZHONG) || g.hands[seat][0];
+  }
+
+  _decideHongZhongResponse(g, room, seat, r) {
+    if (r.canHu) return 'hu';
+    if (r.canGang) return 'gang';
+    if (r.canPeng) return 'peng';
+    return 'pass';
   }
 }
 
