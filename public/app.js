@@ -198,7 +198,9 @@
         toast(msg.text || '', true);
         break;
       case 'chat':
-        renderChat(msg.chat);
+        // 同步 state.room.chat，避免 game_state 重绘侧栏时用旧快照把聊天记录打回原形
+        if (state.room) state.room.chat = msg.chat || [];
+        renderChat(state.room && state.room.chat);
         {
           const cm = (msg.chat && msg.chat.length) ? msg.chat[msg.chat.length - 1] : null;
           if (cm) showChatBubble(cm.from, cm.text);
