@@ -2243,11 +2243,16 @@ class GameServer {
     this._startHongZhongPlay(room, g.dealer);
   }
 
-  /** 炮子完成后正式开局：庄家摸第 14 张开始行牌 */
+  /** 炮子完成后正式开局：庄家发牌已补 1 张共 14 张（起手即终态），直接进入出牌行动，不再摸牌 */
   _startHongZhongPlay(room, seat) {
     const g = room.game;
+    g.turn = seat;
     g.stage = 'draw';
-    this._drawTileHongZhong(room, seat);
+    g.drawnTile = null;
+    g.lastDiscard = null;
+    g.lastAction = null;
+    g.newTiles[seat] = null;
+    this._afterTurnStart(room, seat);
   }
 
   _drawTileHongZhong(room, seat) {

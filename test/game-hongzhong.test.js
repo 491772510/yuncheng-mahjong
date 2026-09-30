@@ -98,8 +98,8 @@ test('红中开局：112张无风牌、庄14闲13、无报听、view透传varian
   assert.equal(room.state, 'playing');
   const g = room.game;
   assert.equal(g.wall.length, 112);
-  // 开局后庄家已首摸第 14 张（发牌 14 + 首摸 1 = 15），闲家保持 13
-  assert.equal(g.hands[g.dealer].length, 15);
+  // 庄家起手 14 张即终态（发牌 13+补 1），开局直接出牌不再摸；闲家 13 张
+  assert.equal(g.hands[g.dealer].length, 14);
   for (let s = 0; s < 4; s++) {
     if (s !== g.dealer) assert.equal(g.hands[s].length, 13);
     for (const t of g.hands[s]) {
