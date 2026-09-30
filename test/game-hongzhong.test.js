@@ -328,7 +328,7 @@ test('下炮子：开局先选炮子（0/1），结算每炮+1分', () => {
   assert.equal(g.stage, 'draw', '全部选完炮子后开始行牌');
   assert.deepEqual(g.paozi, [1, 1, 1, 0]);
 
-  // 构造庄家自摸：score = (mult + 3炮) × 1（无中码）
+  // 构造庄家自摸：胡分 = mult×3 = 48；炮钱独立 = 胡家下炮三家各 1 分 + 输家(1/2座)下炮各 1 分 + (3座未下炮仅付胡家份) = 2+2+1 = 5 → score = 53
   g.hands[0] = H2_SELFHU.slice();
   g.melds[0] = [];
   g.turn = 0;
@@ -338,8 +338,8 @@ test('下炮子：开局先选炮子（0/1），结算每炮+1分', () => {
   const w = g.winners;
   assert.deepEqual(w.paozi, [1, 1, 1, 0]);
   assert.equal(w.mult, 16);
-  assert.equal(w.score, (16 + 3) * 3, '炮子分独立计入每份');
-  assert.equal(room.players[0].roundScore, (16 + 3) * 3);
+  assert.equal(w.score, 16 * 3 + 5, '炮子独立计分：胡分 mult×3，炮钱单列 5 分');
+  assert.equal(room.players[0].roundScore, 16 * 3 + 5);
   cleanupServer(srv);
 });
 

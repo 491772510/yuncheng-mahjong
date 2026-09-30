@@ -2501,47 +2501,79 @@ class GameServer {
     }
     g.zhaMaTiles = zhaMaTiles;
 
-    // 倍数 = 2^总番；炮子分 = 全桌炮子数（每炮 +1 分）；中码每张翻一倍
-    const paoziTotal = g.paozi.reduce((a, b) => a + b, 0);
-    const scorePer = (mult + paoziTotal) * Math.pow(2, zhaMaCount);
+    // 胡分基数 = 底分1 × 2^总番；中码每张使胡分翻倍（×2/码，并入胡分标题注明）
+    const huPer = mult * Math.pow(2, zhaMaCount);
     const maText = zhaMaCount > 0 ? `，中码 ${zhaMaCount} 张翻倍` : '';
+    // 下炮子独立计分：不参与番数相乘、不被中码翻倍，独立结算行
+    // 规则：下炮者胡牌→其余三家各额外给 1 分/炮；下炮者输牌→向胡家额外付 1 分/炮；炮注 1 分/炮
+    const hzWon = g.paozi[winnerSeat] > 0 ? 1 : 0;
+    const paoFor = (s) => (hzWon ? 1 : 0) + (g.paozi[s] > 0 ? 1 : 0);
 
+    let winnerGain = 0;
     const payments = [];
     if (info.winType === 'zimo') {
-      // 自摸：三家各付 1 份
+      // 自摸：三家各付 1 份胡分 + 各自的炮钱
+      let totalHu = 0;
+      let totalPao = 0;
+      const huRows = [];
+      const paoRows = [];
       for (let s = 0; s < 4; s++) {
         if (s === winnerSeat || !room.players[s]) continue;
-        room.players[s].score -= scorePer;
-        room.players[s].roundScore -= scorePer;
+        const pf = paoFor(s);
+        room.players[s].score -= huPer + pf;
+        room.players[s].roundScore -= huPer + pf;
+        totalHu += huPer;
+        totalPao += pf;
+        huRows.push({ seat: s, amount: -huPer, role: '闲家' });
+        if (pf > 0) paoRows.push({ seat: s, amount: -pf, role: '炮钱' });
       }
-      room.players[winnerSeat].score += scorePer * 3;
-      room.players[winnerSeat].roundScore += scorePer * 3;
+      room.players[winnerSeat].score += totalHu + totalPao;
+      room.players[winnerSeat].roundScore += totalHu + totalPao;
+      winnerGain = totalHu + totalPao;
       payments.push({
         kind: 'hu',
-        title: `自摸（${fan}番 ×${mult}倍${maText}）· 三家各付 ${scorePer} 分`,
+        title: `自摸（${fan}番 ×${mult}倍${maText}）· 三家各付 ${huPer} 分`,
         toSeat: winnerSeat,
-        toAmount: scorePer * 3,
-        rows: [0, 1, 2, 3]
-          .filter((s) => s !== winnerSeat)
-          .map((s) => ({ seat: s, amount: -scorePer, role: '闲家' })),
+        toAmount: totalHu,
+        rows: huRows,
       });
-    } else {
-      // 点炮/抢杠：放炮者（被抢杠者）包赔三家
-      const loser = room.players[info.discarder];
-      if (loser) {
-        loser.score -= scorePer * 3;
-        loser.roundScore -= scorePer * 3;
+      if (totalPao > 0) {
+        payments.push({
+          kind: 'pao',
+          title: `下炮子（${hzWon ? '胡家下炮三家各加 1 分；' : ''}输家下炮各加 1 分/炮）· 炮钱合计 ${totalPao} 分`,
+          toSeat: winnerSeat,
+          toAmount: totalPao,
+          rows: paoRows,
+        });
       }
-      room.players[winnerSeat].score += scorePer * 3;
-      room.players[winnerSeat].roundScore += scorePer * 3;
+    } else {
+      // 点炮/抢杠：放炮者（被抢杠者）包赔三家胡分 + 单份炮钱
+      const loser = room.players[info.discarder];
+      const pf = loser ? paoFor(info.discarder) : 0;
+      if (loser) {
+        loser.score -= huPer * 3 + pf;
+        loser.roundScore -= huPer * 3 + pf;
+      }
+      room.players[winnerSeat].score += huPer * 3 + pf;
+      room.players[winnerSeat].roundScore += huPer * 3 + pf;
+      winnerGain = huPer * 3 + pf;
       const role = info.winType === 'qianggang' ? '被抢杠者（包三家）' : '放炮者（包三家）';
       payments.push({
         kind: 'hu',
-        title: `${winLabel}（${fan}番 ×${mult}倍${maText}）· ${role}独赔 ${scorePer * 3} 分`,
+        title: `${winLabel}（${fan}番 ×${mult}倍${maText}）· ${role}独赔 ${huPer * 3} 分`,
         toSeat: winnerSeat,
-        toAmount: scorePer * 3,
-        rows: [{ seat: info.discarder, amount: -scorePer * 3, role }],
+        toAmount: huPer * 3,
+        rows: [{ seat: info.discarder, amount: -huPer * 3, role }],
       });
+      if (pf > 0) {
+        payments.push({
+          kind: 'pao',
+          title: `下炮子（炮钱）· ${role}付 ${pf} 分`,
+          toSeat: winnerSeat,
+          toAmount: pf,
+          rows: [{ seat: info.discarder, amount: -pf, role: '炮钱' }],
+        });
+      }
     }
 
     g.hzWinners = g.hzWinners || [];
@@ -2554,7 +2586,8 @@ class GameServer {
       fan,
       mult,
       names,
-      scorePer,
+      scorePer: huPer,
+      paoGain: winnerGain - huPer * (info.winType === 'zimo' ? 3 : 1),
       zhaMaCount,
       zhaMaTiles: zhaMaTiles.slice(),
     });
@@ -2579,7 +2612,7 @@ class GameServer {
       paozi: g.paozi.slice(),
       kouPoints: g.kouPoints.slice(),
       gangLogs: g.gangLogs.slice(),
-      score: scorePer * 3,
+      score: winnerGain,
       tile: info.tile,
       discarder: info.winType === 'zimo' ? null : info.discarder,
       payments: allPayments,
@@ -2588,7 +2621,7 @@ class GameServer {
     room.lastWinner = winnerSeat;
     this._log(
       room,
-      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${fan}番 ×${mult}倍${maText} → ${scorePer * 3} 分）`
+      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${fan}番 ×${mult}倍${maText} → ${winnerGain} 分）`
     );
   }
 
