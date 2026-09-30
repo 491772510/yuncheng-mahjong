@@ -121,6 +121,11 @@
           if (!state.prompt || state.prompt.type !== 'draw') {
             state.prompt = { type: 'draw', actions: ['play'], gangOptions: [], canHu: false, canDeclareTing: false };
           }
+        } else if (msg.game.stage === 'paozi' && msg.game.paozi && msg.game.paozi[msg.game.yourSeat] == null) {
+          // 红中下炮阶段：重连/消息丢失兜底补 prompt，避免操作区空白卡死
+          if (!state.prompt || state.prompt.type !== 'paozi') {
+            state.prompt = { type: 'paozi', actions: ['paozi-on', 'paozi-off'] };
+          }
         } else if (msg.game.pending) {
           const r = msg.game.pending.responders.find((x) => x.seat === msg.game.yourSeat);
           if (r && r.choice === null) {
@@ -411,27 +416,33 @@
       list.innerHTML = '<div class="empty">暂无房间，点击「创建房间」开一桌～</div>';
       return;
     }
-    list.innerHTML = rooms.map((r) => `
+    list.innerHTML = rooms.map((r) => {
+      const hz = isHongZhongOf(r);
+      return `
       <div class="room-card">
         <div class="rc-id">房间 ${r.id}</div>
         <div class="rc-meta">
           <span class="badge ${r.state}">${roomStateText(r.state)}</span>
           <span>${r.playerCount}/4 人</span>
           <span>创建者 ${esc(r.ownerName || '未知')}</span>
-          <span>136张·带风带箭</span>
+          <span>${hz ? '112张·红中麻将' : '136张·带风带箭'}</span>
           <span>${r.settings.aiFill ? 'AI补位' : '无AI'}</span>
-          <span>报听必开</span>
+          <span>${hz ? '癞子红中' : '报听必开'}</span>
           <span>${roundsText(r.settings.totalRounds)}</span>
         </div>
         <button class="btn small primary" data-join="${r.id}"
           ${r.state !== 'waiting' || r.playerCount >= 4 ? 'disabled' : ''}>加入</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
 
   function roomStateText(s) {
     return s === 'playing' ? '游戏中' : s === 'settled' ? '已结算' : '等待中';
   }
   function roundsText(v) { return v === 0 ? '不限局数' : v + ' 局'; }
+  // 玩法识别：settings.variant（优先）或 game.variant 兜底
+  function isHongZhongOf(s) { return !!(s && ((s.settings && s.settings.variant === 'hongzhong') || s.variant === 'hongzhong')); }
+  function variantLabel(settings) { return settings && settings.variant === 'hongzhong' ? '红中麻将' : '扣点点'; }
 
   // ================= 房间视图 =================
   function renderRoomView() {
@@ -440,7 +451,8 @@
     const room = state.room;
     $('#room-id-text').textContent = room.id;
     $('#room-state-text').textContent =
-      roomStateText(room.state) + (room.roundNo ? ` · 第 ${room.roundNo} 局` : '') +
+      `${variantLabel(room.settings)} · ${roomStateText(room.state)}` +
+      (room.roundNo ? ` · 第 ${room.roundNo} 局` : '') +
       (room.settleConfirms && !room.settleConfirms.every(Boolean) ? ' · 等待确认' : '') +
       ` · ${roundsText(room.settings.totalRounds)}`;
     renderHeaderBtns();
@@ -580,6 +592,10 @@
     }
     const cur = game.players[game.turn];
     if (!cur) return '';
+    if (game.stage === 'paozi') {
+      const you = game.yourSeat === game.turn;
+      return you ? '请选择是否下炮（下炮本局额外 ±1 分/炮，独立于番数）' : `等待 ${cur.name} 选择是否下炮…`;
+    }
     const you = game.yourSeat === game.turn;
     if (you) return cur.ting ? '你已报听，摸牌即打（只能杠，不能碰/换牌）' : '轮到你出牌';
     return cur.ting ? `等待 ${cur.name} 摸打（报听）…` : `等待 ${cur.name} 出牌…`;
@@ -587,10 +603,12 @@
 
   function renderOtherCard(p, seat, pos) {
     const game = state.game;
+    const hz = isHongZhongOf(game);
     const isTurn = game.turn === seat && !game.winners;
     const meldHtml = renderMelds(p.melds);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
-    const kp = game.kouPoints && game.kouPoints[seat];
+    const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
+    const pz = game.paozi && game.paozi[seat];
     return `<div class="player-card ${isTurn ? 'active-turn' : ''}">
       <div class="pc-top">
         ${p.isDealer ? '<span class="pc-dealer">庄</span>' : ''}
@@ -598,7 +616,7 @@
         ${!p.connected ? '<span class="pc-off">离线</span>' : ''}
         ${p.hosted ? '<span class="pc-host">托管</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
-        ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
+        ${hz ? (pz == null ? '<span class="pc-paozi">下炮中</span>' : `<span class="pc-paozi">炮${pz ? 1 : 0}</span>`) : (kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : '')}
         <span class="pc-name">${esc(p.name)}</span>
         <span class="pc-score">${p.score}</span>
       </div>
@@ -625,17 +643,19 @@
   function renderSelfCard(p, seat) {
     const game = state.game;
     const isTurn = game.turn === seat && !game.winners;
+    const hz = isHongZhongOf(game);
     const hand = (p.hand || []).map((t, i) => selfTileHtml(p, t, i)).join('');
     const meldHtml = renderMelds(p.melds, true);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
-    const kp = game.kouPoints && game.kouPoints[seat];
+    const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
+    const pz = game.paozi && game.paozi[seat];
     return `<div class="player-card ${isTurn ? 'active-turn' : ''}">
       <div class="pc-top">
         ${p.isDealer ? '<span class="pc-dealer">庄</span>' : ''}
         ${p.isAI ? '<span class="pc-ai">AI</span>' : ''}
         ${p.hosted ? '<span class="pc-host">AI托管中</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
-        ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
+        ${hz ? (pz == null ? '<span class="pc-paozi">下炮中</span>' : `<span class="pc-paozi">炮${pz ? 1 : 0}</span>`) : (kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : '')}
         <span class="pc-name">${esc(p.name)}（我）</span>
         <span class="pc-score">${p.score}</span>
         ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : ''}
@@ -658,7 +678,7 @@
     }).join('');
   }
 
-  const HONOR_NAMES = { e: '東', s: '南', x: '西', n: '北', z: '中', f: '發', p: '白' };
+  const HONOR_NAMES = { e: '東', s: '南', x: '西', n: '北', z: '中', f: '發', p: '白', z0: '中' };
 
   function tileHtml(tile, size, ting, discardable, isNew, idx, selected) {
     if (!tile) return '';
@@ -744,6 +764,7 @@
   function honorFace(tile) {
     const ch = HONOR_NAMES[tile];
     if (tile === 'z') return `<span class="honor-face hz">${ch}</span>`;
+    if (tile === 'z0') return `<span class="honor-face hz hz-wild">${ch}</span>`;
     if (tile === 'f') return `<span class="honor-face hf">${ch}</span>`;
     if (tile === 'p') return `<span class="honor-face hp"></span>`;
     return `<span class="honor-face hw">${ch}</span>`;
@@ -758,6 +779,7 @@
 
   function tileText(t) {
     if (!t) return '';
+    if (t === 'z0') return '红中';
     if (HONOR_NAMES[t]) return HONOR_NAMES[t];
     const num = t.slice(1);
     const s = t[0];
@@ -885,6 +907,10 @@
       if (p.canHu) acts.push('胡');
       const actLabel = acts.length ? acts.join('/') : (p.pendingType === 'qianggang' ? '抢杠胡' : '');
       btns += `<span class="resp-hint">${actLabel ? actLabel + '「' : ''}${tileHtml(p.tile, 'small')}${actLabel ? '」' : ''}</span>`;
+    } else if (p.type === 'paozi') {
+      btns += `<button class="act act-paozi" data-act="paozi-on">下炮</button>`;
+      btns += `<button class="act act-pass" data-act="paozi-off">不下</button>`;
+      btns += `<span class="countdown" style="align-self:center;">下炮本局额外 ±1 分/炮（独立于番数）</span>`;
     }
     bar.innerHTML = btns;
     if (p.timeoutMs) {
@@ -912,7 +938,15 @@
     else if (act === 'peng') send({ type: 'peng' });
     else if (act === 'pass') send({ type: 'pass' });
     else if (act === 'gang') showGangMenu();
-    else if (act === 'ting') {
+    else if (act === 'paozi-on') {
+      send({ type: 'paozi', value: 1 });
+      state.prompt = null;
+      renderTable();
+    } else if (act === 'paozi-off') {
+      send({ type: 'paozi', value: 0 });
+      state.prompt = null;
+      renderTable();
+    } else if (act === 'ting') {
       state.tingPick = true;
       state.selectedIndex = null;
       renderTable();
@@ -1175,6 +1209,61 @@
     </div>`;
   }
 
+  /** 红中麻将结算详情（variant==='hongzhong'）：番数倍数 + 扎码 + 炮子 + 一炮多响 + 支付明细 */
+  function buildHZSettleHtml(result, opts = {}) {
+    const prefix = opts.prefix || '';
+    const winnerLabel = opts.winnerLabel || '（胡）';
+    const compact = !!opts.compact;
+    const nameOf = (s) => (result.hands && result.hands[s] ? result.hands[s].name : '座位' + s);
+    const handsHtml = (withScore) => (result.hands || []).map((h) => h ? `
+        <div class="row">
+          <b>${esc(h.name)}${h.seat === result.winnerSeat ? winnerLabel : ''}</b>
+          ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
+          ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
+          ${withScore ? `<span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>` : ''}
+        </div>` : '').join('');
+    const settleHands = `<div class="settle-hands">${handsHtml(result.type === 'hu')}</div>`;
+    if (result.type === 'draw') {
+      const flowLabel = state.room && state.room.settings && state.room.settings.dealerFlow === 'keep' ? '庄家连庄' : '下家接庄';
+      if (compact) {
+        return `<div class="settle-head"><div class="settle-sub">${prefix}流局（红中 · ${flowLabel}）</div></div>` + settleHands;
+      }
+      return `
+        <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（红中麻将 · ${flowLabel}）</div></div>
+        ${paymentTableHtml(result)}
+        ${settleHands}`;
+    }
+    const winner = result.hands && result.hands[result.winnerSeat];
+    const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+    const fanText = `${result.totalFan}番（${(result.fanNames && result.fanNames.length ? result.fanNames : ['平胡']).join('、')}）`;
+    const maText = result.zhaMaCount > 0
+      ? `，扎码中${result.zhaMaCount}张（${(result.zhaMaTiles || []).map((t) => tileText(t)).join('、')}）翻倍`
+      : (result.zhaMaTiles && result.zhaMaTiles.length ? `，扎码未中（${result.zhaMaTiles.map((t) => tileText(t)).join('、')}）` : '');
+    const paoziArr = result.paozi || [];
+    const paoziText = paoziArr.some((x) => x != null)
+      ? `，炮子：${paoziArr.map((v, s) => `${nameOf(s)} ${v ? '下' + v + '炮' : '不下'}`).join('、')}`
+      : '';
+    const calcText = `番数 ${fanText} × ${result.mult}倍${maText}${paoziText}`;
+    const multiText = (result.winners || []).length > 1
+      ? `<div class="settle-sub">一炮多响：${result.winners.map((w) =>
+          `${nameOf(w.winnerSeat)}（${w.winType === 'zimo' ? '自摸' : w.winType === 'qianggang' ? '抢杠胡' : '点炮胡'} ${w.fan}番 ×${w.mult}倍${w.zhaMaCount ? '，码' + w.zhaMaCount : ''}）`).join('、')}</div>`
+      : '';
+    if (compact) {
+      return `<div class="settle-head">
+        <div class="settle-sub">${prefix}${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)} · ${calcText} → ${result.score >= 0 ? '+' : ''}${result.score} 分</div>
+      </div>${paymentTableHtml(result)}` + settleHands;
+    }
+    return `
+      <div class="settle-head">
+        <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
+        <div class="settle-sub">红中麻将 · ${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)}</div>
+        <div class="settle-sub">${calcText}</div>
+        ${multiText}
+      </div>
+      ${paymentTableHtml(result)}
+      ${settleHands}`;
+  }
+
   /**
    * 结算详情公共渲染：单局结算（showSettlement）与房间结算"最后一局"（showSettleModal）共用，
    * 消除约 60+ 行重复模板。内部复用 paymentTableHtml / tileText / tileHtml / renderMelds / esc。
@@ -1187,6 +1276,7 @@
    * @returns {string} settle-head + 支付明细 + settle-hands 的 HTML
    */
   function buildSettleHtml(result, opts = {}) {
+    if (result && result.variant === 'hongzhong') return buildHZSettleHtml(result, opts);
     const prefix = opts.prefix || '';
     const winnerLabel = opts.winnerLabel || '（胡）';
     const compact = !!opts.compact;
@@ -1336,29 +1426,54 @@
   function hideModal(id) { $('#' + id).classList.add('hidden'); }
 
   function initCreateModal() {
+    const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
+    const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；胡牌模式 A=标准胡法（平胡/对对胡等按番计分），B=简易胡法；二五八将：将牌需为 2/5/8；下炮子：开局可选下炮，每炮本局 ±1 分（独立于番数）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张翻一倍；抢杠包赔三家；流局庄家连庄。';
+    buildSeg('seg-variant', ['koudian', 'hongzhong'], (v) => (v === 'hongzhong' ? '红中麻将' : '扣点点'), (v) => {
+      const hz = v === 'hongzhong';
+      $('#settings-hz').classList.toggle('hidden', !hz);
+      $('#settings-136').classList.toggle('hidden', hz);
+      $('#create-tip').textContent = hz ? hongzhongTip : koudianTip;
+    });
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
     buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
+    buildSeg('seg-hu-mode', ['A', 'B'], (v) => '模式' + v);
+    buildSeg('seg-zha-ma', [0, 1, 2, 4, 6], (v) => (v === 0 ? '关' : v + ' 张'));
     $('#create-cancel').onclick = () => hideModal('create-modal');
     $('#settle-close').onclick = () => hideModal('settle-modal');
     $('#create-confirm').onclick = () => {
+      const variant = segValue('seg-variant');
       const totalRounds = segValue('seg-rounds');
       const aiFill = $('#opt-aifill').checked;
-      const enableQingYiSe = $('#opt-qingyise').checked;
-      const enableYiTiaoLong = $('#opt-yitiaolong').checked;
-      const enableShiSanYao = $('#opt-shisanyao').checked;
-      const dealerFlow = segValue('seg-dealer-flow') === 'keep' ? 'keep' : 'next';
-      send({ type: 'create_room', settings: {
-        totalRounds, aiFill, dealerFlow,
-        enableKoupoint: $('#opt-koupoint').checked,
-        enableQingYiSe, qingYiSeMult: Number($('#opt-qingyise-mult').value) || 4,
-        enableYiTiaoLong, yiTiaoLongMult: Number($('#opt-yitiaolong-mult').value) || 4,
-        enableShiSanYao, shiSanYaoMult: Number($('#opt-shisanyao-mult').value) || 8,
-      } });
+      const base = { totalRounds, aiFill };
+      if (variant === 'hongzhong') {
+        send({ type: 'create_room', settings: {
+          ...base,
+          variant: 'hongzhong',
+          huMode: segValue('seg-hu-mode'),
+          need258Eye: $('#opt-need258').checked,
+          enablePaozi: $('#opt-paozi').checked,
+          zhaMa: segValue('seg-zha-ma'),
+        } });
+      } else {
+        const enableQingYiSe = $('#opt-qingyise').checked;
+        const enableYiTiaoLong = $('#opt-yitiaolong').checked;
+        const enableShiSanYao = $('#opt-shisanyao').checked;
+        const dealerFlow = segValue('seg-dealer-flow') === 'keep' ? 'keep' : 'next';
+        send({ type: 'create_room', settings: {
+          ...base,
+          variant: 'koudian',
+          dealerFlow,
+          enableKoupoint: $('#opt-koupoint').checked,
+          enableQingYiSe, qingYiSeMult: Number($('#opt-qingyise-mult').value) || 4,
+          enableYiTiaoLong, yiTiaoLongMult: Number($('#opt-yitiaolong-mult').value) || 4,
+          enableShiSanYao, shiSanYaoMult: Number($('#opt-shisanyao-mult').value) || 8,
+        } });
+      }
       hideModal('create-modal');
     };
   }
 
-  function buildSeg(containerId, values, labelFn) {
+  function buildSeg(containerId, values, labelFn, onChange) {
     const c = $('#' + containerId);
     c.innerHTML = values.map((v, i) =>
       `<button class="seg-item ${i === 0 ? 'active' : ''}" data-value="${v}">${labelFn(v)}</button>`).join('');
@@ -1366,12 +1481,15 @@
       b.onclick = () => {
         c.querySelectorAll('.seg-item').forEach((x) => x.classList.remove('active'));
         b.classList.add('active');
+        if (onChange) onChange(b.dataset.value);
       };
     });
   }
   function segValue(containerId) {
     const el = $('#' + containerId + ' .seg-item.active');
-    return parseInt(el ? el.dataset.value : '0', 10);
+    if (!el) return '';
+    const v = el.dataset.value;
+    return /^-?\d+$/.test(v) ? parseInt(v, 10) : v;
   }
 
   // ================= 其它 UI =================

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>运城扣点点麻将</title>
-  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
 <div id="app">
@@ -76,12 +76,42 @@
     <div class="modal-box">
       <h3>创建房间</h3>
       <div class="setting-row">
+        <label>玩法</label>
+        <div class="seg" id="seg-variant"></div>
+      </div>
+      <div class="setting-row">
         <label>总局数</label>
         <div class="seg" id="seg-rounds"></div>
       </div>
       <div class="setting-row">
         <label>AI 补位</label>
         <label class="switch"><input type="checkbox" id="opt-aifill" checked><span></span></label>
+      </div>
+      <div id="settings-hz" class="settings-136 hidden">
+        <div class="setting-divider">胡牌模式</div>
+        <div class="setting-row">
+          <label>胡牌模式</label>
+          <div class="seg" id="seg-hu-mode"></div>
+        </div>
+        <div class="setting-divider">牌型规则</div>
+        <div class="setting-row">
+          <label>二五八将</label>
+          <label class="switch"><input type="checkbox" id="opt-need258" checked><span></span></label>
+        </div>
+        <div class="setting-row">
+          <label>下炮子</label>
+          <label class="switch"><input type="checkbox" id="opt-paozi" checked><span></span></label>
+        </div>
+        <div class="setting-divider">扎码（胡牌后翻码，中码翻倍）</div>
+        <div class="setting-row">
+          <label>扎码</label>
+          <div class="seg" id="seg-zha-ma"></div>
+        </div>
+        <div class="setting-divider">癞子红中</div>
+        <div class="setting-row">
+          <label>癞子红中</label>
+          <span class="hz-badge">红中 = 万能癞子</span>
+        </div>
       </div>
       <div id="settings-136" class="settings-136">
         <div class="setting-divider">牌型倍数开关（默认关闭）</div>
@@ -111,7 +141,7 @@
           <div class="seg" id="seg-dealer-flow"></div>
         </div>
       </div>
-      <p class="tip">未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。</p>
+      <p class="tip" id="create-tip">未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。</p>
       <div class="modal-actions">
         <button id="create-cancel" class="btn">取消</button>
         <button id="create-confirm" class="btn primary">创建</button>
@@ -159,6 +189,6 @@
   <!-- 提示 -->
   <div id="toast" class="toast hidden"></div>
 </div>
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>
