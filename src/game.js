@@ -2257,8 +2257,8 @@ class GameServer {
 
   _drawTileHongZhong(room, seat) {
     const g = room.game;
-    // 牌墙剩 6 墩（12 张）直接流局
-    if (g.wall.length - g.wallPos <= 12) {
+    // 流局判定：行牌摸完最后一张（牌墙摸空无人胡）才流局；扎码牌另行抓取，不参与此判定
+    if (g.wall.length - g.wallPos <= 0) {
       this._settleDrawHongZhong(room);
       return;
     }
@@ -2278,8 +2278,8 @@ class GameServer {
 
   _drawAfterGangHongZhong(room, seat) {
     const g = room.game;
-    // 牌墙剩 6 墩（12 张）直接流局
-    if (g.wall.length - g.wallPos <= 12) {
+    // 流局判定：行牌摸完最后一张（牌墙摸空无人胡）才流局；扎码牌另行抓取，不参与此判定
+    if (g.wall.length - g.wallPos <= 0) {
       this._settleDrawHongZhong(room);
       return;
     }
@@ -2652,7 +2652,7 @@ class GameServer {
       hands: this._revealHands(room),
     };
     room.lastWinner = null; // 红中：流局庄家连庄（room.dealer 保持不变）
-    this._log(room, '牌墙剩 6 墩，流局（红中麻将）');
+    this._log(room, '牌墙摸完，流局（红中麻将）');
     this._broadcastGameState(room);
     this._sendSettlement(room);
     this._broadcastRoomState(room);

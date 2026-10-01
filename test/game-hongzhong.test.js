@@ -388,12 +388,17 @@ test('扎码：未中码不翻倍', () => {
 
 // ============ 流局连庄 ============
 
-test('流局：牌墙剩6墩直接流局，庄家连庄', () => {
+test('流局：牌墙摸完最后一张才流局，庄家连庄', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   const dealer0 = room.dealer;
-  g.wallPos = g.wall.length - 12;
+  // 牌墙还有 1 张：应继续摸，不流局
+  g.wallPos = g.wall.length - 1;
   srv._drawTileHongZhong(room, 0);
+  assert.equal(g.winners, null, '牌墙还有 1 张应继续行牌');
+  // 牌墙摸空：流局
+  g.wallPos = g.wall.length;
+  srv._drawTileHongZhong(room, 1);
 
   assert.equal(g.winners.type, 'draw');
   assert.equal(g.winners.variant, 'hongzhong');
