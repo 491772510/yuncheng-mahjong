@@ -2,7 +2,7 @@
 
 // ============ 运城贴金麻将：game.js 游戏流程模块测试 ============
 // 覆盖：136张开局翻金母定金牌（庄14闲13）、上金后才能点炮胡（未上金只能自摸）、
-// 锁金开关（锁金/解锁/被锁只能自摸）、上金/锁金动作与轮转、三金封顶、
+// 规则锁金（连续上金两张自动锁金/被锁只能自摸/打出最后金牌解锁）、上金动作与轮转、三金封顶、
 // 计分A（自摸/点炮/金分3倍递增/点炮通赔）、计分B（125体系/庄家身份×2）、
 // 截胡单响（逆时针最近）、过胡限制、抢杠（补杠可抢/暗杠不可抢）、
 // 字牌整副胡只能自摸（金牌不代）、流局双开关（A摸完/B硬10墩）、流局杠分不计、
@@ -113,7 +113,6 @@ test('贴金开局：136张、庄14闲13、翻金母定金牌、view含金牌/�
   // view 展示字段
   const v0 = lastOf(wss[0], 'game_state');
   assert.equal(v0.game.settings.variant, 'tiejin');
-  assert.equal(v0.game.settings.lockGold, true, '锁金开关默认开启');
   assert.equal(v0.game.settings.drawEndMode, 'A', '流局开关默认 A（摸完）');
   assert.equal(v0.game.settings.scoreMode, 'A', '计分开关默认 A（边趣版）');
   assert.equal(v0.game.goldTile, g.goldTile);
@@ -200,46 +199,56 @@ test('上金动作：打出 1 张金牌入上金区、计数+1、轮转下家', 
   cleanupServer(srv);
 });
 
-test('锁金动作（开启锁金）：打出 2 张金牌、锁定其他三家、锁定者计数+2', () => {
+test('规则锁金：连续上金两张后自动锁定其他三家（本家不受锁）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   g.goldTile = 'w5';
   g.goldMother = 'w5';
-  // 14 张含 2 张金牌 w5
-  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'w5', 'w5'];
+  // 已上金 1 张，手牌 14 张仍含 1 张金牌 w5；再上金第 2 张即自动锁金
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
+  g.melds[0] = [];
+  g.shangjinCount[0] = 1;
+  g.shangjinTiles[0] = ['w5'];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w5';
+  g.lastAction = null;
+  g.locked = [false, false, false, false];
+  g.lockSeat = -1;
+
+  send(wss[0], { type: 'shangjin' });
+  assert.equal(g.shangjinCount[0], 2, '第二次上金后上金数=2');
+  assert.deepEqual(g.shangjinTiles[0], ['w5', 'w5'], '上金区累计两张金牌');
+  assert.deepEqual(g.locked, [false, true, true, true], '上金两张后自动锁定其他三家（本家不受锁）');
+  assert.equal(g.lockSeat, 0);
+  assert.equal(g.hands[0].length, 13, '上金后手牌 13 张');
+  assert.notEqual(g.turn, 0, '上金后轮转下家');
+  cleanupServer(srv);
+});
+
+test('上金数不足 2 不触发锁金（上金 1 张保持未锁）', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 手牌 14 张含 1 张金牌 w5，首次上金仅达 1 张
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
   g.melds[0] = [];
   g.turn = 0;
   g.stage = 'draw';
   g.drawnTile = 'w5';
   g.lastAction = null;
+  g.locked = [false, false, false, false];
+  g.lockSeat = -1;
 
-  send(wss[0], { type: 'lock' });
-  assert.equal(g.shangjinCount[0], 2, '锁金打出的 2 张金牌计入上金数');
-  assert.deepEqual(g.shangjinTiles[0], ['w5', 'w5']);
-  assert.deepEqual(g.locked, [false, true, true, true], '锁定其他三家（本家不受锁）');
-  assert.equal(g.lockSeat, 0);
-  assert.equal(g.hands[0].length, 12, '锁金打出 2 张后手牌 12 张');
-  assert.notEqual(g.turn, 0, '锁金后轮转下家');
+  send(wss[0], { type: 'shangjin' });
+  assert.equal(g.shangjinCount[0], 1, '上金 1 张');
+  assert.deepEqual(g.locked, [false, false, false, false], '上金数未达 2，不触发锁金');
+  assert.equal(g.lockSeat, -1, '锁金者未设置');
   cleanupServer(srv);
 });
 
-test('锁金关闭：lock 动作被拒；被锁者打出最后金牌可解锁', () => {
-  const { srv, room, wss } = makeRoom4({ lockGold: false });
-  const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
-  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'w5', 'w5'];
-  g.melds[0] = [];
-  g.turn = 0;
-  g.stage = 'draw';
-  g.drawnTile = 'w5';
-  send(wss[0], { type: 'lock' });
-  assert.ok(lastOf(wss[0], 'error'), '关闭锁金时应拒绝 lock');
-  assert.equal(g.shangjinCount[0], 0, '拒绝锁金不改变上金数');
-  cleanupServer(srv);
-});
-
-test('被锁者只能自摸：锁金开启且被锁时点炮无胡响应；解锁后可点炮', () => {
+test('被锁者只能自摸：被锁时点炮无胡响应；解锁后可点炮', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   g.goldTile = 'w5';

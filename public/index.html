@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>运城扣点点麻将</title>
-  <link rel="stylesheet" href="style.css?v=12">
+  <link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
 <div id="app">
@@ -114,10 +114,10 @@
           <label>必上金</label>
           <span class="hz-badge">有金必须上金一次才有点炮胡资格</span>
         </div>
-        <div class="setting-divider">玩法开关（默认开启）</div>
+        <div class="setting-divider">玩法规则</div>
         <div class="setting-row">
           <label>锁金</label>
-          <label class="switch"><input type="checkbox" id="opt-lock-gold" checked><span></span></label>
+          <span class="hz-badge">连续上金两张后自动锁定其他三家，被锁者只能自摸</span>
         </div>
         <div class="setting-divider">流局规则</div>
         <div class="setting-row">
@@ -206,6 +206,6 @@
   <!-- 提示 -->
   <div id="toast" class="toast hidden"></div>
 </div>
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

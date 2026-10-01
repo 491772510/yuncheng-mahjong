@@ -897,7 +897,6 @@
       if (p.actions && p.actions.includes('pass')) btns += `<button class="act act-pass" data-act="pass">过</button>`;
       if (p.gangOptions && p.gangOptions.length) btns += `<button class="act act-gang" data-act="gang">杠</button>`;
       if (p.actions && p.actions.includes('shangjin')) btns += `<button class="act act-gold" data-act="shangjin">上金</button>`;
-      if (p.canLock) btns += `<button class="act act-gold" data-act="lock">锁金</button>`;
       if (p.canDeclareTing && !state.tingPick) btns += `<button class="act act-ting" data-act="ting">报听</button>`;
       if (state.tingPick) {
         btns += `<button class="act act-pass" data-act="ting-cancel">取消</button>`;
@@ -944,7 +943,6 @@
     else if (act === 'pass') send({ type: 'pass' });
     else if (act === 'gang') showGangMenu();
     else if (act === 'shangjin') send({ type: 'shangjin' });
-    else if (act === 'lock') send({ type: 'lock' });
     else if (act === 'ting') {
       state.tingPick = true;
       state.selectedIndex = null;
@@ -1510,7 +1508,7 @@
   function initCreateModal() {
     const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
     const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；只能自摸或抢杠胡，不能点炮；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
-    const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），有金必须上金一次才有点炮胡资格，上金区独立展示，三金封顶；锁金开关默认开启（上金多者可点炮/自摸，被锁只能自摸，打出最后金牌解锁）；可碰可杠不可吃，无报听；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
+    const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），有金必须上金一次才有点炮胡资格，上金区独立展示，三金封顶；连续上金两张自动锁金（锁定其他三家只能自摸，被锁者打出最后金牌解锁）；可碰可杠不可吃，无报听；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
     buildSeg('seg-variant', ['koudian', 'hongzhong', 'tiejin'], (v) => (v === 'hongzhong' ? '红中麻将' : v === 'tiejin' ? '贴金麻将' : '扣点点'), (v) => {
       const hz = v === 'hongzhong';
       const tj = v === 'tiejin';
@@ -1541,7 +1539,6 @@
         send({ type: 'create_room', settings: {
           ...base,
           variant: 'tiejin',
-          lockGold: $('#opt-lock-gold').checked,
           drawEndMode: segValue('seg-draw-end'),
           scoreMode: segValue('seg-score-mode'),
         } });
