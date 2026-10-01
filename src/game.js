@@ -1802,7 +1802,7 @@ class GameServer {
       shangjinCount: g.shangjinCount ? g.shangjinCount.slice() : null,
       locked: g.locked ? g.locked.slice() : null,
       lockSeat: g.lockSeat != null ? g.lockSeat : -1,
-      canLiangjin: isDrawTurn && !!g.goldTile && rules.countGold(g.hands[viewerSeat], g.goldTile) > 0 && g.hands[viewerSeat].length >= 14 && !this._tieJinWallEnded(room, g),
+      canLiangjin: isDrawTurn && !!g.goldTile && rules.countGold(g.hands[viewerSeat], g.goldTile) > 0 && !this._tieJinWallEnded(room, g),
       logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
     if (isDrawTurn && !this._isHongZhong(room) && !g.tingSeats.includes(viewerSeat)) {
@@ -3183,9 +3183,6 @@ class GameServer {
     const gold = g.goldTile;
     const hand = g.hands[p.seat];
     if (rules.countGold(hand, gold) <= 0) return this._err(p, '手中没有金牌');
-    // 亮金后手牌须 ≥13 张（亮 1 张后牌尾补 1 张，手牌数不变；碰/杠后 13 张不能亮金，避免牌数错误）
-    const handLen = hand.length;
-    if (handLen - 1 < 13) return this._err(p, '当前不能亮金');
     // 牌墙剩余可补牌数不足（流局阈值已到）时不可亮金
     if (this._tieJinWallEnded(room, g)) return this._err(p, '牌墙已结束，不能再亮金');
     hand.splice(hand.indexOf(gold), 1);
@@ -3340,9 +3337,12 @@ class GameServer {
     const hand = g.hands[seat];
     const actions = ['play'];
     const gangOptions = [];
-    // 碰后（未摸牌）：手牌结构不允许胡/杠/亮金，只给出牌
+    // 碰后（未摸牌）：手牌结构不允许胡/杠，但持有金牌且牌墙未结束仍可亮金
     if (g.lastAction && g.lastAction.type === 'peng') {
-      return { type: 'draw', actions, gangOptions, canHu: false, canLiangjin: false, canDeclareTing: false, timeoutMs: HUMAN_TIMEOUT_MS };
+      const goldCountAfterPeng = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
+      const canLiangjinAfterPeng = goldCountAfterPeng > 0 && !this._tieJinWallEnded(room, g);
+      if (canLiangjinAfterPeng) actions.push('liangjin');
+      return { type: 'draw', actions, gangOptions, canHu: false, canLiangjin: canLiangjinAfterPeng, canDeclareTing: false, timeoutMs: HUMAN_TIMEOUT_MS };
     }
     const canSelfHu = rules.checkHuTieJin(hand, g.melds[seat], g.goldTile);
     if (canSelfHu) actions.push('hu');
@@ -3356,9 +3356,9 @@ class GameServer {
       }
     }
     if (gangOptions.length) actions.push('gang');
-    // 亮金资格：手中有金牌、摸牌后/起手 14 张（手牌≥14）、牌墙仍有可补牌
+    // 亮金资格：手中有金牌、牌墙仍有可补牌（拥有出牌权即可亮金）
     const goldCount = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
-    const canLiangjin = goldCount > 0 && hand.length >= 14 && !this._tieJinWallEnded(room, g);
+    const canLiangjin = goldCount > 0 && !this._tieJinWallEnded(room, g);
     if (canLiangjin) actions.push('liangjin');
     return {
       type: 'draw',
@@ -3376,6 +3376,10 @@ class GameServer {
   _decideTieJinDrawAction(g, room, seat) {
     const hand = g.hands[seat];
     if (g.lastAction && g.lastAction.type === 'peng') {
+      const goldCountAfterPeng = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
+      if (goldCountAfterPeng > 0 && !this._tieJinWallEnded(room, g)) {
+        return { type: 'liangjin' };
+      }
       return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };
     }
     if (rules.checkHuTieJin(hand, g.melds[seat], g.goldTile)) {
@@ -3391,8 +3395,8 @@ class GameServer {
       }
     }
     const goldCount = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
-    // 有金必亮金（摸牌后/起手 14 张、牌墙未结束）：连续亮金两张后自动触发锁金
-    if (goldCount > 0 && hand.length - 1 >= 13 && !this._tieJinWallEnded(room, g)) {
+    // 有金必亮金（拥有出牌权、牌墙未结束）：连续亮金两张后自动触发锁金
+    if (goldCount > 0 && !this._tieJinWallEnded(room, g)) {
       return { type: 'liangjin' };
     }
     return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };

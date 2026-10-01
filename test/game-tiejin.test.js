@@ -276,6 +276,40 @@ test('亮金数不足 2 不触发锁金（亮金 1 张保持未锁）', () => {
   cleanupServer(srv);
 });
 
+test('亮金条件放宽：碰后/13张手牌持有金牌即可亮金（不再要求手牌>=14）', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 碰后未摸牌：手牌 13 张（碰后已打出牌），含 1 张金牌 w5
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'w5'];
+  g.melds[0] = [{ type: 'peng', tile: 'b1', tiles: ['b1', 'b1', 'b1'] }];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = null;
+  g.lastAction = { type: 'peng', tile: 'b1', seat: 0 };
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
+  // 出牌提示：碰后分支应识别亮金资格（canHu 仍 false）
+  const prompt = srv._buildDrawPromptTieJin(room, 0);
+  assert.equal(prompt.canLiangjin, true, '碰后（13张）持有金牌可亮金');
+  assert.ok(prompt.actions.includes('liangjin'), '碰后提示应含亮金动作');
+  assert.ok(prompt.actions.includes('play'), '碰后仍可出牌');
+  assert.equal(prompt.canHu, false, '碰后不列胡');
+  // AI 决策：碰后有金必亮金
+  assert.equal(srv._decideTieJinDrawAction(g, room, 0).type, 'liangjin', 'AI 碰后有金必亮金');
+  // 真人亮金执行：13 张亮金后仍 13 张，不轮转
+  const wallBefore = g.wall.length;
+  send(wss[0], { type: 'liangjin' });
+  assert.equal(g.shangjinCount[0], 1, '亮金计数+1');
+  assert.deepEqual(g.shangjinTiles[0], ['w5'], '亮金区展示金牌');
+  assert.equal(g.hands[0].length, 13, '13张亮金后手牌数不变（仍13张）');
+  assert.equal(g.wall.length, wallBefore - 1, '从牌尾补走 1 张');
+  assert.equal(g.turn, 0, '亮金不轮转，仍为本家出牌阶段');
+  assert.equal(g.stage, 'draw', '亮金后仍为 draw 阶段');
+  cleanupServer(srv);
+});
+
 test('被锁者只能自摸：被锁时点炮无胡响应；解锁后可点炮', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
