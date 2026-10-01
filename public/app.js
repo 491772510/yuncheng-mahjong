@@ -544,7 +544,11 @@
     const d = (seat) => (seat - game.yourSeat + 4) % 4;
     const POS = ['bottom', 'right', 'top', 'left'];
     let html = '<div class="table">';
+    const tjGold = game.goldMother && game.goldTile
+      ? `<div class="gold-mother">金母 <b>${tileHtml(game.goldMother, 'small', 0, false, false, undefined, false, game.goldMother)}</b> · 金牌 <b>${tileHtml(game.goldTile, 'small', 0, false, false, undefined, false, game.goldTile)}</b></div>`
+      : '';
     html += `<div class="table-center">
+      ${tjGold}
       <div class="wall-count">牌墙 <b>${game.wallCount}</b></div>
       <div class="turn-info">${turnText()}</div>
       <div class="action-bar" id="action-bar"></div>
@@ -596,9 +600,13 @@
     const game = state.game;
     const hz = isHongZhongOf(game);
     const isTurn = game.turn === seat && !game.winners;
-    const meldHtml = renderMelds(p.melds);
-    const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
+    const goldTile = game.goldTile || null;
+    const meldHtml = renderMelds(p.melds, false, goldTile);
+    const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
     const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
+    const tj = game.goldTile != null;
+    const shangjin = (tj && game.shangjinTiles && game.shangjinTiles[seat]) || null;
+    const lockedBadge = tj && game.locked && game.locked[seat] ? '<span class="pc-lock">锁金</span>' : '';
     return `<div class="player-card ${isTurn ? 'active-turn' : ''}">
       <div class="pc-top">
         ${p.isDealer ? '<span class="pc-dealer">庄</span>' : ''}
@@ -607,9 +615,11 @@
         ${p.hosted ? '<span class="pc-host">托管</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
         ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
+        ${lockedBadge}
         <span class="pc-name">${esc(p.name)}</span>
         <span class="pc-score">${p.score}</span>
       </div>
+      ${shangjin ? `<div class="shangjin-area" title="上金区（${shangjin.length}/3）">${shangjin.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('')}</div>` : ''}
       <div class="melds">${meldHtml}</div>
       <div class="discard-area">${discards}</div>
     </div>`;
@@ -627,17 +637,21 @@
     const isNew = game.newTile === t && p.hand.indexOf(t) === i;
     // 选中态：普通出牌受「单击直接出牌」开关影响（开启时不选中）；报听阶段始终走选中交互，不受开关影响
     const selected = (state.tingPick || !isTapToDiscard()) && state.selectedIndex === i;
-    return tileHtml(t, '', ting, canDiscard, isNew, i, selected);
+    return tileHtml(t, '', ting, canDiscard, isNew, i, selected, game.goldTile);
   }
 
   function renderSelfCard(p, seat) {
     const game = state.game;
     const isTurn = game.turn === seat && !game.winners;
     const hz = isHongZhongOf(game);
+    const goldTile = game.goldTile || null;
     const hand = (p.hand || []).map((t, i) => selfTileHtml(p, t, i)).join('');
-    const meldHtml = renderMelds(p.melds, true);
-    const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
+    const meldHtml = renderMelds(p.melds, true, goldTile);
+    const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
     const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
+    const tj = game.goldTile != null;
+    const shangjin = (tj && game.shangjinTiles && game.shangjinTiles[seat]) || null;
+    const lockedBadge = tj && game.locked && game.locked[seat] ? '<span class="pc-lock">锁金</span>' : '';
     return `<div class="player-card ${isTurn ? 'active-turn' : ''}">
       <div class="pc-top">
         ${p.isDealer ? '<span class="pc-dealer">庄</span>' : ''}
@@ -645,37 +659,41 @@
         ${p.hosted ? '<span class="pc-host">AI托管中</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
         ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
+        ${lockedBadge}
         <span class="pc-name">${esc(p.name)}（我）</span>
         <span class="pc-score">${p.score}</span>
         ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : ''}
       </div>
+      ${shangjin ? `<div class="shangjin-area" title="上金区（${shangjin.length}/3）">${shangjin.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('')}</div>` : ''}
       <div class="melds">${meldHtml}</div>
       <div class="hand">${state.tingPick ? '<div class="ting-pick-hint">请选择要扣的牌报听（需听牌中含 ≥6 点牌，灰色不可选）</div>' : ''}<div class="hand-tiles${state.tingPick ? ' ting-pick' : ''}">${hand}</div></div>
       <div class="discard-area">${discards}</div>
     </div>`;
   }
 
-  function renderMelds(melds, isMine = false) {
+  function renderMelds(melds, isMine = false, goldTile) {
     if (!melds || !melds.length) return '';
     return melds.map((m) => {
       const tiles = m.type === 'angang' && isMine
-        ? tileHtml(m.tiles[0], 'tiny') + '<span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span>'
+        ? tileHtml(m.tiles[0], 'tiny', 0, false, false, undefined, false, goldTile) + '<span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span>'
         : m.type === 'angang'
           ? '<span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span>'
-          : m.tiles.map((t) => tileHtml(t, 'tiny')).join('');
+          : m.tiles.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
       return `<div class="meld">${tiles}</div>`;
     }).join('');
   }
 
   const HONOR_NAMES = { e: '東', s: '南', x: '西', n: '北', z: '中', f: '發', p: '白', z0: '中' };
 
-  function tileHtml(tile, size, ting, discardable, isNew, idx, selected) {
+  function tileHtml(tile, size, ting, discardable, isNew, idx, selected, goldTile) {
     if (!tile) return '';
     if (tile === 'back') return `<span class="tile ${size} back"></span>`;
     const suit = tile[0];
     const isHonor = HONOR_NAMES[tile];
+    const isGold = goldTile != null && tile === goldTile;
     const cls = `tile ${size} ${suitClass(suit)}` +
       (isHonor ? ' honor' : '') +
+      (isGold ? ' gold-tile' : '') +
       (discardable ? ' discardable' : '') +
       (ting ? ' ting-mark' : '') +
       (isNew ? ' new-tile' : '') +
@@ -878,6 +896,8 @@
       if (p.canHu) btns += `<button class="act act-hu" data-act="hu">胡</button>`;
       if (p.actions && p.actions.includes('pass')) btns += `<button class="act act-pass" data-act="pass">过</button>`;
       if (p.gangOptions && p.gangOptions.length) btns += `<button class="act act-gang" data-act="gang">杠</button>`;
+      if (p.actions && p.actions.includes('shangjin')) btns += `<button class="act act-gold" data-act="shangjin">上金</button>`;
+      if (p.canLock) btns += `<button class="act act-gold" data-act="lock">锁金</button>`;
       if (p.canDeclareTing && !state.tingPick) btns += `<button class="act act-ting" data-act="ting">报听</button>`;
       if (state.tingPick) {
         btns += `<button class="act act-pass" data-act="ting-cancel">取消</button>`;
@@ -923,6 +943,8 @@
     else if (act === 'peng') send({ type: 'peng' });
     else if (act === 'pass') send({ type: 'pass' });
     else if (act === 'gang') showGangMenu();
+    else if (act === 'shangjin') send({ type: 'shangjin' });
+    else if (act === 'lock') send({ type: 'lock' });
     else if (act === 'ting') {
       state.tingPick = true;
       state.selectedIndex = null;
@@ -1250,6 +1272,78 @@
       ${settleHands}`;
   }
 
+  /** 运城贴金麻将结算详情（variant==='tiejin'）：金母/金牌/上金/锁金 + 金分 + 支付明细 */
+  function buildTieJinSettleHtml(result, opts = {}) {
+    const prefix = opts.prefix || '';
+    const winnerLabel = opts.winnerLabel || '（胡）';
+    const compact = !!opts.compact;
+    const winSeat = result.winner != null ? result.winner : result.winnerSeat;
+    const nameOf = (s) => (result.hands && result.hands[s] ? result.hands[s].name : '座位' + s);
+    const handsHtml = (withScore) => (result.hands || []).map((h) => h ? `
+        <div class="row">
+          <b>${esc(h.name)}${h.seat === winSeat ? winnerLabel : ''}</b>
+          ${h.hand.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, result.goldTile)).join('')}
+          ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds, false, result.goldTile) : ''}
+          ${withScore ? `<span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>` : ''}
+        </div>` : '').join('');
+    const settleHands = `<div class="settle-hands">${handsHtml(result.type === 'hu')}</div>`;
+    const goldBlock = result.goldMother && result.goldTile
+      ? `<div class="settle-sub">金母 ${tileHtml(result.goldMother, 'tiny', 0, false, false, undefined, false, result.goldMother)} → 金牌 ${tileHtml(result.goldTile, 'tiny', 0, false, false, undefined, false, result.goldTile)}（${result.scoreMode === 'B' ? '125体系' : '边趣计分'}）</div>`
+      : '';
+    const shangjinBlock = (result.shangjinCount || []).map((c, s) =>
+      c > 0 ? `<span class="settle-sub" style="display:inline-block;margin-right:10px;">${esc(nameOf(s))} 上金 ${c}</span>` : ''
+    ).join('');
+    const locked = (result.locked || []).some(Boolean);
+    const lockBlock = locked
+      ? `<div class="settle-sub">锁金状态：${result.locked.map((v, s) => `${esc(nameOf(s))}${v ? '（锁）' : '（解）'}`).join(' ')}${result.lockSeat != null ? ' · 锁家：' + esc(nameOf(result.lockSeat)) : ''}</div>`
+      : '';
+    const pays = result.payments || [];
+    const payBlock = pays.length
+      ? `<div class="settle-gang"><div class="settle-sub">支付明细（负数=付出，正数=收入）</div>
+          <table class="pay-table">
+            <thead><tr><th>项目</th><th>付款方</th><th>收款方</th></tr></thead>
+            <tbody>${pays.map((pay) => `
+              <tr>
+                <td class="pay-item">${esc(pay.role || '胡牌')}${pay.formula ? '<span class="pay-formula">' + esc(pay.formula) + '</span>' : ''}</td>
+                <td class="pay-from"><div class="pay-line">${esc(nameOf(pay.from))} <span class="pay-neg">${pay.amount}</span></div></td>
+                <td class="pay-to"><span class="pay-actor">胡牌</span>${esc(nameOf(pay.to))} <span class="pay-pos">+${pay.amount}</span></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`
+      : '';
+    if (result.type === 'draw') {
+      const flowTxt = (result.gangLogs || []).length > 0 ? '，有杠下家坐庄' : '，无杠庄家连庄';
+      if (compact) {
+        return `<div class="settle-head"><div class="settle-sub">${prefix}流局（运城贴金 · ${flowTxt}）</div></div>${goldBlock}${shangjinBlock}${lockBlock}` + settleHands;
+      }
+      return `
+        <div class="settle-head"><div class="settle-sub">流局（运城贴金麻将${flowTxt}，杠分不计）</div></div>
+        ${goldBlock}
+        ${shangjinBlock}
+        ${lockBlock}
+        ${settleHands}`;
+    }
+    const winner = result.hands && result.hands[winSeat];
+    const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+    if (compact) {
+      return `<div class="settle-head">
+        <div class="settle-sub">${prefix}${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)} · 上金 ${result.goldCount || 0} 张 · 金分 ${result.goldScore || 0} → ${result.winnerGain >= 0 ? '+' : ''}${result.winnerGain} 分</div>
+      </div>${goldBlock}${shangjinBlock}${lockBlock}${payBlock}` + settleHands;
+    }
+    return `
+      <div class="settle-head">
+        <div class="settle-big">${result.winnerGain >= 0 ? '+' : ''}${result.winnerGain}</div>
+        <div class="settle-sub">运城贴金麻将 · ${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)}</div>
+        <div class="settle-sub">上金 ${result.goldCount || 0} 张（三金封顶）· 金分 ${result.goldScore || 0}${result.huGain ? ' · 胡分 ' + result.huGain : ''}</div>
+        ${goldBlock}
+        ${shangjinBlock}
+        ${lockBlock}
+      </div>
+      ${payBlock}
+      ${settleHands}`;
+  }
+
   /**
    * 结算详情公共渲染：单局结算（showSettlement）与房间结算"最后一局"（showSettleModal）共用，
    * 消除约 60+ 行重复模板。内部复用 paymentTableHtml / tileText / tileHtml / renderMelds / esc。
@@ -1263,6 +1357,7 @@
    */
   function buildSettleHtml(result, opts = {}) {
     if (result && result.variant === 'hongzhong') return buildHZSettleHtml(result, opts);
+    if (result && result.variant === 'tiejin') return buildTieJinSettleHtml(result, opts);
     const prefix = opts.prefix || '';
     const winnerLabel = opts.winnerLabel || '（胡）';
     const compact = !!opts.compact;
@@ -1329,7 +1424,8 @@
       // 流局：剩 6 墩无人胡，公开听牌者 / 扣点 / 杠分
       title.textContent = '流局';
     } else {
-      const winner = result.hands && result.hands[result.winnerSeat];
+      const ws = result.winner != null ? result.winner : result.winnerSeat;
+      const winner = result.hands && result.hands[ws];
       const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
       title.textContent = `${winner ? winner.name : ''} ${winLabel}！`;
     }
@@ -1414,15 +1510,20 @@
   function initCreateModal() {
     const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
     const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；只能自摸或抢杠胡，不能点炮；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
-    buildSeg('seg-variant', ['koudian', 'hongzhong'], (v) => (v === 'hongzhong' ? '红中麻将' : '扣点点'), (v) => {
+    const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），有金必须上金一次才有点炮胡资格，上金区独立展示，三金封顶；锁金开关默认开启（上金多者可点炮/自摸，被锁只能自摸，打出最后金牌解锁）；可碰可杠不可吃，无报听；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
+    buildSeg('seg-variant', ['koudian', 'hongzhong', 'tiejin'], (v) => (v === 'hongzhong' ? '红中麻将' : v === 'tiejin' ? '贴金麻将' : '扣点点'), (v) => {
       const hz = v === 'hongzhong';
+      const tj = v === 'tiejin';
       $('#settings-hz').classList.toggle('hidden', !hz);
-      $('#settings-136').classList.toggle('hidden', hz);
-      $('#create-tip').textContent = hz ? hongzhongTip : koudianTip;
+      $('#settings-tiejin').classList.toggle('hidden', !tj);
+      $('#settings-136').classList.toggle('hidden', hz || tj);
+      $('#create-tip').textContent = hz ? hongzhongTip : tj ? tiejinTip : koudianTip;
     });
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
     buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
     buildSeg('seg-zha-ma', [0, 1, 2, 4, 6], (v) => (v === 0 ? '关' : v + ' 张'));
+    buildSeg('seg-draw-end', ['A', 'B'], (v) => (v === 'B' ? 'B 剩10墩流局' : 'A 摸完流局'));
+    buildSeg('seg-score-mode', ['A', 'B'], (v) => (v === 'B' ? 'B 125体系' : 'A 边趣计分'));
     $('#create-cancel').onclick = () => hideModal('create-modal');
     $('#settle-close').onclick = () => hideModal('settle-modal');
     $('#create-confirm').onclick = () => {
@@ -1435,6 +1536,14 @@
           ...base,
           variant: 'hongzhong',
           zhaMa: segValue('seg-zha-ma'),
+        } });
+      } else if (variant === 'tiejin') {
+        send({ type: 'create_room', settings: {
+          ...base,
+          variant: 'tiejin',
+          lockGold: $('#opt-lock-gold').checked,
+          drawEndMode: segValue('seg-draw-end'),
+          scoreMode: segValue('seg-score-mode'),
         } });
       } else {
         const enableQingYiSe = $('#opt-qingyise').checked;
@@ -1730,7 +1839,8 @@
     // 胡：winners 由无到有（点炮/自摸/抢杠胡）；AI 胡牌不播报
     if (game.winners && !voiceState.hadWinners) {
       if (game.winners.type === 'hu') {
-        const winner = game.players[game.winners.winnerSeat];
+        const ws = game.winners.winner != null ? game.winners.winner : game.winners.winnerSeat;
+        const winner = game.players[ws];
         if (!winner || !winner.isAI) {
           const wt = game.winners.winType;
           speakText(wt === 'zimo' ? '自摸' : wt === 'qianggang' ? '抢杠胡' : '胡了', 'hu:' + game.roundNo);

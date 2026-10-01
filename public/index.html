@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>运城扣点点麻将</title>
-  <link rel="stylesheet" href="style.css?v=11">
+  <link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
 <div id="app">
@@ -104,6 +104,32 @@
           <span class="hz-badge">红中 = 万能癞子</span>
         </div>
       </div>
+      <div id="settings-tiejin" class="settings-136 hidden">
+        <div class="setting-divider">金牌玩法</div>
+        <div class="setting-row">
+          <label>翻金母</label>
+          <span class="hz-badge">翻牌定金母，序数牌 10-点数、发财即发财、风箭按对牌</span>
+        </div>
+        <div class="setting-row">
+          <label>必上金</label>
+          <span class="hz-badge">有金必须上金一次才有点炮胡资格</span>
+        </div>
+        <div class="setting-divider">玩法开关（默认开启）</div>
+        <div class="setting-row">
+          <label>锁金</label>
+          <label class="switch"><input type="checkbox" id="opt-lock-gold" checked><span></span></label>
+        </div>
+        <div class="setting-divider">流局规则</div>
+        <div class="setting-row">
+          <label>流局</label>
+          <div class="seg" id="seg-draw-end"></div>
+        </div>
+        <div class="setting-divider">计分体系</div>
+        <div class="setting-row">
+          <label>计分</label>
+          <div class="seg" id="seg-score-mode"></div>
+        </div>
+      </div>
       <div id="settings-136" class="settings-136">
         <div class="setting-divider">牌型倍数开关（默认关闭）</div>
         <div class="setting-row">
@@ -180,6 +206,6 @@
   <!-- 提示 -->
   <div id="toast" class="toast hidden"></div>
 </div>
-<script src="app.js?v=11"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>
