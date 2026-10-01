@@ -2011,6 +2011,7 @@ class GameServer {
     room.players[seat] = p;
     p.roomId = room.id;
     p.seat = seat;
+    p.score = 0;
     p.roundScore = 0;
     p.hosted = false;
     p._auto = 0;
