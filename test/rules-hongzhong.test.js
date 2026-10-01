@@ -48,6 +48,21 @@ test('checkHuHongZhong 红中补顺子', () => {
   assert.equal(rules.checkHuHongZhong(hand), true);
 });
 
+test('checkHuHongZhong 红中补顺子前张（789筒场景回归）', () => {
+  // 用户实际牌型：中中 5-6-7万 9万 1-2-3条 6-7-8条 8-9筒
+  // 红中1补7筒成 789筒顺子，红中2配9万作将
+  const hand = ['z0', 'z0', 'w5', 'w6', 'w7', 'w9', 't1', 't2', 't3', 't6', 't7', 't8', 'b8', 'b9'];
+  assert.equal(rules.checkHuHongZhong(hand), true);
+  // 红中补7筒 + 真实9万将
+  const hand2 = ['z0', 'b8', 'b9', 'w9', 'w9', 'w5', 'w6', 'w7', 't1', 't2', 't3', 't6', 't7', 't8'];
+  assert.equal(rules.checkHuHongZhong(hand2), true);
+  // 听口应包含 w9（摸9万即成上述牌型）与 b7（摸7筒成真实789筒）
+  const hand13 = ['z0', 'z0', 'w5', 'w6', 'w7', 't1', 't2', 't3', 't6', 't7', 't8', 'b8', 'b9'];
+  const ting = rules.isTingHongZhong(hand13, []);
+  assert.ok(ting.includes('w9'));
+  assert.ok(ting.includes('b7'));
+});
+
 test('checkHuHongZhong 红中补刻子', () => {
   // 123w 456w 789w + t1t1+红中成刻 + t5t5 将
   const hand = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't5', 't5', 'z0'];

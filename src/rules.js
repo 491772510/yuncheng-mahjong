@@ -498,24 +498,30 @@ function canFormMeldsWithWild(cnt, n, wild) {
       if (canFormMeldsWithWild(c2, n - 1, wild - wUsed)) return true;
     }
   }
-  // 顺子：first 位置消耗 1 张真实牌；后两位置各 1 张，缺张用红中补
-  if (num <= 7) {
-    const tA = s + (num + 1);
-    const tB = s + (num + 2);
-    const realA = cnt.get(tA) || 0;
-    const realB = cnt.get(tB) || 0;
-    for (let wA = 0; wA <= 1 && wA <= wild; wA++) {
-      const needA = 1 - wA;
-      if (needA > realA) continue;
-      for (let wB = 0; wB <= 1 && wB <= wild - wA; wB++) {
-        const needB = 1 - wB;
-        if (needB > realB) continue;
-        const c2 = new Map(cnt);
-        decCount(c2, first, 1);
-        if (needA > 0) decCount(c2, tA, needA);
-        if (needB > 0) decCount(c2, tB, needB);
-        if (canFormMeldsWithWild(c2, n - 1, wild - wA - wB)) return true;
+  // 顺子：first 必须作为顺子的一部分；顺子起点 a 可为 num-2 / num-1 / num（合法范围），
+  // 每个位置优先用真实牌，也可用红中补齐（枚举各位置红中用量，保留真实牌给后续结构）。
+  // 例：b8,b9+红中 可成 7,8,9（起点 7，红中补 b7）；w2,w3+红中 可成 1,2,3 或 2,3,4。
+  const startMin = Math.max(1, num - 2);
+  const startMax = Math.min(7, num);
+  for (let a = startMin; a <= startMax; a++) {
+    const pos = [s + a, s + (a + 1), s + (a + 2)];
+    const posReal = pos.map((t) => (t === first ? 1 : (cnt.get(t) || 0)));
+    for (let mask = 0; mask < 8; mask++) {
+      let needWild = 0;
+      let ok = true;
+      const c2 = new Map(cnt);
+      for (let i = 0; i < 3; i++) {
+        // first 所在位置必须消耗真实牌，避免同组红中重复形成顺子
+        const useReal = (pos[i] === first) || ((mask >> i) & 1);
+        if (useReal) {
+          if (posReal[i] <= 0) { ok = false; break; }
+          decCount(c2, pos[i], 1);
+        } else {
+          needWild++;
+        }
       }
+      if (!ok || needWild > wild) continue;
+      if (canFormMeldsWithWild(c2, n - 1, wild - needWild)) return true;
     }
   }
   return false;
