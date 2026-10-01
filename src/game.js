@@ -1465,7 +1465,7 @@ class GameServer {
           return this._err(p, '手牌不构成胡牌');
         }
         this._settleHuHongZhong(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
-        this._endRound(room);
+        this._finishHuRoundHongZhong(room);
         return;
       }
       if (!rules.checkHu(g.hands[p.seat], g.melds[p.seat])) return this._err(p, '手牌不构成胡牌');

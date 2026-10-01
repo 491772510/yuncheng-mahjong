@@ -557,3 +557,30 @@ test('need258Eye 关闭：非二五八将可胡', () => {
   assert.equal(g.winners.winType, 'zimo', 'need258Eye关闭时应可胡');
   cleanupServer(srv);
 });
+
+// ============ 自摸结算必须广播 settlement（与抢杠一致，修复确认页自摸无详情） ============
+
+test('自摸胡必须广播 settlement：确认弹窗展示手牌/扎码/计算式（防回归）', () => {
+  const { srv, room, wss } = makeRoom4({ zhaMa: 2, enablePaozi: true });
+  const g = room.game;
+  g.hands[0] = H2_SELFHU.slice();
+  g.melds[0] = [];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w9';
+  send(wss[0], { type: 'hu' });
+  assert.equal(g.winners.winType, 'zimo');
+
+  const settle = lastOf(wss[0], 'settlement');
+  assert.ok(settle, '自摸胡后必须广播 settlement 消息（原缺陷：自摸直接 _endRound 未走 _finishHuRoundHongZhong）');
+  const r = settle.result;
+  assert.equal(r.winType, 'zimo');
+  assert.ok(r.payments && r.payments.length === 1, 'settlement result 需含 hu 支付明细');
+  assert.ok(r.payments[0].rows.every((x) => x.formula), '每行需含分项计算式 formula');
+  assert.ok(r.hands && r.hands.length === 4, 'settlement result 需含各家手牌 hands');
+  assert.ok(r.zhaMaTiles && r.zhaMaTiles.length === 2, 'settlement result 需含扎码牌 zhaMaTiles');
+
+  const confirm = lastOf(wss[0], 'settlement_confirm');
+  assert.ok(confirm && confirm.confirms, '自摸后应进入结算确认阶段并广播 settlement_confirm');
+  cleanupServer(srv);
+});
