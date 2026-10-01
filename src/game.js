@@ -717,7 +717,7 @@ class GameServer {
     g.lastAction = { type: 'gang' }; // 保持杠标记 → 杠上开花
     // 报听玩家杠后补牌仍锁死摸打，不标“新牌”；正常玩家记录新摸牌
     g.newTiles[seat] = g.tingSeats.includes(seat) ? null : tile;
-    this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 杠后补牌`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     // 报听玩家：杠后补牌手牌继续锁死；若构成可自摸胡给胡/过，否则摸牌即打
@@ -989,7 +989,7 @@ class GameServer {
     g.melds[seat].push({ type: 'angang', tile, tiles: [tile, tile, tile, tile] });
     g.lastAction = { type: 'gang' };
     g.newTiles[seat] = null; // 杠后补牌前清除旧标志（补牌后重新设置）
-    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 暗杠`);
     this._settleGangScore(room, seat, tile, 'angang');
     this._drawAfterGang(room, seat);
   }
@@ -2342,7 +2342,7 @@ class GameServer {
     g.lastDiscard = null;
     g.lastAction = { type: 'gang' }; // 保持杠标记 → 杠上开花
     g.newTiles[seat] = tile;
-    this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 杠后补牌`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     this._afterTurnStart(room, seat);
@@ -2486,7 +2486,7 @@ class GameServer {
     room.players[seat].score += 6;
     room.players[seat].roundScore += 6;
     g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 2, points: 2, kou: 1, hz: true });
-    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 手）`);
+    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 手）`, seat, `${this._pName(room, seat)} 暗杠（每家付 2 手）`);
     this._drawAfterGangHongZhong(room, seat);
   }
 
@@ -2920,7 +2920,7 @@ class GameServer {
     g.lastAction = null;
     g.newTiles[seat] = tile;
     g.huPassed[seat] = false; // 获得抓牌权，过胡限制解除
-    this._log(room, `${this._pName(room, seat)} 摸到 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 摸到 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 摸牌`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     this._afterTurnStart(room, seat);
@@ -2942,7 +2942,7 @@ class GameServer {
     g.lastAction = { type: 'gang' };
     g.newTiles[seat] = tile;
     g.huPassed[seat] = false;
-    this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`);
+    this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 杠后补牌`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     this._afterTurnStart(room, seat);
@@ -3107,7 +3107,7 @@ class GameServer {
     room.players[seat].score += 6;
     room.players[seat].roundScore += 6;
     g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 2, points: 6, kou: 1 });
-    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 分）`);
+    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 分）`, seat, `${this._pName(room, seat)} 暗杠（每家付 2 分）`);
     this._drawAfterGangTieJin(room, seat);
   }
 
@@ -3203,7 +3203,8 @@ class GameServer {
       g.locked[p.seat] = false;
       this._log(room, `${this._pName(room, p.seat)} 亮出最后一张金牌，解锁！`);
     }
-    this._log(room, `${this._pName(room, p.seat)} 亮金 ${rules.tileName(gold)}（亮金区），牌尾补入 ${rules.tileName(bonus)}`);
+    this._log(room, `${this._pName(room, p.seat)} 亮金 ${rules.tileName(gold)}（亮金区）`);
+    this._log(room, `${this._pName(room, p.seat)} 牌尾补入 ${rules.tileName(bonus)}`, p.seat, `${this._pName(room, p.seat)} 亮金补牌`);
     // 规则锁金：连续亮金达到 2 张后自动锁定其他三家（本家不受锁，仅触发一次）
     if (g.shangjinCount[p.seat] >= 2 && g.lockSeat === -1) {
       for (let s = 0; s < 4; s++) if (s !== p.seat) g.locked[s] = true;

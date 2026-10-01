@@ -405,6 +405,7 @@
   // ================= 大厅 =================
   function renderLobby() {
     showView('lobby');
+    applyVariantChrome('koudian'); // 大厅默认扣点点文案
     const list = $('#room-list');
     const rooms = (state.lobby && state.lobby.rooms) || [];
     if (!rooms.length) {
@@ -413,6 +414,7 @@
     }
     list.innerHTML = rooms.map((r) => {
       const hz = isHongZhongOf(r);
+      const tj = !!(r.settings && r.settings.variant === 'tiejin');
       return `
       <div class="room-card">
         <div class="rc-id">房间 ${r.id}</div>
@@ -420,9 +422,9 @@
           <span class="badge ${r.state}">${roomStateText(r.state)}</span>
           <span>${r.playerCount}/4 人</span>
           <span>创建者 ${esc(r.ownerName || '未知')}</span>
-          <span>${hz ? '112张·红中麻将' : '136张·带风带箭'}</span>
+          <span>${hz ? '112张·红中麻将' : tj ? '136张·贴金麻将' : '136张·带风带箭'}</span>
           <span>${r.settings.aiFill ? 'AI补位' : '无AI'}</span>
-          <span>${hz ? '癞子红中' : '报听必开'}</span>
+          <span>${hz ? '癞子红中' : tj ? '金牌万能' : '报听必开'}</span>
           <span>${roundsText(r.settings.totalRounds)}</span>
         </div>
         <button class="btn small primary" data-join="${r.id}"
@@ -437,13 +439,28 @@
   function roundsText(v) { return v === 0 ? '不限局数' : v + ' 局'; }
   // 玩法识别：settings.variant（优先）或 game.variant 兜底
   function isHongZhongOf(s) { return !!(s && ((s.settings && s.settings.variant === 'hongzhong') || s.variant === 'hongzhong')); }
-  function variantLabel(settings) { return settings && settings.variant === 'hongzhong' ? '红中麻将' : '扣点点'; }
+  function variantLabel(settings) { return settings && settings.variant === 'hongzhong' ? '红中麻将' : settings && settings.variant === 'tiejin' ? '贴金麻将' : '扣点点'; }
+  // 页面标题/Logo/Slogan 随玩法切换：koudian 默认，tiejin/hongzhong 各自文案
+  function variantChrome(variant) {
+    if (variant === 'tiejin') return { title: '运城贴金麻将', logo: '🀄 运城贴金麻将', slogan: '贴金 · 金牌万能 · 亮金锁金' };
+    if (variant === 'hongzhong') return { title: '红中麻将', logo: '🀄 红中麻将', slogan: '红中癞子 · 自摸抢杠 · 扎码翻倍' };
+    return { title: '运城扣点点麻将', logo: '🀄 运城扣点点麻将', slogan: '扣点点 · 只碰不吃 · 胡牌自摸' };
+  }
+  function applyVariantChrome(variant) {
+    const c = variantChrome(variant);
+    document.title = c.title;
+    const logo = $('.logo');
+    const slogan = $('.slogan');
+    if (logo) logo.textContent = c.logo;
+    if (slogan) slogan.textContent = c.slogan;
+  }
 
   // ================= 房间视图 =================
   function renderRoomView() {
     showView('room');
     fitViewportHeight();
     const room = state.room;
+    applyVariantChrome(room.settings && room.settings.variant || 'koudian');
     $('#room-id-text').textContent = room.id;
     $('#room-state-text').textContent =
       `${variantLabel(room.settings)} · ${roomStateText(room.state)}` +
