@@ -187,9 +187,9 @@ test('带明牌区（碰/杠刻子）胡牌判定', () => {
   assert.equal(rules.checkHuHongZhong(hand, melds2), true);
 });
 
-// ============ 二五八将（固定无限制） ============
+// ============ 将牌无限制 ============
 
-test('无二五八将限制：平胡将对非 2/5/8 时可胡', () => {
+test('将牌无限制：平胡将对非 2/5/8 时可胡', () => {
   // 123w 456w 789w 222t + w1w1 将（非 258）
   const badEye = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't2', 'w1', 'w1'];
   assert.equal(rules.checkHuHongZhong(badEye), true);
@@ -198,7 +198,7 @@ test('无二五八将限制：平胡将对非 2/5/8 时可胡', () => {
   assert.equal(rules.checkHuHongZhong(goodEye), true);
 });
 
-test('无二五八将限制：碰碰胡将 t3（非 258）可胡', () => {
+test('将牌无限制：碰碰胡将 t3（非 258）可胡', () => {
   const hand = ['w1', 'w1', 'w1', 'w2', 'w2', 'w2', 't1', 't1', 't1', 't2', 't2', 't2', 't3', 't3'];
   assert.equal(rules.checkHuHongZhong(hand), true);
 });

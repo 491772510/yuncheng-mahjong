@@ -1,10 +1,10 @@
 'use strict';
 
 // ============ 西安红中麻将：game.js 游戏流程模块测试 ============
-// 覆盖：112张无风发牌（庄14闲13）、禁吃/无报听、固定模式B（只自摸/抢杠胡、禁点炮）、
+// 覆盖：112张无风发牌（庄14闲13）、禁吃/无报听、胡牌仅自摸/抢杠（禁点炮）、
 // 抢杠仅补杠+包赔三家、杠牌当场结（放杠2手/补杠每家1手/暗杠每家2手）、
 // 无番制结算（自摸=2手底注+中码数×底注，抢杠/点炮=被抢者/放炮者包三家）、扎码中码翻倍、
-// 谁胡谁坐庄/流局连庄、固定无二五八将限制、结算字段完整性。
+// 谁胡谁坐庄/流局连庄、无将牌限制、结算字段完整性。
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { GameServer } = require('../src/game');
@@ -83,7 +83,7 @@ function makeRoom4(settings) {
 const H1_TING_W9 = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 'z0', 'z0'];
 // h2：14 张自摸胡（癞子可作将）
 const H2_SELFHU = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 'w9', 'z0', 'z0'];
-// h5：14 张自摸胡，将 t3 非二五八（固定无二五八将限制，可胡）
+// h5：14 张自摸胡，将 t3（无将牌限制，可胡）
 const H5_SELFHU_258 = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w9', 'w9', 'w9', 't3', 't3'];
 // 普通闲家手牌（13张，不胡 w9/w5）
 const PLAIN13 = ['b1', 'b1', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 't2', 't2'];
@@ -92,7 +92,7 @@ const H3_TING_W5 = ['w6', 'w6', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 
 
 // ============ 发牌 / 基础流程 ============
 
-test('红中开局：112张无风牌、庄14闲13、无报听、view不含模式/二五八/炮子开关', () => {
+test('红中开局：112张无风牌、庄14闲13、无报听、view不含废弃开关字段', () => {
   const { srv, room, wss } = makeRoom4({});
   assert.equal(room.state, 'playing');
   const g = room.game;
@@ -107,11 +107,6 @@ test('红中开局：112张无风牌、庄14闲13、无报听、view不含模式
   }
   const v0 = lastOf(wss[0], 'game_state');
   assert.equal(v0.game.settings.variant, 'hongzhong');
-  // 固定形态：不再下发 huMode/need258Eye/enablePaozi/paozi 字段
-  assert.equal(v0.game.settings.huMode, undefined);
-  assert.equal(v0.game.settings.need258Eye, undefined);
-  assert.equal(v0.game.settings.enablePaozi, undefined);
-  assert.equal(v0.game.paozi, undefined);
   assert.deepEqual(g.tingSeats, []);
   cleanupServer(srv);
 });
@@ -126,9 +121,9 @@ test('红中禁吃与无报听：ting/koupoint 被拒', () => {
   cleanupServer(srv);
 });
 
-// ============ 固定模式 B：只自摸+抢杠，禁点炮 ============
+// ============ 胡牌方式：只自摸+抢杠，禁点炮 ============
 
-test('固定模式B：点炮不可胡（响应不含胡），自摸仍可胡', () => {
+test('胡牌方式：点炮不可胡（响应不含胡），自摸仍可胡', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   g.hands[0] = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't1', 't2', 't3', 'w9'];
@@ -141,8 +136,8 @@ test('固定模式B：点炮不可胡（响应不含胡），自摸仍可胡', (
   g.drawnTile = 'w9';
 
   send(wss[0], { type: 'play_tile', tile: 'w9' });
-  // 模式B：无人可点炮 → 无响应，轮转下家
-  assert.equal(g.pending, null, '模式B点炮不应产生胡响应');
+  // 无人可点炮 → 无响应，轮转下家
+  assert.equal(g.pending, null, '点炮不应产生胡响应');
   assert.equal(g.lastAction, null);
   assert.notEqual(g.turn, 0, '出牌后应轮转');
 
@@ -178,7 +173,7 @@ test('自摸胡：三家各付；谁胡谁坐庄（下一局由胜者坐庄）',
   assert.equal(pay.toAmount, w.score);
   assert.equal(w.zmaMult, 1, '未开扎码时中码倍数=1');
   assert.equal(w.noFan, true, '无番制结算');
-  assert.equal(w.score, (2 + w.zmaMult) * 3, '无炮子自摸：每家 2手底注+中码数×底注=3，三家共 9 分');
+  assert.equal(w.score, (2 + w.zmaMult) * 3, '自摸：每家 2手底注+中码数×底注=3，三家共 9 分');
   assert.equal(room.players[0].roundScore, w.score);
   assert.equal(room.lastWinner, 0);
 
@@ -217,7 +212,7 @@ test('抢杠胡：补杠触发抢杠判定，被抢杠者包赔三家', () => {
   assert.equal(pay.rows.length, 1);
   assert.equal(pay.rows[0].seat, 0);
   assert.equal(pay.rows[0].role, '被抢杠者（包三家）');
-  assert.equal(pay.rows[0].amount, -6, '固定无炮子抢杠：被抢者按(1手底注+中码数×底注)×3=6分独赔');
+  assert.equal(pay.rows[0].amount, -6, '抢杠：被抢者按(1手底注+中码数×底注)×3=6分独赔');
   assert.equal(w.score, 6);
   assert.equal(room.players[0].roundScore, -w.score);
   assert.equal(room.players[1].roundScore, w.score);
@@ -314,7 +309,7 @@ test('扎码：1/5/9+红中算中码，每张翻一倍', () => {
   assert.equal(w.zhaMaCount, 2);
   assert.deepEqual(w.zhaMaTiles, ['w1', 'z0']);
   assert.equal(w.zmaMult, 4, '中2码 → 中码倍数4');
-  assert.equal(w.score, (2 + w.zmaMult) * 3, '固定无炮子自摸：每家 2手底注+中码数×底注，共(2+4)×3=18');
+  assert.equal(w.score, (2 + w.zmaMult) * 3, '自摸：每家 2手底注+中码数×底注，共(2+4)×3=18');
   assert.equal(room.players[0].roundScore, (2 + w.zmaMult) * 3);
   cleanupServer(srv);
 });
@@ -362,19 +357,19 @@ test('流局：牌墙摸完最后一张才流局，庄家连庄', () => {
   cleanupServer(srv);
 });
 
-// ============ 二五八将（固定无限制） ============
+// ============ 将牌无限制 ============
 
-test('固定无二五八将限制：非二五八将自摸可胡', () => {
+test('将牌无限制：非 2/5/8 将自摸可胡', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  // h5 将 t3 非二五八：固定无限制应可胡
+  // h5 将 t3（非 2/5/8）：无将牌限制应可胡
   g.hands[0] = H5_SELFHU_258.slice();
   g.melds[0] = [];
   g.turn = 0;
   g.stage = 'draw';
   g.drawnTile = 't3';
   send(wss[0], { type: 'hu' });
-  assert.equal(g.winners.winType, 'zimo', '无二五八将限制时非二五八将应可胡');
+  assert.equal(g.winners.winType, 'zimo', '无将牌限制时非 2/5/8 将应可胡');
   cleanupServer(srv);
 });
 

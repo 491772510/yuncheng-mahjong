@@ -1965,7 +1965,7 @@ class GameServer {
     if (![0, 4, 8, 12].includes(totalRounds)) return null;
     const variant = s.variant === 'hongzhong' ? 'hongzhong' : 'koudian';
     // 红中麻将专属设置：扎码张数（0=不扎码 / 1/2/4/6）。
-    // 固定形态：模式 B（只自摸/抢杠胡、禁点炮、抢杠仅限补杠）、无二五八将、无下炮子。
+    // 固定胡牌方式：只能自摸/抢杠胡（禁点炮、抢杠仅限补杠）。
     if (variant === 'hongzhong') {
       const zhaMa = Number(s.zhaMa) || 0;
       if (![0, 1, 2, 4, 6].includes(zhaMa)) return null;
@@ -2177,7 +2177,7 @@ class GameServer {
     return null;
   }
 
-  // ============ 红中麻将流程模块（西安红中：112 张无风、庄14闲13、禁吃、癞子胡、抢杠、扎码；固定模式B/无二五八将/无下炮子） ============
+  // ============ 红中麻将流程模块（西安红中：112 张无风、庄14闲13、禁吃、癞子胡、抢杠、扎码；胡牌仅自摸/抢杠） ============
 
   _isHongZhong(room) {
     return !!(room && room.settings && room.settings.variant === 'hongzhong');
@@ -2202,7 +2202,7 @@ class GameServer {
       kouPoints: [1, 1, 1, 1], // 红中无扣点玩法，固定 1
       gangLogs: [], // 本局杠分记录（红中杠分当场结算，此处留明细供结算展示）
       turn: -1,
-      stage: 'draw', // 直接进入行牌（固定无下炮子玩法）
+      stage: 'draw', // 直接进入行牌
       drawnTile: null,
       newTiles: [null, null, null, null],
       lastDiscard: null,
@@ -2235,7 +2235,7 @@ class GameServer {
     this._broadcastRoomState(room);
     this._broadcastGameState(room);
 
-    // 固定无下炮子玩法：直接开始行牌
+    // 直接开始行牌
     this._startHongZhongPlay(room, g.dealer);
   }
 
@@ -2293,14 +2293,14 @@ class GameServer {
     this._afterTurnStart(room, seat);
   }
 
-  /** 红中出牌响应：禁吃；胡>杠>碰；固定模式 B（禁点炮胡，仅自摸/抢杠）；一炮多响（胡牌可多响，杠/碰取最近） */
+  /** 红中出牌响应：禁吃；胡>杠>碰；禁点炮胡，仅自摸/抢杠可胡；一炮多响（胡牌可多响，杠/碰取最近） */
   _afterDiscardHongZhong(room, discarder) {
     const g = room.game;
     const tile = g.lastDiscard.tile;
     const responders = [];
     for (let s = 0; s < 4; s++) {
       if (!room.players[s] || s === discarder) continue;
-      const canHu = false; // 模式 B（固定）：禁点炮胡，仅自摸/抢杠可胡
+      const canHu = false; // 禁点炮胡，仅自摸/抢杠可胡
       const canGang = rules.canGangHongZhong(g.hands[s], tile);
       const canPeng = rules.canPengHongZhong(g.hands[s], tile);
       if (canHu || canGang || canPeng) {
