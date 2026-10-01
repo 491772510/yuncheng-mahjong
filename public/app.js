@@ -121,11 +121,6 @@
           if (!state.prompt || state.prompt.type !== 'draw') {
             state.prompt = { type: 'draw', actions: ['play'], gangOptions: [], canHu: false, canDeclareTing: false };
           }
-        } else if (msg.game.stage === 'paozi' && msg.game.paozi && msg.game.paozi[msg.game.yourSeat] == null) {
-          // 红中下炮阶段：重连/消息丢失兜底补 prompt，避免操作区空白卡死
-          if (!state.prompt || state.prompt.type !== 'paozi') {
-            state.prompt = { type: 'paozi', actions: ['paozi-0', 'paozi-1', 'paozi-2', 'paozi-3', 'paozi-4'] };
-          }
         } else if (msg.game.pending) {
           const r = msg.game.pending.responders.find((x) => x.seat === msg.game.yourSeat);
           if (r && r.choice === null) {
@@ -592,10 +587,6 @@
     }
     const cur = game.players[game.turn];
     if (!cur) return '';
-    if (game.stage === 'paozi') {
-      const you = game.yourSeat === game.turn;
-      return you ? '请选择下几个炮子（0～4，庄家出牌前自选）' : `等待 ${cur.name} 选择炮子（0～4）…`;
-    }
     const you = game.yourSeat === game.turn;
     if (you) return cur.ting ? '你已报听，摸牌即打（只能杠，不能碰/换牌）' : '轮到你出牌';
     return cur.ting ? `等待 ${cur.name} 摸打（报听）…` : `等待 ${cur.name} 出牌…`;
@@ -608,7 +599,6 @@
     const meldHtml = renderMelds(p.melds);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
     const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
-    const pz = game.paozi && game.paozi[seat];
     return `<div class="player-card ${isTurn ? 'active-turn' : ''}">
       <div class="pc-top">
         ${p.isDealer ? '<span class="pc-dealer">庄</span>' : ''}
@@ -616,7 +606,7 @@
         ${!p.connected ? '<span class="pc-off">离线</span>' : ''}
         ${p.hosted ? '<span class="pc-host">托管</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
-        ${hz ? (pz == null ? '<span class="pc-paozi">选炮中</span>' : (pz > 0 ? `<span class="pc-paozi">炮${pz}</span>` : '')) : (kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : '')}
+        ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
         <span class="pc-name">${esc(p.name)}</span>
         <span class="pc-score">${p.score}</span>
       </div>
@@ -648,14 +638,13 @@
     const meldHtml = renderMelds(p.melds, true);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny')).join('');
     const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
-    const pz = game.paozi && game.paozi[seat];
     return `<div class="player-card ${isTurn ? 'active-turn' : ''}">
       <div class="pc-top">
         ${p.isDealer ? '<span class="pc-dealer">庄</span>' : ''}
         ${p.isAI ? '<span class="pc-ai">AI</span>' : ''}
         ${p.hosted ? '<span class="pc-host">AI托管中</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
-        ${hz ? (pz == null ? '<span class="pc-paozi">选炮中</span>' : (pz > 0 ? `<span class="pc-paozi">炮${pz}</span>` : '')) : (kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : '')}
+        ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
         <span class="pc-name">${esc(p.name)}（我）</span>
         <span class="pc-score">${p.score}</span>
         ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : ''}
@@ -907,11 +896,6 @@
       if (p.canHu) acts.push('胡');
       const actLabel = acts.length ? acts.join('/') : (p.pendingType === 'qianggang' ? '抢杠胡' : '');
       btns += `<span class="resp-hint">${actLabel ? actLabel + '「' : ''}${tileHtml(p.tile, 'small')}${actLabel ? '」' : ''}</span>`;
-    } else if (p.type === 'paozi') {
-      btns += `<span class="countdown" style="align-self:center;">选择炮子 0～4（庄家出牌前）</span>`;
-      for (let i = 0; i <= 4; i++) {
-        btns += `<button class="act act-paozi" data-act="paozi-${i}">${i === 0 ? '不下' : i + '炮'}</button>`;
-      }
     }
     bar.innerHTML = btns;
     if (p.timeoutMs) {
@@ -939,27 +923,7 @@
     else if (act === 'peng') send({ type: 'peng' });
     else if (act === 'pass') send({ type: 'pass' });
     else if (act === 'gang') showGangMenu();
-    else if (act === 'paozi-0') {
-      send({ type: 'paozi', value: 0 });
-      state.prompt = null;
-      renderTable();
-    } else if (act === 'paozi-1') {
-      send({ type: 'paozi', value: 1 });
-      state.prompt = null;
-      renderTable();
-    } else if (act === 'paozi-2') {
-      send({ type: 'paozi', value: 2 });
-      state.prompt = null;
-      renderTable();
-    } else if (act === 'paozi-3') {
-      send({ type: 'paozi', value: 3 });
-      state.prompt = null;
-      renderTable();
-    } else if (act === 'paozi-4') {
-      send({ type: 'paozi', value: 4 });
-      state.prompt = null;
-      renderTable();
-    } else if (act === 'ting') {
+    else if (act === 'ting') {
       state.tingPick = true;
       state.selectedIndex = null;
       renderTable();
@@ -1222,7 +1186,7 @@
     </div>`;
   }
 
-  /** 红中麻将结算详情（variant==='hongzhong'）：番数倍数 + 扎码 + 炮子 + 一炮多响 + 支付明细 */
+  /** 红中麻将结算详情（variant==='hongzhong'）：番数倍数 + 扎码 + 支付明细 */
   function buildHZSettleHtml(result, opts = {}) {
     const prefix = opts.prefix || '';
     const winnerLabel = opts.winnerLabel || '（胡）';
@@ -1248,11 +1212,7 @@
     }
     const winner = result.hands && result.hands[result.winnerSeat];
     const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-    const paoziArr = result.paozi || [];
-    const paoziText = result.enablePaozi && paoziArr.some((x) => x != null)
-      ? `，炮子：${paoziArr.map((v, s) => `${nameOf(s)} ${v > 0 ? '下' + v + '炮' : '不下'}`).join('、')}`
-      : '';
-    const calcText = `无番制${paoziText}`;
+    const calcText = '无番制';
     // 扎码牌独立展示：红中 1/5/9 万筒条 及 红中 为中码
     const isZhongMaTile = (t) =>
       t === 'z0' || ((t[0] === 'w' || t[0] === 't' || t[0] === 'b') && ['1', '5', '9'].includes(t[1]));
@@ -1453,7 +1413,7 @@
 
   function initCreateModal() {
     const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
-    const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；胡牌模式 A=可点炮/自摸/抢杠胡，B=只能自摸/抢杠胡（不能点炮，西安红中主流玩法）；抢杠仅抢补杠（暗杠不可抢），没炮子时被抢者按（1手底注+中码数×底注）×3包赔三家；二五八将：将牌需为 2/5/8；下炮子：可选开或关，开启后开局庄家出牌前每人自选 0～4 个炮子，自摸=底注×中码数×(2+赢家炮子+该输家炮子)、抢杠=底注×中码数×(1+赢家炮子+该输家炮子)，没炮子时自摸=2手底注+中码数×底注；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
+    const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；固定为模式 B（只能自摸/抢杠胡，不能点炮，西安红中主流玩法）；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；不设二五八将限制，无下炮子玩法；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
     buildSeg('seg-variant', ['koudian', 'hongzhong'], (v) => (v === 'hongzhong' ? '红中麻将' : '扣点点'), (v) => {
       const hz = v === 'hongzhong';
       $('#settings-hz').classList.toggle('hidden', !hz);
@@ -1462,7 +1422,6 @@
     });
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
     buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
-    buildSeg('seg-hu-mode', ['B', 'A'], (v) => '模式' + v);
     buildSeg('seg-zha-ma', [0, 1, 2, 4, 6], (v) => (v === 0 ? '关' : v + ' 张'));
     $('#create-cancel').onclick = () => hideModal('create-modal');
     $('#settle-close').onclick = () => hideModal('settle-modal');
@@ -1475,9 +1434,6 @@
         send({ type: 'create_room', settings: {
           ...base,
           variant: 'hongzhong',
-          huMode: segValue('seg-hu-mode'),
-          need258Eye: $('#opt-need258').checked,
-          enablePaozi: $('#opt-paozi').checked,
           zhaMa: segValue('seg-zha-ma'),
         } });
       } else {

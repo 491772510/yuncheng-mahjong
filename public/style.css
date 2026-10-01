@@ -549,9 +549,7 @@ body {
 .koupoint-opt .kp-tip { font-size: 13px; color: #999; }
 
 .pc-koupoint { background: #8e44ad; color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
-.pc-paozi { background: #c0392b; color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
 .hz-badge { display: inline-block; background: rgba(192,57,43,.12); color: #c0392b; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 12px; border: 1px solid rgba(192,57,43,.35); }
-.act-paozi { background: #c0392b; color: #fff; }
 
 .settle-gang { margin: 8px 0; padding: 8px 10px; background: rgba(142,68,173,.08); border-radius: 8px; }
 .settle-gang .row { font-size: 13px; margin: 3px 0; color: #555; }

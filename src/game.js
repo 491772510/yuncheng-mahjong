@@ -24,7 +24,6 @@ const SETTLE_TIMEOUT_MS = 60000; // 结算确认超时：在线真人 60 秒未�
 const MAX_ROOMS = 100;
 const MAX_LOGS = 200;
 const MAX_CHAT = 50;
-const PAOZI_AMOUNT = 1; // 红中麻将：下炮子炮注（分/炮）
 
 function nowTime() {
   const d = new Date();
@@ -100,7 +99,6 @@ class GameServer {
         case 'play_tile': return this._playTile(p, msg);
         case 'ting': return this._ting(p, msg);
         case 'koupoint': return this._koupoint(p, msg);
-        case 'paozi': return this._paozi(p, msg);
         case 'peng': return this._peng(p);
         case 'gang': return this._gang(p, msg);
         case 'hu': return this._hu(p);
@@ -1461,7 +1459,7 @@ class GameServer {
     if (g.stage === 'draw' && g.turn === p.seat && g.drawnTile !== null) {
       // 红中麻将：癞子胡判定（无点数限制），按红中结算
       if (this._isHongZhong(room)) {
-        if (!rules.checkHuHongZhong(g.hands[p.seat], g.melds[p.seat], { need258Eye: !!room.settings.need258Eye })) {
+        if (!rules.checkHuHongZhong(g.hands[p.seat], g.melds[p.seat])) {
           return this._err(p, '手牌不构成胡牌');
         }
         this._settleHuHongZhong(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
@@ -1605,10 +1603,7 @@ class GameServer {
           return;
         }
         const snap = { stage: g.stage, turn: g.turn, drawn: g.drawnTile, lastAction: g.lastAction && g.lastAction.type };
-        if (g.stage === 'paozi' && g.paozi && g.paozi[seat] == null) {
-          // 红中麻将：下炮阶段 AI / 托管自动下 1 炮
-          this._autoFillPaozi(room, seat);
-        } else if (g.stage === 'draw' && g.turn === seat) {
+        if (g.stage === 'draw' && g.turn === seat) {
           // 报听兜底：报听玩家在摸牌后阶段只能胡或摸打，绝不落回 AI 出牌
           // （避免断线/托管等非 _drawTile/_drawAfterGang 入口触发 decideDrawAction
           //   返回 play，被 _playTile 以"听口状态由系统自动摸打"拒绝后 stuck）
@@ -1748,7 +1743,6 @@ class GameServer {
       kouPoints: g.kouPoints.slice(),
       kouTiles: g.kouTiles.map((t) => (t ? 'back' : null)),
       gangLogs: g.gangLogs.slice(),
-      paozi: g.paozi ? g.paozi.slice() : null, // 红中麻将：下炮子状态（null=未下炮阶段 / 0=不下 / 1=下1炮）
       players,
       pending: g.pending
         ? {
@@ -1970,18 +1964,15 @@ class GameServer {
     const totalRounds = Number(s.totalRounds);
     if (![0, 4, 8, 12].includes(totalRounds)) return null;
     const variant = s.variant === 'hongzhong' ? 'hongzhong' : 'koudian';
-    // 红中麻将专属设置：胡牌模式 A/B、二五八将开关、下炮子开关、扎码张数（0=不扎码 / 1/2/4/6）
+    // 红中麻将专属设置：扎码张数（0=不扎码 / 1/2/4/6）。
+    // 固定形态：模式 B（只自摸/抢杠胡、禁点炮、抢杠仅限补杠）、无二五八将、无下炮子。
     if (variant === 'hongzhong') {
-      const huMode = s.huMode === 'B' ? 'B' : 'A';
       const zhaMa = Number(s.zhaMa) || 0;
       if (![0, 1, 2, 4, 6].includes(zhaMa)) return null;
       return {
         totalRounds,
         aiFill: !!s.aiFill,
         variant,
-        huMode,
-        need258Eye: !!s.need258Eye,
-        enablePaozi: !!s.enablePaozi,
         zhaMa,
         dealerFlow: 'keep', // 红中：流局庄家连庄（设计固定）
       };
@@ -2186,7 +2177,7 @@ class GameServer {
     return null;
   }
 
-  // ============ 红中麻将流程模块（西安红中：112 张无风、庄14闲13、禁吃、癞子胡、抢杠、下炮子、扎码） ============
+  // ============ 红中麻将流程模块（西安红中：112 张无风、庄14闲13、禁吃、癞子胡、抢杠、扎码；固定模式B/无二五八将/无下炮子） ============
 
   _isHongZhong(room) {
     return !!(room && room.settings && room.settings.variant === 'hongzhong');
@@ -2211,7 +2202,7 @@ class GameServer {
       kouPoints: [1, 1, 1, 1], // 红中无扣点玩法，固定 1
       gangLogs: [], // 本局杠分记录（红中杠分当场结算，此处留明细供结算展示）
       turn: -1,
-      stage: 'paozi', // 先下炮子，再进入行牌
+      stage: 'draw', // 直接进入行牌（固定无下炮子玩法）
       drawnTile: null,
       newTiles: [null, null, null, null],
       lastDiscard: null,
@@ -2220,7 +2211,6 @@ class GameServer {
       dealer: -1,
       winners: null,
       tingSeats: [], // 红中无报听，恒空
-      paozi: [null, null, null, null], // 下炮子：null=未选 / 0~4 = 自选炮子个数
       zhaMaTiles: null, // 本局扎码牌（结算时从牌墙补抓）
       hzWinners: null, // 红中胡牌赢家明细（一炮多响时多个）
       startAt: Date.now(),
@@ -2245,76 +2235,11 @@ class GameServer {
     this._broadcastRoomState(room);
     this._broadcastGameState(room);
 
-    // 下炮子阶段（可开关，默认关闭）：每人自选 0~4 炮，AI/托管/断线自动下 1 炮
-    if (room.settings.enablePaozi) {
-      for (let s = 0; s < 4; s++) {
-        const pl = room.players[s];
-        if (!pl) continue;
-        if (pl.isAI || pl.hosted || !pl.connected) {
-          g.paozi[s] = 1;
-          this._log(room, `${this._pName(room, s)} 自动下炮子 1 炮`);
-        } else {
-          this._setTimer(room, 'paozi:' + s, HUMAN_TIMEOUT_MS, () => this._autoFillPaozi(room, s));
-        }
-      }
-      this._promptPaozi(room);
-      if (g.paozi.every((x) => x != null)) this._tryStartAfterPaozi(room);
-      return;
-    }
-    // 未开启下炮子：全部按 0 处理，直接开始行牌
-    g.paozi = [0, 0, 0, 0];
+    // 固定无下炮子玩法：直接开始行牌
     this._startHongZhongPlay(room, g.dealer);
   }
 
-  _autoFillPaozi(room, seat) {
-    const g = room && room.game;
-    if (!room || !g || room.state !== 'playing' || g.stage !== 'paozi') return;
-    if (g.paozi[seat] != null) return;
-    g.paozi[seat] = 1;
-    this._log(room, `${this._pName(room, seat)} 未选择下炮子，系统自动下 1 炮`);
-    const pl = room.players[seat];
-    if (pl && !pl.isAI && !pl.hosted) {
-      pl.hosted = true;
-      this._log(room, `${this._pName(room, seat)} 下炮子阶段未确认，已由 AI 托管`);
-      this._broadcastRoomState(room);
-    }
-    this._broadcastGameState(room);
-    if (g.paozi.every((x) => x != null)) this._tryStartAfterPaozi(room);
-  }
-
-  _promptPaozi(room) {
-    const g = room.game;
-    for (let s = 0; s < 4; s++) {
-      const pl = room.players[s];
-      if (pl && !pl.isAI && pl.connected && g.paozi[s] == null) {
-        this._send(pl, { type: 'action_prompt', prompt: { type: 'paozi' } });
-      }
-    }
-  }
-
-  _paozi(p, msg) {
-    const room = this.rooms.get(p.roomId);
-    const g = room && room.game;
-    if (!room || !g || room.state !== 'playing' || g.stage !== 'paozi') {
-      return this._err(p, '当前不在下炮子阶段');
-    }
-    if (g.paozi[p.seat] != null) return this._err(p, '本局已选择过炮子');
-    const v = Number(msg && msg.value);
-    if (!Number.isInteger(v) || v < 0 || v > 4) return this._err(p, '炮子只能选 0~4 个');
-    g.paozi[p.seat] = v;
-    this._log(room, `${this._pName(room, p.seat)} ${v > 0 ? '下 ' + v + ' 炮' : '不下炮子'}`);
-    this._broadcastGameState(room);
-    if (g.paozi.every((x) => x != null)) this._tryStartAfterPaozi(room);
-  }
-
-  _tryStartAfterPaozi(room) {
-    const g = room.game;
-    if (!g || g.stage !== 'paozi') return;
-    if (!g.paozi.every((x) => x != null)) return;
-    this._startHongZhongPlay(room, g.dealer);
-  }
-
-  /** 炮子完成后正式开局：庄家发牌已补 1 张共 14 张（起手即终态），直接进入出牌行动，不再摸牌 */
+  /** 正式开局：庄家发牌已补 1 张共 14 张（起手即终态），直接进入出牌行动，不再摸牌 */
   _startHongZhongPlay(room, seat) {
     const g = room.game;
     g.turn = seat;
@@ -2368,17 +2293,14 @@ class GameServer {
     this._afterTurnStart(room, seat);
   }
 
-  /** 红中出牌响应：禁吃；胡>杠>碰；模式 B 不允许点炮胡；一炮多响（胡牌可多响，杠/碰取最近） */
+  /** 红中出牌响应：禁吃；胡>杠>碰；固定模式 B（禁点炮胡，仅自摸/抢杠）；一炮多响（胡牌可多响，杠/碰取最近） */
   _afterDiscardHongZhong(room, discarder) {
     const g = room.game;
     const tile = g.lastDiscard.tile;
-    const modeB = room.settings.huMode === 'B';
     const responders = [];
     for (let s = 0; s < 4; s++) {
       if (!room.players[s] || s === discarder) continue;
-      const canHu =
-        !modeB &&
-        rules.canHuHongZhongWith(g.hands[s], tile, g.melds[s], { need258Eye: !!room.settings.need258Eye });
+      const canHu = false; // 模式 B（固定）：禁点炮胡，仅自摸/抢杠可胡
       const canGang = rules.canGangHongZhong(g.hands[s], tile);
       const canPeng = rules.canPengHongZhong(g.hands[s], tile);
       if (canHu || canGang || canPeng) {
@@ -2520,7 +2442,7 @@ class GameServer {
     const grabbers = [];
     for (let s = 0; s < 4; s++) {
       if (s === seat || !room.players[s]) continue;
-      if (rules.canHuHongZhongWith(g.hands[s], tile, g.melds[s], { need258Eye: !!room.settings.need258Eye })) {
+      if (rules.canHuHongZhongWith(g.hands[s], tile, g.melds[s])) {
         grabbers.push(s);
       }
     }
@@ -2579,9 +2501,8 @@ class GameServer {
   }
 
   /** 红中胡牌结算（无番制新规则）：
-   *  - 炮子玩法开启：自摸每家付=底注×中码倍数×(2+赢家炮子+该输家炮子)；抢杠每家付=底注×中码倍数×(1+赢家炮子+该输家炮子)；
-   *    点炮由放炮者包赔三家，每家份额=底注×中码倍数×(1+赢家炮子+放炮者炮子)；
-   *  - 炮子玩法关闭：自摸每家付=2手底注+中码倍数×底注；抢杠/点炮由被抢者/放炮者按(1手底注+中码倍数×底注)×3包赔三家；
+   *  - 自摸：每家付 = 2手底注 + 中码倍数×底注；
+   *  - 抢杠/点炮：由被抢者/放炮者按 (1手底注 + 中码倍数×底注)×3 包赔三家；
    *  - 杠分已当场结算（放杠2手/补杠每家1手/暗杠每家2手），结算仅展示不再重复扣分；
    *  - 中码倍数 = 2^中码张数（中0码=1倍，每张中码翻一倍）。
    */
@@ -2591,8 +2512,6 @@ class GameServer {
     if (info.winType !== 'zimo') hand.push(info.tile);
     const winLabel =
       info.winType === 'zimo' ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-    const enablePaozi = !!room.settings.enablePaozi;
-    const pz = g.paozi || [0, 0, 0, 0];
 
     // 扎码：从牌墙补抓，1/5/9 万筒条 + 红中中码，每张使中码倍数翻一倍
     let zhaMaCount = 0;
@@ -2609,20 +2528,19 @@ class GameServer {
     const zmaMult = Math.pow(2, zhaMaCount); // 中码倍数：中0码=1倍，每中一张翻一倍
     const base = 1; // 红中底注恒为 1 分
 
-    const zimoPay = (s) => (enablePaozi ? zmaMult * (2 + (pz[winnerSeat] || 0) + (pz[s] || 0)) : 2 + zmaMult) * base;
-    const qianggangPay = (s) => (enablePaozi ? zmaMult * (1 + (pz[winnerSeat] || 0) + (pz[s] || 0)) : 1 + zmaMult) * base;
-    const baoShare = (enablePaozi ? zmaMult * (1 + (pz[winnerSeat] || 0) + (pz[info.discarder] || 0)) : 1 + zmaMult) * base;
+    const zimoPay = () => (2 + zmaMult) * base;
+    const baoShare = (1 + zmaMult) * base;
     const baoTotal = baoShare * 3;
 
     let winnerGain = 0;
     const payments = [];
     if (info.winType === 'zimo') {
-      // 自摸：三家各付（有炮子时每家金额随该家炮子不同）
+      // 自摸：三家各付
       let total = 0;
       const rows = [];
       for (let s = 0; s < 4; s++) {
         if (s === winnerSeat || !room.players[s]) continue;
-        const pay = zimoPay(s);
+        const pay = zimoPay();
         room.players[s].score -= pay;
         room.players[s].roundScore -= pay;
         total += pay;
@@ -2630,9 +2548,7 @@ class GameServer {
           seat: s,
           amount: -pay,
           role: '自摸',
-          formula: enablePaozi
-            ? `1底注×${zmaMult}中码×(2+${pz[winnerSeat] || 0}赢炮+${pz[s] || 0}输炮)=${pay}`
-            : `1底注×(2+${zmaMult}中码倍数)=${pay}`,
+          formula: `1底注×(2+${zmaMult}中码倍数)=${pay}`,
         });
       }
       room.players[winnerSeat].score += total;
@@ -2640,40 +2556,13 @@ class GameServer {
       winnerGain = total;
       payments.push({
         kind: 'hu',
-        title: `自摸${enablePaozi ? `（炮子 ${pz[winnerSeat] || 0}）` : ''}${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · 三家各付`,
-        toSeat: winnerSeat,
-        toAmount: total,
-        rows,
-      });
-    } else if (info.winType === 'qianggang' && enablePaozi) {
-      // 有炮子抢杠：三家各付（每家 = 底注×中码数×(1+赢家炮子+该输家炮子)）
-      let total = 0;
-      const rows = [];
-      for (let s = 0; s < 4; s++) {
-        if (s === winnerSeat || !room.players[s]) continue;
-        const pay = qianggangPay(s);
-        room.players[s].score -= pay;
-        room.players[s].roundScore -= pay;
-        total += pay;
-        rows.push({
-          seat: s,
-          amount: -pay,
-          role: '抢杠',
-          formula: `1底注×${zmaMult}中码×(1+${pz[winnerSeat] || 0}赢炮+${pz[s] || 0}输炮)=${pay}`,
-        });
-      }
-      room.players[winnerSeat].score += total;
-      room.players[winnerSeat].roundScore += total;
-      winnerGain = total;
-      payments.push({
-        kind: 'hu',
-        title: `抢杠胡（炮子 ${pz[winnerSeat] || 0}）${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · 三家各付`,
+        title: `自摸${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · 三家各付`,
         toSeat: winnerSeat,
         toAmount: total,
         rows,
       });
     } else {
-      // 点炮 / 没炮子抢杠：放炮者（被抢杠者）包赔三家
+      // 点炮 / 抢杠：放炮者（被抢杠者）包赔三家
       const loser = room.players[info.discarder];
       if (loser) {
         loser.score -= baoTotal;
@@ -2685,16 +2574,14 @@ class GameServer {
       const role = info.winType === 'qianggang' ? '被抢杠者（包三家）' : '放炮者（包三家）';
       payments.push({
         kind: 'hu',
-        title: `${winLabel}${enablePaozi ? `（炮子 ${pz[winnerSeat] || 0}）` : ''}${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · ${role}独赔 ${baoTotal} 分`,
+        title: `${winLabel}${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · ${role}独赔 ${baoTotal} 分`,
         toSeat: winnerSeat,
         toAmount: baoTotal,
         rows: [{
           seat: info.discarder,
           amount: -baoTotal,
           role,
-          formula: (enablePaozi
-            ? `1底注×${zmaMult}中码×(1+${pz[winnerSeat] || 0}赢炮+${pz[info.discarder] || 0}输炮)`
-            : `1底注×(1+${zmaMult}中码倍数)`) + `×3家=${baoTotal}`,
+          formula: `1底注×(1+${zmaMult}中码倍数)×3家=${baoTotal}`,
         }],
       });
     }
@@ -2733,11 +2620,9 @@ class GameServer {
       mult: zmaMult,
       zmaMult,
       noFan: true,
-      enablePaozi,
       fanNames: ['无番'],
       zhaMaCount,
       zhaMaTiles: zhaMaTiles.slice(),
-      paozi: g.paozi.slice(),
       kouPoints: g.kouPoints.slice(),
       gangLogs: g.gangLogs.slice(),
       score: winnerGain,
@@ -2792,7 +2677,7 @@ class GameServer {
     if (g.lastAction && g.lastAction.type === 'peng') {
       return { type: 'draw', actions, gangOptions, canHu: false, canDeclareTing: false, timeoutMs: HUMAN_TIMEOUT_MS };
     }
-    const canSelfHu = rules.checkHuHongZhong(hand, g.melds[seat], { need258Eye: !!room.settings.need258Eye });
+    const canSelfHu = rules.checkHuHongZhong(hand, g.melds[seat]);
     if (canSelfHu) actions.push('hu');
     const cnt = rules.countTiles(hand);
     for (const [t, c] of cnt) {
@@ -2822,7 +2707,7 @@ class GameServer {
     if (g.lastAction && g.lastAction.type === 'peng') {
       return { type: 'play', tile: this._chooseHongZhongDiscard(g, room, seat) };
     }
-    if (rules.checkHuHongZhong(hand, g.melds[seat], { need258Eye: !!room.settings.need258Eye })) {
+    if (rules.checkHuHongZhong(hand, g.melds[seat])) {
       return { type: 'hu' };
     }
     const cnt = rules.countTiles(hand);

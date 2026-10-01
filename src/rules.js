@@ -462,13 +462,6 @@ function createTiles112() {
   return tiles;
 }
 
-/** 二五八将判定（万/筒/条 2/5/8） */
-function is258Eye(tile) {
-  if (tile === HONG_ZHONG) return false;
-  const n = numOf(tile);
-  return n === 2 || n === 5 || n === 8;
-}
-
 /** 拆面子（含癞子）：把 cnt（已剔除红中）拆成 n 组面子，缺张可用红中补齐。
  *  每副面子（顺/刻）由真实牌与 wild 张红中共同组成，红中不能在同一位置重复使用（受 wild 总量约束）。
  */
@@ -527,14 +520,11 @@ function canFormMeldsWithWild(cnt, n, wild) {
   return false;
 }
 
-/** 找将（含癞子）：cnt（已剔除红中）+ wild 张红中，先取一对将，剩余拆 n 组面子。
- *  @param {boolean} need258 二五八将限制（平胡）：将牌必须为 2/5/8；红中万能，2 张红中可当任意将。
- */
-function _tryPairAsEyeWithWild(cnt, n, wild, need258) {
+/** 找将（含癞子）：cnt（已剔除红中）+ wild 张红中，先取一对将，剩余拆 n 组面子。 */
+function _tryPairAsEyeWithWild(cnt, n, wild) {
   // 真对作将
   for (const [tile, c] of cnt) {
     if (c >= 2) {
-      if (need258 && !is258Eye(tile)) continue;
       const c2 = new Map(cnt);
       decCount(c2, tile, 2);
       if (canFormMeldsWithWild(c2, n, wild)) return true;
@@ -544,14 +534,13 @@ function _tryPairAsEyeWithWild(cnt, n, wild, need258) {
   if (wild >= 1) {
     for (const [tile, c] of cnt) {
       if (c >= 1) {
-        if (need258 && !is258Eye(tile)) continue;
         const c2 = new Map(cnt);
         decCount(c2, tile, 1);
         if (canFormMeldsWithWild(c2, n, wild - 1)) return true;
       }
     }
   }
-  // 2 红中作将（红中可当任意牌，含 2/5/8）
+  // 2 红中作将（红中可当任意牌）
   if (wild >= 2) {
     if (canFormMeldsWithWild(new Map(cnt), n, wild - 2)) return true;
   }
@@ -666,14 +655,12 @@ function isHunYiSeHongZhong(hand, melds) {
  * 红中麻将胡牌判定（核心癞子胡）：
  *  - 红中(z0)从手牌抽出为癞子 wildCount，可补顺子/刻子/将；
  *  - 明牌区（碰/杠）为已成型面子，不可被红中替代补成；
- *  - 支持平胡/碰碰胡/七小对/龙七对/清一色/混一色；
- *  - opts.need258Eye=true（二五八将开关）：纯平胡的将牌必须为 2/5/8，大胡不受限；
+ *  - 支持平胡/碰碰胡/七小对/龙七对/清一色/混一色（无二五八将限制）；
  *  - 起手 4 张红中直接天胡（开牌即胡）。
  * @param {string[]} hand 手牌
  * @param {object[]} [melds] 明牌区（碰/杠）
- * @param {object} [opts] { need258Eye: boolean }
  */
-function checkHuHongZhong(hand, melds, opts = {}) {
+function checkHuHongZhong(hand, melds) {
   if (!Array.isArray(hand)) return false;
   const m = (Array.isArray(melds) ? melds : []).filter((x) => x && typeof x === 'object' && x.tile);
   const meldSets = m.length;
@@ -695,24 +682,19 @@ function checkHuHongZhong(hand, melds, opts = {}) {
   const cnt = countTiles(sortTiles(hand));
   cnt.delete(HONG_ZHONG);
   const meldCount = (hand.length - 2) / 3;
-  const pp = isPengPengHuHongZhong(hand, m, wild);
-  const qing = isQingYiSeHongZhong(hand, m);
-  const hun = isHunYiSeHongZhong(hand, m);
-  const isDaHu = pp || qing || hun; // 大胡不受二五八将限制
-  const need258 = !isDaHu && !!opts.need258Eye;
-  return _tryPairAsEyeWithWild(cnt, meldCount, wild, need258);
+  return _tryPairAsEyeWithWild(cnt, meldCount, wild);
 }
 
 /** 摸/吃入某张牌后是否成胡（红中麻将） */
-function canHuHongZhongWith(hand, tile, melds, opts) {
-  return checkHuHongZhong([...hand, tile], melds, opts);
+function canHuHongZhongWith(hand, tile, melds) {
+  return checkHuHongZhong([...hand, tile], melds);
 }
 
 /** 红中玩法听口：摸入哪张可胡（28 种牌型，含红中） */
-function isTingHongZhong(hand, melds, opts) {
+function isTingHongZhong(hand, melds) {
   const res = [];
   for (const t of getHongZhongTileTypes()) {
-    if (checkHuHongZhong([...hand, t], melds, opts)) res.push(t);
+    if (checkHuHongZhong([...hand, t], melds)) res.push(t);
   }
   return res;
 }
@@ -743,7 +725,7 @@ function countZhongMa(tiles) {
 
 /**
  * 红中麻将番数（历史规则，仅保留供规则单测/参考；正式结算已改为无番公式，不再调用本函数）：
- *  现行结算：胡牌 = 底注×中码倍数×基础手数（自摸2/抢杠1/点炮1）＋炮子加成（有炮子玩法）；
+ *  现行结算：胡牌 = 底注×中码倍数×基础手数（自摸2/抢杠1/点炮1）；
  *  杠分当场结算（放杠2手/补杠每家1手/暗杠每家2手），不再并入番数。
  *  历史番数（底分 1，倍数 = 2^总番）：
  *  自摸/抢杠 +1、门清 +1、七小对 +2、龙七对 +3、碰碰胡 +2、混一色 +2、清一色 +4、

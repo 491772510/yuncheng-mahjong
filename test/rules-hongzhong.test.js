@@ -39,7 +39,6 @@ test('红中 z0 编码：suit=z rank=0 名称红中', () => {
 test('checkHuHongZhong 平胡成立（无癞子，123万456万789万 222条 55条）', () => {
   const hand = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't2', 't5', 't5'];
   assert.equal(rules.checkHuHongZhong(hand), true);
-  assert.equal(rules.checkHuHongZhong(hand, [], { need258Eye: true }), true); // 将 5 满足二五八
 });
 
 test('checkHuHongZhong 红中补顺子', () => {
@@ -188,22 +187,20 @@ test('带明牌区（碰/杠刻子）胡牌判定', () => {
   assert.equal(rules.checkHuHongZhong(hand, melds2), true);
 });
 
-// ============ 二五八将开关 ============
+// ============ 二五八将（固定无限制） ============
 
-test('二五八将：平胡将对非 2/5/8 时不可胡，对 2/5/8 时可胡', () => {
+test('无二五八将限制：平胡将对非 2/5/8 时可胡', () => {
   // 123w 456w 789w 222t + w1w1 将（非 258）
   const badEye = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't2', 'w1', 'w1'];
-  assert.equal(rules.checkHuHongZhong(badEye), true); // 不开开关可胡
-  assert.equal(rules.checkHuHongZhong(badEye, [], { need258Eye: true }), false);
-  // 将对 w5（258）可胡
+  assert.equal(rules.checkHuHongZhong(badEye), true);
+  // 将对 w5（258）同样可胡
   const goodEye = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't2', 'w5', 'w5'];
-  assert.equal(rules.checkHuHongZhong(goodEye, [], { need258Eye: true }), true);
+  assert.equal(rules.checkHuHongZhong(goodEye), true);
 });
 
-test('二五八将：大胡（碰碰胡）不受限制', () => {
-  // 碰碰胡将对 t3（非 258）
+test('无二五八将限制：碰碰胡将 t3（非 258）可胡', () => {
   const hand = ['w1', 'w1', 'w1', 'w2', 'w2', 'w2', 't1', 't1', 't1', 't2', 't2', 't2', 't3', 't3'];
-  assert.equal(rules.checkHuHongZhong(hand, [], { need258Eye: true }), true);
+  assert.equal(rules.checkHuHongZhong(hand), true);
 });
 
 // ============ 天胡 ============

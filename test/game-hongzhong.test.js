@@ -1,11 +1,10 @@
 'use strict';
 
 // ============ 西安红中麻将：game.js 游戏流程模块测试 ============
-// 覆盖：112张无风发牌（庄14闲13）、禁吃/无报听、胡牌模式A/B、抢杠仅补杠+包赔三家、
-// 一炮多响、下炮子0~4自选（默认关闭）、杠牌当场结（放杠2手/补杠每家1手/暗杠每家2手）、
-// 无番制结算（自摸=底注×中码×(2+赢炮+输炮)，抢杠=底注×中码×(1+赢炮+输炮)；
-// 无炮子：自摸=2手底注+中码数×底注，抢杠/点炮=被抢者/放炮者包三家）、扎码中码翻倍、
-// 谁胡谁坐庄/流局连庄、need258Eye 开关、结算字段完整性。
+// 覆盖：112张无风发牌（庄14闲13）、禁吃/无报听、固定模式B（只自摸/抢杠胡、禁点炮）、
+// 抢杠仅补杠+包赔三家、杠牌当场结（放杠2手/补杠每家1手/暗杠每家2手）、
+// 无番制结算（自摸=2手底注+中码数×底注，抢杠/点炮=被抢者/放炮者包三家）、扎码中码翻倍、
+// 谁胡谁坐庄/流局连庄、固定无二五八将限制、结算字段完整性。
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { GameServer } = require('../src/game');
@@ -60,9 +59,6 @@ function cleanupServer(srv) {
 
 const BASE = {
   variant: 'hongzhong',
-  huMode: 'A',
-  need258Eye: false,
-  enablePaozi: false,
   zhaMa: 0,
   aiFill: false,
   totalRounds: 4,
@@ -85,9 +81,9 @@ function makeRoom4(settings) {
 // 常用构造牌型
 // h1：13 张听 w9（点炮/抢杠目标）
 const H1_TING_W9 = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 'z0', 'z0'];
-// h2：14 张自摸胡（癞子可作将，need258 两模式均可）
+// h2：14 张自摸胡（癞子可作将）
 const H2_SELFHU = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 'w9', 'z0', 'z0'];
-// h5：14 张自摸胡，将 t3 非二五八（need258Eye:true 时不可胡）
+// h5：14 张自摸胡，将 t3 非二五八（固定无二五八将限制，可胡）
 const H5_SELFHU_258 = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w9', 'w9', 'w9', 't3', 't3'];
 // 普通闲家手牌（13张，不胡 w9/w5）
 const PLAIN13 = ['b1', 'b1', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9', 't2', 't2'];
@@ -96,7 +92,7 @@ const H3_TING_W5 = ['w6', 'w6', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 
 
 // ============ 发牌 / 基础流程 ============
 
-test('红中开局：112张无风牌、庄14闲13、无报听、view透传variant与paozi', () => {
+test('红中开局：112张无风牌、庄14闲13、无报听、view不含模式/二五八/炮子开关', () => {
   const { srv, room, wss } = makeRoom4({});
   assert.equal(room.state, 'playing');
   const g = room.game;
@@ -111,7 +107,11 @@ test('红中开局：112张无风牌、庄14闲13、无报听、view透传varian
   }
   const v0 = lastOf(wss[0], 'game_state');
   assert.equal(v0.game.settings.variant, 'hongzhong');
-  assert.deepEqual(v0.game.paozi, [0, 0, 0, 0]);
+  // 固定形态：不再下发 huMode/need258Eye/enablePaozi/paozi 字段
+  assert.equal(v0.game.settings.huMode, undefined);
+  assert.equal(v0.game.settings.need258Eye, undefined);
+  assert.equal(v0.game.settings.enablePaozi, undefined);
+  assert.equal(v0.game.paozi, undefined);
   assert.deepEqual(g.tingSeats, []);
   cleanupServer(srv);
 });
@@ -126,54 +126,10 @@ test('红中禁吃与无报听：ting/koupoint 被拒', () => {
   cleanupServer(srv);
 });
 
-// ============ 胡牌模式 A：点炮胡 ============
+// ============ 固定模式 B：只自摸+抢杠，禁点炮 ============
 
-test('模式A点炮胡：放炮者包赔三家，结算字段完整', () => {
+test('固定模式B：点炮不可胡（响应不含胡），自摸仍可胡', () => {
   const { srv, room, wss } = makeRoom4({});
-  const g = room.game;
-  // 固定操作座位
-  g.hands[0] = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't1', 't2', 't3', 'w9'];
-  g.hands[1] = H1_TING_W9.slice();
-  g.hands[2] = PLAIN13.slice();
-  g.hands[3] = PLAIN13.slice();
-  g.melds = [[], [], [], []];
-  g.turn = 0;
-  g.stage = 'draw';
-  g.drawnTile = 'w9';
-
-  send(wss[0], { type: 'play_tile', tile: 'w9' });
-  assert.ok(g.pending && g.pending.type === 'discard');
-  const r1 = g.pending.responders.find((r) => r.seat === 1);
-  assert.ok(r1 && r1.canHu === true, '模式A下听牌家应可点炮胡');
-  assert.ok(!g.pending.responders.some((r) => r.canHu && r.seat !== 1), '闲家不应误判胡');
-
-  send(wss[1], { type: 'hu' });
-  const w = g.winners;
-  assert.equal(w.type, 'hu');
-  assert.equal(w.variant, 'hongzhong');
-  assert.equal(w.winnerSeat, 1);
-  assert.equal(w.winType, 'dianpao');
-  assert.equal(w.discarder, 0);
-  assert.equal(w.noFan, true, '无番制结算');
-  assert.equal(w.totalFan, 0);
-  assert.equal(w.mult, 1, '未开扎码时中码倍数=1');
-  assert.deepEqual(w.fanNames, ['无番']);
-  assert.deepEqual(w.paozi, [0, 0, 0, 0]);
-  assert.equal(w.zhaMaCount, 0);
-  const pay = w.payments.find((x) => x.kind === 'hu');
-  assert.equal(pay.rows.length, 1, '点炮仅放炮者支付');
-  assert.equal(pay.rows[0].seat, 0);
-  assert.equal(pay.toAmount, w.score);
-  assert.equal(room.players[0].roundScore, -w.score);
-  assert.equal(room.players[1].roundScore, w.score);
-  assert.equal(room.lastWinner, 1, '胡牌者应记为坐庄候选人');
-  cleanupServer(srv);
-});
-
-// ============ 胡牌模式 B：只自摸+抢杠，禁点炮 ============
-
-test('模式B：点炮不可胡（响应不含胡），自摸仍可胡', () => {
-  const { srv, room, wss } = makeRoom4({ huMode: 'B' });
   const g = room.game;
   g.hands[0] = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't1', 't2', 't3', 'w9'];
   g.hands[1] = H1_TING_W9.slice();
@@ -261,7 +217,7 @@ test('抢杠胡：补杠触发抢杠判定，被抢杠者包赔三家', () => {
   assert.equal(pay.rows.length, 1);
   assert.equal(pay.rows[0].seat, 0);
   assert.equal(pay.rows[0].role, '被抢杠者（包三家）');
-  assert.equal(pay.rows[0].amount, -6, '无炮子抢杠：被抢者按(1手底注+中码数×底注)×3=6分独赔');
+  assert.equal(pay.rows[0].amount, -6, '固定无炮子抢杠：被抢者按(1手底注+中码数×底注)×3=6分独赔');
   assert.equal(w.score, 6);
   assert.equal(room.players[0].roundScore, -w.score);
   assert.equal(room.players[1].roundScore, w.score);
@@ -289,129 +245,6 @@ test('抢杠无人抢时正常补杠并续行', () => {
   assert.equal(room.players[3].roundScore, -1);
   const bu = g.melds[0].find((m) => m.type === 'bugang' && m.tile === 'w5');
   assert.ok(bu && bu.tiles.length === 4, '碰转补杠成功');
-  cleanupServer(srv);
-});
-
-// ============ 一炮多响 ============
-
-test('一炮多响：多家同时胡，放炮者包赔各胡家', () => {
-  const { srv, room, wss } = makeRoom4({});
-  const g = room.game;
-  g.hands[0] = ['w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't1', 't2', 't3', 'w9'];
-  g.hands[1] = H1_TING_W9.slice();
-  g.hands[2] = H1_TING_W9.slice();
-  g.hands[3] = PLAIN13.slice();
-  g.melds = [[], [], [], []];
-  g.turn = 0;
-  g.stage = 'draw';
-  g.drawnTile = 'w9';
-  send(wss[0], { type: 'play_tile', tile: 'w9' });
-
-  const huSeats = g.pending.responders.filter((r) => r.canHu).map((r) => r.seat);
-  assert.deepEqual(huSeats.sort(), [1, 2], '两家同时听w9应都可胡');
-
-  send(wss[1], { type: 'hu' });
-  send(wss[2], { type: 'hu' });
-  assert.equal(g.hzWinners.length, 2, '一炮多响应有两条赢家记录');
-  const w = g.winners;
-  assert.equal(w.winners.length, 2);
-  assert.equal(w.winType, 'dianpao');
-  const huPays = w.payments.filter((x) => x.kind === 'hu');
-  assert.equal(huPays.length, 2, '每个胡家一条支付记录');
-  for (const pay of huPays) {
-    assert.equal(pay.rows.length, 1);
-    assert.equal(pay.rows[0].seat, 0);
-  }
-  // 放炮者共赔两家各一份
-  assert.equal(room.players[0].roundScore, -(w.winners[0].scorePer * 3 + w.winners[1].scorePer * 3));
-  assert.equal(room.players[1].roundScore, w.winners[0].scorePer * 3);
-  assert.equal(room.players[2].roundScore, w.winners[1].scorePer * 3);
-  cleanupServer(srv);
-});
-
-// ============ 下炮子玩法（默认关闭，开启后每人自选 0~4 炮） ============
-
-test('下炮子默认关闭：不开下炮子阶段直接行牌，paozi=0', () => {
-  const { srv, room, wss } = makeRoom4({});
-  const g = room.game;
-  assert.equal(g.stage, 'draw', '默认关闭时不进入下炮子阶段');
-  assert.deepEqual(g.paozi, [0, 0, 0, 0]);
-  cleanupServer(srv);
-});
-
-test('下炮子开启：庄家出牌前每人自选 0~4 炮，全部选完才开局，超范围拒绝', () => {
-  const { srv, room, wss } = makeRoom4({ enablePaozi: true });
-  const g = room.game;
-  assert.equal(g.stage, 'paozi', '开启后开局先进入下炮子阶段');
-  send(wss[0], { type: 'paozi', value: 2 });
-  assert.equal(g.stage, 'paozi', '未全部选完不应开局');
-  send(wss[1], { type: 'paozi', value: 1 });
-  send(wss[2], { type: 'paozi', value: 4 });
-  send(wss[3], { type: 'paozi', value: 0 });
-  assert.equal(g.stage, 'draw', '全部选完炮子后开始行牌');
-  assert.deepEqual(g.paozi, [2, 1, 4, 0]);
-  // 超范围选炮应被拒绝
-  g.stage = 'paozi';
-  g.paozi = [null, null, null, null];
-  send(wss[0], { type: 'paozi', value: 5 });
-  assert.ok(lastOf(wss[0], 'error'), '5 炮应被拒绝');
-  send(wss[0], { type: 'paozi', value: -1 });
-  assert.ok(lastOf(wss[0], 'error'), '-1 炮应被拒绝');
-  cleanupServer(srv);
-});
-
-test('有炮子自摸：每家付=底注×中码数×(2+赢家炮子+该输家炮子)', () => {
-  const { srv, room, wss } = makeRoom4({ enablePaozi: true, zhaMa: 1 });
-  const g = room.game;
-  for (let i = 0; i < 4; i++) send(wss[i], { type: 'paozi', value: [2, 1, 0, 3][i] });
-  assert.equal(g.stage, 'draw');
-  assert.deepEqual(g.paozi, [2, 1, 0, 3]);
-  // 控制扎码中 1 码：中码倍数=2
-  assert.ok(g.wall.length - g.wallPos > 1);
-  g.wall[g.wallPos] = 'w1';
-  g.hands[0] = H2_SELFHU.slice();
-  g.melds[0] = [];
-  g.turn = 0;
-  g.stage = 'draw';
-  g.drawnTile = 'w9';
-  send(wss[0], { type: 'hu' });
-  const w = g.winners;
-  assert.equal(w.zhaMaCount, 1);
-  assert.equal(w.zmaMult, 2, '中1码倍数=2');
-  // 座位1: 2×(2+2+1)=10；座位2: 2×(2+2+0)=8；座位3: 2×(2+2+3)=14 → 共 32
-  assert.equal(w.score, 32, '有炮子自摸按 底注×中码×(2+赢炮+输炮) 求和');
-  assert.equal(room.players[0].roundScore, 32);
-  assert.equal(room.players[1].roundScore, -10);
-  assert.equal(room.players[2].roundScore, -8);
-  assert.equal(room.players[3].roundScore, -14);
-  cleanupServer(srv);
-});
-
-test('有炮子抢杠：每家付=底注×中码数×(1+赢家炮子+该输家炮子)', () => {
-  const { srv, room, wss } = makeRoom4({ enablePaozi: true });
-  const g = room.game;
-  for (let i = 0; i < 4; i++) send(wss[i], { type: 'paozi', value: [1, 2, 0, 0][i] });
-  assert.equal(g.stage, 'draw');
-  // seat0 碰 w5，手中第 4 张 w5 补杠；seat1 听 w5 抢杠（赢家炮2）
-  g.melds[0] = [{ type: 'peng', tile: 'w5', tiles: ['w5', 'w5', 'w5'] }];
-  g.hands[0] = ['w5', 'w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2'];
-  g.hands[1] = H3_TING_W5.slice();
-  g.hands[2] = PLAIN13.slice();
-  g.hands[3] = PLAIN13.slice();
-  g.turn = 0;
-  g.stage = 'draw';
-  g.drawnTile = 't2';
-  send(wss[0], { type: 'gang', tile: 'w5', gangType: 'bugang' });
-  assert.ok(g.pending && g.pending.type === 'qianggang', '补杠应触发抢杠判定');
-  send(wss[1], { type: 'hu' });
-  const w = g.winners;
-  assert.equal(w.winType, 'qianggang');
-  // 座位0: 1×(1+2+1)=4；座位2: 1×(1+2+0)=3；座位3: 1×(1+2+0)=3 → 共 10
-  assert.equal(w.score, 10, '有炮子抢杠按 底注×中码×(1+赢炮+输炮) 求和');
-  assert.equal(room.players[1].roundScore, 10);
-  assert.equal(room.players[0].roundScore, -4);
-  assert.equal(room.players[2].roundScore, -3);
-  assert.equal(room.players[3].roundScore, -3);
   cleanupServer(srv);
 });
 
@@ -481,7 +314,7 @@ test('扎码：1/5/9+红中算中码，每张翻一倍', () => {
   assert.equal(w.zhaMaCount, 2);
   assert.deepEqual(w.zhaMaTiles, ['w1', 'z0']);
   assert.equal(w.zmaMult, 4, '中2码 → 中码倍数4');
-  assert.equal(w.score, (2 + w.zmaMult) * 3, '无炮子自摸：每家 2手底注+中码数×底注，共(2+4)×3=18');
+  assert.equal(w.score, (2 + w.zmaMult) * 3, '固定无炮子自摸：每家 2手底注+中码数×底注，共(2+4)×3=18');
   assert.equal(room.players[0].roundScore, (2 + w.zmaMult) * 3);
   cleanupServer(srv);
 });
@@ -529,39 +362,26 @@ test('流局：牌墙摸完最后一张才流局，庄家连庄', () => {
   cleanupServer(srv);
 });
 
-// ============ need258Eye 开关 ============
+// ============ 二五八将（固定无限制） ============
 
-test('need258Eye 开关：开启后非二五八将不可胡', () => {
-  const { srv, room, wss } = makeRoom4({ need258Eye: true });
+test('固定无二五八将限制：非二五八将自摸可胡', () => {
+  const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  // h5 将 t3 非二五八：开启时应拒绝自摸
+  // h5 将 t3 非二五八：固定无限制应可胡
   g.hands[0] = H5_SELFHU_258.slice();
   g.melds[0] = [];
   g.turn = 0;
   g.stage = 'draw';
   g.drawnTile = 't3';
   send(wss[0], { type: 'hu' });
-  assert.ok(lastOf(wss[0], 'error'), 'need258Eye开启时非二五八将应拒绝胡牌');
-  cleanupServer(srv);
-});
-
-test('need258Eye 关闭：非二五八将可胡', () => {
-  const { srv, room, wss } = makeRoom4({ need258Eye: false });
-  const g = room.game;
-  g.hands[0] = H5_SELFHU_258.slice();
-  g.melds[0] = [];
-  g.turn = 0;
-  g.stage = 'draw';
-  g.drawnTile = 't3';
-  send(wss[0], { type: 'hu' });
-  assert.equal(g.winners.winType, 'zimo', 'need258Eye关闭时应可胡');
+  assert.equal(g.winners.winType, 'zimo', '无二五八将限制时非二五八将应可胡');
   cleanupServer(srv);
 });
 
 // ============ 自摸结算必须广播 settlement（与抢杠一致，修复确认页自摸无详情） ============
 
 test('自摸胡必须广播 settlement：确认弹窗展示手牌/扎码/计算式（防回归）', () => {
-  const { srv, room, wss } = makeRoom4({ zhaMa: 2, enablePaozi: true });
+  const { srv, room, wss } = makeRoom4({ zhaMa: 2 });
   const g = room.game;
   g.hands[0] = H2_SELFHU.slice();
   g.melds[0] = [];
