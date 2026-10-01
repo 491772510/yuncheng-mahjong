@@ -2172,7 +2172,8 @@ class GameServer {
   }
 
   _hzTileTypes(room) {
-    return rules.getHongZhongTileTypes();
+    if (this._isHongZhong(room)) return rules.getHongZhongTileTypes();
+    return rules.getTileTypes();
   }
 
   _dealRoundHongZhong(room) {
