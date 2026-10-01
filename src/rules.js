@@ -801,6 +801,210 @@ function calcMultiplierHongZhong(hand, info = {}, detail = false) {
   return detail ? { fan, mult, names } : { fan, mult };
 }
 
+// ============ 运城贴金麻将（tiejin）判定模块 ============
+// 136 张无花（万筒条 + 东南西北中发白），不可吃、可碰可杠（明杠/暗杠/补杠）、无报听。
+// 每局从牌墙翻一张「金母」确定本局「金牌」（万能牌，共 4 张）：
+//   - 序数牌翻 x → 金牌 = 10-x（翻 5 → 5）；翻发财 → 金牌=发财；
+//   - 风/箭按对牌关系：东↔西、南↔北、中↔白、发↔发。
+// 金牌可当任意牌参与顺子/刻子/将（万能），但金牌本身不能被碰/杠（碰杠对象必须是真实牌）。
+// 本模块不改动扣点点/红中既有函数，仅新增贴金专用函数。
+
+/** 金母 → 金牌：字牌对牌关系（东↔西、南↔北、中↔白、发↔发） */
+const TIEJIN_HONOR_PAIR = { e: 'x', x: 'e', s: 'n', n: 's', z: 'p', p: 'z', f: 'f' };
+
+/** 根据金母确定本局金牌（序数牌翻 x → 10-x；翻 5 → 5；发 → 发；风箭按对牌） */
+function goldFromMother(mother) {
+  if (!mother) return null;
+  const s = mother[0];
+  if (s === 'w' || s === 't' || s === 'b') {
+    const n = Number(mother[1]);
+    return s + String(10 - n);
+  }
+  return TIEJIN_HONOR_PAIR[mother] || mother;
+}
+
+/** 是否为金牌 */
+function isGold(tile, gold) {
+  return !!gold && tile === gold;
+}
+
+/** 手牌中金牌数量 */
+function countGold(hand, gold) {
+  if (!gold) return 0;
+  return (hand || []).filter((t) => t === gold).length;
+}
+
+/** 贴金胡牌判定（核心万能胡）：3+2 基本牌型（四副顺子/刻子 + 一对将），
+ *  金牌可补顺子前/中/后位、补刻子、补将（复用 _tryPairAsEyeWithWild 拆牌）；
+ *  明牌区（碰/杠）为真实牌成型面子，金牌不可参与碰/杠（流程保证，此处双保险）；
+ *  仅支持平胡/碰碰胡（含金牌补刻/补将），不含七对等特殊牌型。 */
+function checkHuTieJin(hand, melds, gold) {
+  if (!Array.isArray(hand)) return false;
+  if (!gold) return checkHu(hand, melds);
+  const m = (Array.isArray(melds) ? melds : []).filter((x) => x && typeof x === 'object' && x.tile);
+  const meldSets = m.length;
+  if (meldSets > 4) return false;
+  for (const mm of m) {
+    if (mm.type !== 'peng' && mm.type !== 'gang' && mm.type !== 'angang' && mm.type !== 'bugang') {
+      return false;
+    }
+    if (mm.tile === gold) return false; // 金牌不可被碰/杠
+    const c = countTiles(mm.tiles || []).get(mm.tile) || 0;
+    if (c < 3) return false;
+  }
+  const wild = countGold(hand, gold);
+  const need = (4 - meldSets) * 3 + 2;
+  if (hand.length !== need) return false;
+  const cnt = countTiles(sortTiles(hand));
+  cnt.delete(gold);
+  const meldCount = (hand.length - 2) / 3;
+  return _tryPairAsEyeWithWild(cnt, meldCount, wild);
+}
+
+/** 摸/抢入某张牌后是否成胡（贴金麻将） */
+function canHuTieJinWith(hand, tile, melds, gold) {
+  return checkHuTieJin([...hand, tile], melds, gold);
+}
+
+/** 贴金可碰：必须真实牌（金牌不可碰）且手牌同牌 ≥2 */
+function canPengTieJin(hand, tile, gold) {
+  if (isGold(tile, gold)) return false;
+  return (countTiles(hand).get(tile) || 0) >= 2;
+}
+
+/** 贴金明杠（放杠）：必须真实牌（金牌不可杠）且手牌同牌 ≥3 */
+function canGangTieJin(hand, tile, gold) {
+  if (isGold(tile, gold)) return false;
+  return (countTiles(hand).get(tile) || 0) >= 3;
+}
+
+/** 贴金暗杠：真实牌 ≥4（金牌不可杠） */
+function canAnGangTieJin(hand, tile, gold) {
+  if (isGold(tile, gold)) return false;
+  return (countTiles(hand).get(tile) || 0) >= 4;
+}
+
+/** 贴金补杠：手中有 1 张真实同牌且明牌区已有该牌碰/杠（金牌不可补杠） */
+function canBuGangTieJin(hand, melds, tile, gold) {
+  if (isGold(tile, gold)) return false;
+  if ((countTiles(hand).get(tile) || 0) < 1) return false;
+  return (Array.isArray(melds) ? melds : []).some(
+    (mm) => mm && (mm.type === 'peng' || mm.type === 'gang' || mm.type === 'bugang') && mm.tile === tile
+  );
+}
+
+/** 全字牌整副：手牌+明牌区全部为字牌且不含金牌（金牌不代替，字牌整副胡须为真实字牌） */
+function isAllHonorShape(hand, melds, gold) {
+  const tiles = (Array.isArray(hand) ? hand : []).slice();
+  for (const m of melds || []) {
+    if (m && Array.isArray(m.tiles)) tiles.push(...m.tiles);
+  }
+  if (tiles.length === 0) return false;
+  if (tiles.some((t) => isGold(t, gold))) return false;
+  return tiles.every((t) => HONOR_NAMES[t] !== undefined);
+}
+
+/** 计分 A（边趣/大唐版）金分：1金=1、2金=3、3金=9、4金及以上=27（3倍递增，27 封顶） */
+function tiejinGoldScoreA(goldCount) {
+  const g = Math.max(0, goldCount || 0);
+  if (g <= 0) return 0;
+  if (g === 1) return 1;
+  if (g === 2) return 3;
+  if (g === 3) return 9;
+  return 27;
+}
+
+/** 计分 B（搜狗 125 打法）金分：1金=5、2金=15、3金=45、4金及以上=135（3倍叠加，135 封顶） */
+function tiejinGoldScoreB(goldCount) {
+  const g = Math.max(0, goldCount || 0);
+  if (g <= 0) return 0;
+  if (g === 1) return 5;
+  if (g === 2) return 15;
+  if (g === 3) return 45;
+  return 135;
+}
+
+/**
+ * 计分 A（边趣/大唐版）完整结算模型（支付明细由 game.js 按座位映射落地）：
+ *  - 胡牌分 H：闲 1 / 庄 2（按赢家身份）；自摸每家付 2H；点炮三家各付 H（通赔）。
+ *  - 金分 G：1金=1、2金=3、3金=9、4金+=27（27 封顶），金随胡走、胡后才计；
+ *      自摸每家付 G；点炮三家各付 G，点炮者额外多一份（金分翻倍付 2G，通赔）。
+ *  - 赢家得分 = 胡牌分收入 + 杠分（当场已结）+ 金分收入。
+ * @param {object} info { winType:'zimo'|'dianpao'|'qianggang', winnerDealer:boolean, goldCount:number }
+ * @returns {{ payers:[{amount,role,formula}], winnerGain, huGain, goldGain, H, G, isZimo }}
+ *   注意 payers 顺序：点炮/抢杠时第 0 项为放炮者（被抢者）。
+ */
+function calcTieJinScoreA(info) {
+  const H = info.winnerDealer ? 2 : 1;
+  const G = tiejinGoldScoreA(info.goldCount);
+  const isZimo = info.winType === 'zimo';
+  const payers = [];
+  let winnerGain = 0;
+  if (isZimo) {
+    for (let i = 0; i < 3; i++) {
+      const amount = 2 * H + G;
+      payers.push({ amount, role: '自摸', formula: `2×${H}(胡)+${G}(金)=${amount}` });
+      winnerGain += amount;
+    }
+    return { payers, winnerGain, huGain: 6 * H, goldGain: 3 * G, H, G, isZimo: true };
+  }
+  // 点炮/抢杠：三家各付 H；金分三家各 G，点炮者额外多一份（2G）
+  for (let i = 0; i < 3; i++) {
+    const isShooter = i === 0;
+    const amount = H + G + (isShooter ? G : 0);
+    payers.push({
+      amount,
+      role: isShooter ? '点炮' : '闲家',
+      formula: `${H}(胡)+${G}(金)${isShooter ? `+${G}(点炮金翻倍)` : ''}=${amount}`,
+    });
+    winnerGain += amount;
+  }
+  return { payers, winnerGain, huGain: 3 * H, goldGain: 4 * G, H, G, isZimo: false };
+}
+
+/**
+ * 计分 B（搜狗 125 打法）完整结算模型：
+ *  - 金分 G：1金=5、2金=15、3金=45、4金+=135（3倍叠加，135 封顶）。
+ *  - 偏家赢家：基础份 P = 胡1 + 庄1 + G；点炮三家各付 P、点炮者 +1 炮钱；
+ *      自摸偏家付 P、庄家付 P+3（庄家相关份）。
+ *  - 庄家赢家：每家付 P+3（庄家身份×2 统一口径，1金时 7→10 与"庄家自摸共收 30"吻合）；
+ *      点炮时点炮者再 +1 炮钱。
+ *  - 杠分同 A（明杠每家 1、暗杠每家 2，当场结算，流局不计）。
+ * @param {object} info { winType:'zimo'|'dianpao'|'qianggang', winnerDealer:boolean, goldCount:number }
+ * @returns {{ payers:[{amount,role,formula}], winnerGain, G, base, dealerShare, isZimo, winnerIsDealer }}
+ *   注意 payers 顺序：点炮/抢杠时第 0 项为放炮者（被抢者）。
+ */
+function calcTieJinScoreB(info) {
+  const G = tiejinGoldScoreB(info.goldCount);
+  const base = 1 + 1 + G; // 胡1 + 庄1 + 金G
+  const dealerShare = base + 3; // 庄家相关份（1金时 7→10）
+  const isZimo = info.winType === 'zimo';
+  const winnerIsDealer = !!info.winnerDealer;
+  const payers = [];
+  let winnerGain = 0;
+  const add = (amount, role, formula) => {
+    payers.push({ amount, role, formula });
+    winnerGain += amount;
+  };
+  if (winnerIsDealer) {
+    for (let i = 0; i < 3; i++) {
+      if (isZimo) {
+        add(dealerShare, '庄家自摸', `${base}+3=${dealerShare}`);
+      } else {
+        const amount = dealerShare + (i === 0 ? 1 : 0);
+        add(amount, i === 0 ? '点炮' : '闲家', `${dealerShare}${i === 0 ? '+1炮' : ''}=${amount}`);
+      }
+    }
+  } else if (isZimo) {
+    add(dealerShare, '庄家', `${base}+3=${dealerShare}`);
+    for (let i = 0; i < 2; i++) add(base, '偏家', `${base}`);
+  } else {
+    add(base + 1, '点炮', `${base}+1炮=${base + 1}`);
+    for (let i = 0; i < 2; i++) add(base, '闲家', `${base}`);
+  }
+  return { payers, winnerGain, G, base, dealerShare, isZimo, winnerIsDealer };
+}
+
 module.exports = {
   SUITS,
   SUIT_NAMES,
@@ -853,4 +1057,20 @@ module.exports = {
   ZHONG_MA_TILES,
   isZhongMa,
   countZhongMa,
+  // 运城贴金麻将（tiejin）模块
+  TIEJIN_HONOR_PAIR,
+  goldFromMother,
+  isGold,
+  countGold,
+  checkHuTieJin,
+  canHuTieJinWith,
+  canPengTieJin,
+  canGangTieJin,
+  canAnGangTieJin,
+  canBuGangTieJin,
+  isAllHonorShape,
+  tiejinGoldScoreA,
+  tiejinGoldScoreB,
+  calcTieJinScoreA,
+  calcTieJinScoreB,
 };
