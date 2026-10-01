@@ -147,3 +147,69 @@ test('扣点点：行动阶段暗杠字牌不被服务端拒绝', () => {
   assert.ok(gs, '暗杠字牌后应有 game_state 下发');
   cleanupServer(srv);
 });
+
+// ============ 报听玩家杠后补牌低点胡 / AI 代打卡死回归测试 ============
+// Bug 背景：报听玩家杠后补牌若构成 1/2 点低点胡（不能自摸），_drawAfterGang
+// 旧逻辑仅判 checkHu 就进入行动阶段；AI decideDrawAction 自摸胡检查因点数
+// 不足跳过，最终落回 {type:'play'} 被 _playTile 以"听口状态由系统自动摸打"
+// 拒绝，快照不变，重试 3 次后打印 'AI stuck at seat X after 3 retries' 卡死。
+// 修复：_drawAfterGang 报听分支对齐 _drawTile 补 canHuByPoints 校验；并在
+// _scheduleAutoAct 增加报听兜底（可胡才给胡/过，否则摸打，绝不 AI 出牌）。
+
+const TING_DRAW_HAND = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't2', 't3', 'e', 'e']; // 摸 w1 成胡
+
+test('扣点点：报听玩家摸到低点胡（1点不能自摸）→ AI 兜底摸牌即打不卡死', async () => {
+  const { srv, room } = makeKoudianGame();
+  const g = room.game;
+  const seat = room.players.findIndex((p) => p && p.name === '房主');
+  assert.ok(seat >= 0);
+
+  room.timers.clear();
+  room.players[seat].isAI = true; // 模拟 AI / 托管触发 _scheduleAutoAct
+  g.tingSeats = [seat];
+  g.stage = 'draw';
+  g.turn = seat;
+  g.drawnTile = 'w1';
+  g.lastAction = null;
+  g.hands[seat] = TING_DRAW_HAND.slice();
+  g.melds[seat] = [];
+  g.discards[seat] = [];
+  g.newTiles[seat] = 'w1';
+
+  assert.ok(rules.checkHu(g.hands[seat], g.melds[seat]), '前置：手牌构成胡');
+  assert.equal(rules.canHuByPoints(rules.tilePoints('w1'), 'zimo'), false, '前置：w1 为低点胡不能自摸');
+
+  srv._scheduleAutoAct(room, seat);
+  await new Promise((r) => setTimeout(r, 250));
+
+  assert.ok(g.discards[seat].includes('w1'), '刚摸的 w1 应被打出');
+  assert.equal(g.hands[seat].length, TING_DRAW_HAND.length - 1, '摸打后手牌应减少 1 张');
+  assert.ok(g.tingSeats.includes(seat), '报听状态应保持');
+  cleanupServer(srv);
+});
+
+test('扣点点：报听玩家杠后补牌低点胡 → _drawAfterGang 直接摸打不进入行动阶段', () => {
+  const { srv, room } = makeKoudianGame();
+  const g = room.game;
+  const seat = room.players.findIndex((p) => p && p.name === '房主');
+  assert.ok(seat >= 0);
+
+  room.timers.clear();
+  room.players[seat].isAI = true;
+  g.tingSeats = [seat];
+  g.stage = 'draw';
+  g.turn = seat;
+  g.lastAction = { type: 'gang' };
+  g.hands[seat] = ['w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't2', 't3', 'e', 'e']; // 13张，补 w1 成胡
+  g.melds[seat] = [];
+  g.discards[seat] = [];
+  g.newTiles[seat] = null;
+  g.wallPos = 30; // 牌墙中段，剩余 >12 张不会误触发流局
+  g.wall[30] = 'w1';
+
+  srv._drawAfterGang(room, seat);
+
+  assert.ok(g.discards[seat].includes('w1'), '补到的 w1 应直接打出');
+  assert.equal(g.hands[seat].length, 13, '13 张手牌 + 补 1 打 1 应仍为 13 张');
+  cleanupServer(srv);
+});

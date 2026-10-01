@@ -720,9 +720,11 @@ class GameServer {
     this._log(room, `${this._pName(room, seat)} 杠后补到 ${rules.tileName(tile)}`);
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
-    // 报听玩家：杠后补牌手牌继续锁死；若构成自摸胡给胡/过，否则摸牌即打
+    // 报听玩家：杠后补牌手牌继续锁死；若构成可自摸胡给胡/过，否则摸牌即打
+    // （与 _drawTile 报听分支对齐：低点胡 1/2 点不能自摸，不进入行动阶段，
+    //   否则 AI 决策会落回 play 被 _playTile 拒绝导致 stuck）
     if (g.tingSeats.includes(seat)) {
-      if (rules.checkHu(g.hands[seat], g.melds[seat])) {
+      if (rules.checkHu(g.hands[seat], g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(tile), 'zimo')) {
         this._afterTurnStart(room, seat);
         return;
       }
@@ -1607,6 +1609,24 @@ class GameServer {
           // 红中麻将：下炮阶段 AI / 托管自动下 1 炮
           this._autoFillPaozi(room, seat);
         } else if (g.stage === 'draw' && g.turn === seat) {
+          // 报听兜底：报听玩家在摸牌后阶段只能胡或摸打，绝不落回 AI 出牌
+          // （避免断线/托管等非 _drawTile/_drawAfterGang 入口触发 decideDrawAction
+          //   返回 play，被 _playTile 以"听口状态由系统自动摸打"拒绝后 stuck）
+          if (g.tingSeats.includes(seat)) {
+            if (g.drawnTile !== null) {
+              if (rules.checkHu(g.hands[seat], g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo')) {
+                const decision = this._isHongZhong(room)
+                  ? this._decideHongZhongDrawAction(g, room, seat)
+                  : ai.decideDrawAction(g, room, seat);
+                if (decision.type === 'hu') this._hu(pl, {});
+                else this._pass(pl);
+              } else {
+                this._autoTingDiscard(room, seat, g.drawnTile);
+              }
+              return;
+            }
+            return; // 报听玩家尚未摸牌：等待系统摸打，不代打
+          }
           const decision = this._isHongZhong(room)
             ? this._decideHongZhongDrawAction(g, room, seat)
             : ai.decideDrawAction(g, room, seat);
