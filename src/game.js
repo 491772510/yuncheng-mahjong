@@ -1602,6 +1602,7 @@ class GameServer {
           pl._auto = Math.max(0, (pl._auto || 0) - 1);
           return;
         }
+        const snap = { stage: g.stage, turn: g.turn, drawn: g.drawnTile, lastAction: g.lastAction && g.lastAction.type };
         if (g.stage === 'paozi' && g.paozi && g.paozi[seat] == null) {
           // 红中麻将：下炮阶段 AI / 托管自动下 1 炮
           this._autoFillPaozi(room, seat);
@@ -1624,6 +1625,25 @@ class GameServer {
             else if (choice === 'peng') this._peng(pl);
             else this._pass(pl);
           }
+        }
+        // 兜底：动作未推进牌局（被校验拒绝/异常，快照未变）时有限重试，防 AI 永久卡死
+        if (
+          room.state === 'playing' &&
+          room.game === g &&
+          g.stage === snap.stage &&
+          g.turn === snap.turn &&
+          g.drawnTile === snap.drawn &&
+          (g.lastAction && g.lastAction.type) === snap.lastAction &&
+          this._shouldAutoAct(room, seat)
+        ) {
+          pl._autoRetry = (pl._autoRetry || 0) + 1;
+          if (pl._autoRetry <= 2) {
+            pl._auto = Math.max(0, (pl._auto || 0) - 1);
+            this._scheduleAutoAct(room, seat);
+            return;
+          }
+          console.error('[game] AI stuck at seat', seat, 'after', pl._autoRetry, 'retries');
+          pl._autoRetry = 0;
         }
         // 动作执行完毕（动作期间 _auto>0 不会恢复真人控制），再递减
         pl._auto = Math.max(0, (pl._auto || 0) - 1);
@@ -2757,6 +2777,10 @@ class GameServer {
 
   _decideHongZhongDrawAction(g, room, seat) {
     const hand = g.hands[seat];
+    // 碰后（未摸牌）：手牌结构不允许胡/杠，只能出牌（与 _buildDrawPromptHongZhong 保持一致，防止 AI 卡死）
+    if (g.lastAction && g.lastAction.type === 'peng') {
+      return { type: 'play', tile: this._chooseHongZhongDiscard(g, room, seat) };
+    }
     if (rules.checkHuHongZhong(hand, g.melds[seat], { need258Eye: !!room.settings.need258Eye })) {
       return { type: 'hu' };
     }
