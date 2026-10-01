@@ -2604,7 +2604,14 @@ class GameServer {
         room.players[s].score -= pay;
         room.players[s].roundScore -= pay;
         total += pay;
-        rows.push({ seat: s, amount: -pay, role: '自摸' });
+        rows.push({
+          seat: s,
+          amount: -pay,
+          role: '自摸',
+          formula: enablePaozi
+            ? `1底注×${zmaMult}中码×(2+${pz[winnerSeat] || 0}赢炮+${pz[s] || 0}输炮)=${pay}`
+            : `1底注×(2+${zmaMult}中码倍数)=${pay}`,
+        });
       }
       room.players[winnerSeat].score += total;
       room.players[winnerSeat].roundScore += total;
@@ -2626,7 +2633,12 @@ class GameServer {
         room.players[s].score -= pay;
         room.players[s].roundScore -= pay;
         total += pay;
-        rows.push({ seat: s, amount: -pay, role: '抢杠' });
+        rows.push({
+          seat: s,
+          amount: -pay,
+          role: '抢杠',
+          formula: `1底注×${zmaMult}中码×(1+${pz[winnerSeat] || 0}赢炮+${pz[s] || 0}输炮)=${pay}`,
+        });
       }
       room.players[winnerSeat].score += total;
       room.players[winnerSeat].roundScore += total;
@@ -2654,7 +2666,14 @@ class GameServer {
         title: `${winLabel}${enablePaozi ? `（炮子 ${pz[winnerSeat] || 0}）` : ''}${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · ${role}独赔 ${baoTotal} 分`,
         toSeat: winnerSeat,
         toAmount: baoTotal,
-        rows: [{ seat: info.discarder, amount: -baoTotal, role }],
+        rows: [{
+          seat: info.discarder,
+          amount: -baoTotal,
+          role,
+          formula: (enablePaozi
+            ? `1底注×${zmaMult}中码×(1+${pz[winnerSeat] || 0}赢炮+${pz[info.discarder] || 0}输炮)`
+            : `1底注×(1+${zmaMult}中码倍数)`) + `×3家=${baoTotal}`,
+        }],
       });
     }
 

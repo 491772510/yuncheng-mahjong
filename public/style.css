@@ -568,6 +568,14 @@ body {
 .pay-neg { color: #c0392b; font-weight: 600; }
 .pay-pos { color: #1e8449; font-weight: 600; }
 .pay-role { color: #999; font-size: 12px; }
+.pay-table .pay-formula { display: block; color: #888; font-size: 11px; font-weight: 400; margin-top: 1px; }
+/* 红中扎码牌独立展示 */
+.settle-zm { margin: 8px 0; padding: 6px 10px; background: rgba(52,152,219,.08); border-radius: 8px; font-size: 13px; color: #555; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.settle-zm .settle-zm-label { font-weight: 600; color: #2c3e50; margin-right: 6px; white-space: nowrap; }
+.settle-zm .zm-tile { display: inline-block; margin-right: 3px; }
+.settle-zm .zm-tile.zm-hit .tile { box-shadow: 0 0 0 2px #e67e22; border-radius: 5px; }
+.settle-zm .zm-tile.zm-hit .tile::after { content: '中'; position: absolute; top: -8px; right: -6px; font-size: 10px; font-weight: 800; color: #fff; background: #e67e22; border-radius: 6px; padding: 0 3px; line-height: 14px; }
+.settle-zm .tile { position: relative; }
 
 /* ---------- 结算确认区 ---------- */
 .settle-confirm {

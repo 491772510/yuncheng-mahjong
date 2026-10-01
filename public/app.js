@@ -1192,7 +1192,7 @@
     const nameOf = (s) => (result.hands && result.hands[s] ? result.hands[s].name : '座位' + s);
     const rowsHtml = pays.map((pay) => {
       const fromTxt = pay.rows.map((r) =>
-        `<div class="pay-line">${esc(nameOf(r.seat))} <span class="pay-neg">${r.amount}</span>${r.role ? '<span class="pay-role">（' + esc(r.role) + '）</span>' : ''}</div>`
+        `<div class="pay-line">${esc(nameOf(r.seat))} <span class="pay-neg">${r.amount}</span>${r.role ? '<span class="pay-role">（' + esc(r.role) + '）</span>' : ''}${r.formula ? '<span class="pay-formula">' + esc(r.formula) + '</span>' : ''}</div>`
       ).join('');
       const actor = pay.kind === 'gang' ? '杠牌' : '胡牌';
       // 项目列写明谁胡/谁杠/谁点炮：点炮者从付款方行 role 含"放炮者"的行反推
@@ -1248,14 +1248,27 @@
     }
     const winner = result.hands && result.hands[result.winnerSeat];
     const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-    const maText = result.zhaMaCount > 0
-      ? `，扎码中${result.zhaMaCount}张（${(result.zhaMaTiles || []).map((t) => tileText(t)).join('、')}）×${result.zmaMult || result.mult}`
-      : (result.zhaMaTiles && result.zhaMaTiles.length ? `，扎码未中（${result.zhaMaTiles.map((t) => tileText(t)).join('、')}）` : '');
     const paoziArr = result.paozi || [];
     const paoziText = result.enablePaozi && paoziArr.some((x) => x != null)
       ? `，炮子：${paoziArr.map((v, s) => `${nameOf(s)} ${v > 0 ? '下' + v + '炮' : '不下'}`).join('、')}`
       : '';
-    const calcText = `无番制${maText}${paoziText}`;
+    const calcText = `无番制${paoziText}`;
+    // 扎码牌独立展示：红中 1/5/9 万筒条 及 红中 为中码
+    const isZhongMaTile = (t) =>
+      t === 'z0' || ((t[0] === 'w' || t[0] === 't' || t[0] === 'b') && ['1', '5', '9'].includes(t[1]));
+    const zhaMaBlock = (label, tiles, count, mult) => {
+      if (!tiles || !tiles.length) return '';
+      const tileSpans = tiles.map((t) =>
+        `<span class="zm-tile${isZhongMaTile(t) ? ' zm-hit' : ''}">${tileHtml(t, 'tiny')}</span>`
+      ).join('');
+      const hitTxt = count > 0 ? `中 ${count} 张 ×${mult || 1}` : '未中';
+      return `<div class="settle-zm"><span class="settle-zm-label">${label}（${hitTxt}）</span>${tileSpans}</div>`;
+    };
+    const zhaBlockMulti = (w) =>
+      zhaMaBlock(`${nameOf(w.winnerSeat)} 扎码`, w.zhaMaTiles, w.zhaMaCount || 0, w.zmaMult || 1);
+    const zmaBlocks = (result.winners || []).length > 1
+      ? result.winners.map(zhaBlockMulti).join('')
+      : zhaMaBlock('扎码', result.zhaMaTiles, result.zhaMaCount || 0, result.zmaMult || result.mult || 1);
     const multiText = (result.winners || []).length > 1
       ? `<div class="settle-sub">一炮多响：${result.winners.map((w) =>
           `${nameOf(w.winnerSeat)}（${w.winType === 'zimo' ? '自摸' : w.winType === 'qianggang' ? '抢杠胡' : '点炮胡'}${w.zmaMult ? '，中码×' + w.zmaMult : ''}）`).join('、')}</div>`
@@ -1263,7 +1276,7 @@
     if (compact) {
       return `<div class="settle-head">
         <div class="settle-sub">${prefix}${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)} · ${calcText} → ${result.score >= 0 ? '+' : ''}${result.score} 分</div>
-      </div>${paymentTableHtml(result)}` + settleHands;
+      </div>${zmaBlocks}${paymentTableHtml(result)}` + settleHands;
     }
     return `
       <div class="settle-head">
@@ -1272,6 +1285,7 @@
         <div class="settle-sub">${calcText}</div>
         ${multiText}
       </div>
+      ${zmaBlocks}
       ${paymentTableHtml(result)}
       ${settleHands}`;
   }
