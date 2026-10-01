@@ -3170,7 +3170,8 @@ class GameServer {
 
   /** 亮金（摸牌后、出牌前的独立操作）：亮出 1 张金牌放入面前亮金区（不入弃牌堆），
    *  从牌墙尾补 1 张牌，手牌数量保持不变（不轮转，仍处出牌前 draw 阶段，可继续出牌/再亮金/胡）；
-   *  被锁者亮出手中最后一张金牌后解锁；连续亮金达到 2 张自动触发锁金（规则）。 */
+   *  免疫锁金唯一条件：本局个人累计上金达到 2 张即免疫，不受锁金限制；
+   *  连续亮金达到 2 张自动触发锁金（规则），锁金只锁累计上金不足 2 张的玩家。 */
   _liangjin(p, msg) {
     if (p._auto > 0) this._markAutoActing(p);
     else this._restoreControl(p);
@@ -3195,18 +3196,18 @@ class GameServer {
     g.drawnTile = bonus;
     g.newTiles[p.seat] = bonus;
     this._clearTimer(room, 'draw:' + p.seat);
-    // 被锁者亮出手中最后一张金牌 → 解锁
-    if (g.locked[p.seat] && rules.countGold(hand, gold) === 0) {
+    // 免疫锁金唯一条件：本局累计上金达到 2 张 → 解除锁定
+    if (g.locked[p.seat] && g.shangjinCount[p.seat] >= 2) {
       g.locked[p.seat] = false;
-      this._log(room, `${this._pName(room, p.seat)} 亮出最后一张金牌，解锁！`);
+      this._log(room, `${this._pName(room, p.seat)} 累计上金两张，免疫锁金！`);
     }
     this._log(room, `${this._pName(room, p.seat)} 亮金 ${rules.tileName(gold)}（亮金区）`);
     this._log(room, `${this._pName(room, p.seat)} 牌尾补入 ${rules.tileName(bonus)}`, p.seat, `${this._pName(room, p.seat)} 亮金补牌`);
-    // 规则锁金：连续亮金达到 2 张后自动锁定其他三家（本家不受锁，仅触发一次）
+    // 规则锁金：连续亮金达到 2 张后自动锁金（仅触发一次）；累计上金已满 2 张的玩家免疫，不受锁
     if (g.shangjinCount[p.seat] >= 2 && g.lockSeat === -1) {
-      for (let s = 0; s < 4; s++) if (s !== p.seat) g.locked[s] = true;
+      for (let s = 0; s < 4; s++) if (s !== p.seat && g.shangjinCount[s] < 2) g.locked[s] = true;
       g.lockSeat = p.seat;
-      this._log(room, `${this._pName(room, p.seat)} 连续亮金两张，自动锁金！其余玩家只能自摸胡！`);
+      this._log(room, `${this._pName(room, p.seat)} 连续亮金两张，自动锁金！未上金两张的玩家只能自摸胡！`);
     }
     // 不轮转：仍由本家出牌/再亮金/胡（重新广播 + 构建出牌前行动提示）
     this._afterTurnStart(room, p.seat);

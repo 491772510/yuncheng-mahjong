@@ -2,7 +2,7 @@
 
 // ============ 运城贴金麻将：game.js 游戏流程模块测试 ============
 // 覆盖：136张开局翻金母定金牌（庄14闲13）、亮金后才能点炮胡（未亮金只能自摸）、
-// 规则锁金（连续亮金两张自动锁金/被锁只能自摸/亮出最后金牌解锁）、亮金动作与状态机
+// 规则锁金（连续亮金两张自动锁金/被锁只能自摸/免疫锁金唯一条件：累计上金两张）、亮金动作与状态机
 // （摸牌后出牌前独立操作：金牌摆面前不入弃牌堆、牌尾补一张、手牌数不变、不轮转）、
 // 金牌不可普通打出、三金封顶、
 // 计分A（自摸/点炮/金分3倍递增/点炮通赔）、计分B（125体系/庄家身份×2）、
@@ -330,7 +330,7 @@ test('被锁者只能自摸：被锁时点炮无胡响应；解锁后可点炮',
   send(wss[0], { type: 'play_tile', tile: 'w9' });
   assert.equal(g.pending, null, '被锁者（已亮金）也不能点炮胡');
 
-  // 解锁：被锁者在摸牌后（手牌 14 张）通过亮金亮出手中最后一张金牌（金牌不可普通打出）
+  // 解锁：被锁者累计上金达到 2 张即免疫锁金（唯一条件）
   g.turn = 1;
   g.stage = 'draw';
   g.drawnTile = 'w5';
@@ -338,7 +338,7 @@ test('被锁者只能自摸：被锁时点炮无胡响应；解锁后可点炮',
   g.locked[1] = true;
   g.hands[1] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
   send(wss[1], { type: 'liangjin' });
-  assert.equal(g.locked[1], false, '被锁者亮出最后一张金牌后解锁');
+  assert.equal(g.locked[1], false, '被锁者累计上金两张后免疫解锁');
   // 解锁后可点炮
   g.turn = 0;
   g.stage = 'draw';
@@ -348,6 +348,53 @@ test('被锁者只能自摸：被锁时点炮无胡响应；解锁后可点炮',
   g.hands[1] = TING_W9_13.slice(); // 解锁后 13 张听 w9（无金牌）
   send(wss[0], { type: 'play_tile', tile: 'w9' });
   assert.ok(g.pending, '解锁后可点炮胡');
+  cleanupServer(srv);
+});
+
+test('锁金免疫：已上金两张的玩家触发锁金时不受锁，未上金两张者被锁', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // seat0 已亮 1 张，再亮第 2 张触发锁金；seat2 已累计上金 2 张（免疫），seat1/seat3 未满 2 张
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
+  g.melds[0] = [];
+  g.shangjinCount = [1, 0, 2, 1];
+  g.shangjinTiles = [['w5'], [], ['w5', 'w5'], ['w5']];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w5';
+  g.lastAction = null;
+  g.locked = [false, false, false, false];
+  g.lockSeat = -1;
+
+  send(wss[0], { type: 'liangjin' });
+  assert.equal(g.shangjinCount[0], 2, 'seat0 第二次亮金后亮金数=2');
+  assert.deepEqual(g.locked, [false, true, false, true], '已上金两张的 seat2 免疫不受锁，seat1/seat3 未上金两张被锁');
+  assert.equal(g.lockSeat, 0, '锁金者 seat0');
+  cleanupServer(srv);
+});
+
+test('锁金免疫：其余三家均已上金两张时触发锁金，无人被锁', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
+  g.melds[0] = [];
+  g.shangjinCount = [1, 2, 2, 2]; // 其余三家均已上金两张 → 全免疫
+  g.shangjinTiles = [['w5'], ['w5', 'w5'], ['w5', 'w5'], ['w5', 'w5']];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w5';
+  g.lastAction = null;
+  g.locked = [false, false, false, false];
+  g.lockSeat = -1;
+
+  send(wss[0], { type: 'liangjin' });
+  assert.equal(g.shangjinCount[0], 2);
+  assert.deepEqual(g.locked, [false, false, false, false], '其余三家均已上金两张，全部免疫，无人被锁');
+  assert.equal(g.lockSeat, 0, '仍记录锁金触发者');
   cleanupServer(srv);
 });
 
