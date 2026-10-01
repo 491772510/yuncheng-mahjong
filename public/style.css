@@ -552,7 +552,7 @@ body {
 .pc-lock { background: #b7950b; color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
 .hz-badge { display: inline-block; background: rgba(192,57,43,.12); color: #c0392b; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 12px; border: 1px solid rgba(192,57,43,.35); }
 
-/* ===== 运城贴金麻将：金牌角标 / 上金区 / 金母 / 锁金 ===== */
+/* ===== 运城贴金麻将：金牌角标 / 亮金区 / 金母 / 锁金 ===== */
 .gold-tile { box-shadow: 0 0 0 2px #d4a017, 0 0 8px rgba(212,160,23,.65) !important; }
 .gold-tile::after { content: '金'; position: absolute; top: -9px; right: -7px; font-size: 10px; font-weight: 800; color: #fff; background: linear-gradient(135deg,#d4a017,#a9760b); border-radius: 7px; padding: 0 4px; line-height: 15px; box-shadow: 0 1px 3px rgba(0,0,0,.35); z-index: 5; }
 .shangjin-area { display: flex; gap: 3px; margin: 3px 0 2px; padding: 3px 5px; background: rgba(212,160,23,.1); border: 1px dashed rgba(212,160,23,.45); border-radius: 6px; min-height: 22px; }

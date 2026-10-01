@@ -103,7 +103,7 @@ class GameServer {
         case 'gang': return this._gang(p, msg);
         case 'hu': return this._hu(p);
         case 'pass': return this._pass(p);
-        case 'shangjin': return this._shangjin(p, msg);
+        case 'liangjin': return this._liangjin(p, msg);
         case 'cancel_hosted': return this._cancelHosted(p);
         case 'settle_confirm': return this._settleConfirm(p);
         case 'chat': return this._chat(p, msg);
@@ -1301,15 +1301,14 @@ class GameServer {
     const hand = g.hands[p.seat];
     const idx = hand.indexOf(tile);
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
+    // 贴金：金牌不能作为普通出牌打出，只能通过「亮金」独立操作处理（或保留在手中）
+    if (this._isTieJin(room) && tile === g.goldTile) {
+      return this._err(p, '金牌不能作为普通出牌打出，请通过亮金操作处理');
+    }
 
     hand.splice(idx, 1);
     g.discards[p.seat].push(tile);
     g.lastDiscard = { tile, seat: p.seat };
-    // 贴金：被锁者打出最后一张金牌（普通弃牌）→ 解锁
-    if (this._isTieJin(room) && g.locked && g.locked[p.seat] && tile === g.goldTile && rules.countGold(g.hands[p.seat], g.goldTile) === 0) {
-      g.locked[p.seat] = false;
-      this._log(room, `${this._pName(room, p.seat)} 打出最后一张金牌，解锁！`);
-    }
     g.drawnTile = null;
     g.newTiles[p.seat] = null; // 新牌已打出，标志清除
     this._clearTimer(room, 'draw:' + p.seat);
@@ -1661,7 +1660,7 @@ class GameServer {
           if (decision.type === 'hu') this._hu(pl, {});
           else if (decision.type === 'ting') this._ting(pl, { tile: decision.tile });
           else if (decision.type === 'gang') this._gang(pl, { tile: decision.tile, gangType: decision.gangType });
-          else if (decision.type === 'shangjin') this._shangjin(pl, {});
+          else if (decision.type === 'liangjin') this._liangjin(pl, {});
           else this._playTile(pl, { tile: decision.tile });
         } else if (g.stage === 'response' && g.pending) {
           const r = g.pending.responders.find((x) => x.seat === seat);
@@ -1796,14 +1795,14 @@ class GameServer {
         : null,
       winners: g.winners,
       settings: room.settings,
-      // 运城贴金麻将：金母/金牌/上金区/锁金状态（非贴金玩法为 null，前端据此隐藏）
+      // 运城贴金麻将：金母/金牌/亮金区/锁金状态（非贴金玩法为 null，前端据此隐藏）
       goldMother: g.goldMother || null,
       goldTile: g.goldTile || null,
       shangjinTiles: g.shangjinTiles ? g.shangjinTiles.map((arr) => arr.slice()) : null,
       shangjinCount: g.shangjinCount ? g.shangjinCount.slice() : null,
       locked: g.locked ? g.locked.slice() : null,
       lockSeat: g.lockSeat != null ? g.lockSeat : -1,
-      canShangjin: isDrawTurn && !!g.goldTile && rules.countGold(g.hands[viewerSeat], g.goldTile) > 0,
+      canLiangjin: isDrawTurn && !!g.goldTile && rules.countGold(g.hands[viewerSeat], g.goldTile) > 0 && g.hands[viewerSeat].length >= 14 && !this._tieJinWallEnded(room, g),
       logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
     if (isDrawTurn && !this._isHongZhong(room) && !g.tingSeats.includes(viewerSeat)) {
@@ -2022,7 +2021,7 @@ class GameServer {
         dealerFlow: 'keep', // 红中：流局庄家连庄（设计固定）
       };
     }
-    // 运城贴金麻将专属设置：锁金为固定规则（连续上金两张自动锁金）、流局开关（A=摸完 / B=硬10墩）、计分开关（A=边趣版 / B=125体系）。
+    // 运城贴金麻将专属设置：锁金为固定规则（连续亮金两张自动锁金）、流局开关（A=摸完 / B=硬10墩）、计分开关（A=边趣版 / B=125体系）。
     if (variant === 'tiejin') {
       return {
         totalRounds,
@@ -2804,7 +2803,7 @@ class GameServer {
     return 'pass';
   }
 
-  // ============ 运城贴金麻将流程模块（variant='tiejin'：136 张、庄14闲13、禁吃可碰杠、金牌万能、上金/锁金/流局/计分开关） ============
+  // ============ 运城贴金麻将流程模块（variant='tiejin'：136 张、庄14闲13、禁吃可碰杠、金牌万能、亮金/锁金/流局/计分开关） ============
 
   _isTieJin(room) {
     return !!(room && room.settings && room.settings.variant === 'tiejin');
@@ -2818,7 +2817,7 @@ class GameServer {
   }
 
   /** 点炮胡资格：
-   *  未上金：只能自摸；上过金且未被锁：可点炮；被锁定者只能自摸（打出最后金牌解锁后恢复）。 */
+   *  未亮金：只能自摸；亮过金且未被锁：可点炮；被锁定者只能自摸（亮出最后金牌解锁后恢复）。 */
   _tieJinCanDianpao(room, seat) {
     const g = room.game;
     if (!g || !g.goldTile || (g.shangjinCount || [])[seat] <= 0) return false;
@@ -2856,8 +2855,8 @@ class GameServer {
       tingSeats: [], // 贴金无报听，恒空
       goldMother,
       goldTile,
-      shangjinTiles: [[], [], [], []], // 上金区（已打出的金牌）
-      shangjinCount: [0, 0, 0, 0], // 上金张数（锁金打出的 2 张也计入，计分时三金封顶）
+      shangjinTiles: [[], [], [], []], // 亮金区（已亮出的金牌）
+      shangjinCount: [0, 0, 0, 0], // 亮金张数（锁金亮出的 2 张也计入，计分时三金封顶）
       locked: [false, false, false, false], // 锁金状态（被锁者只能自摸）
       lockSeat: -1, // 锁金者座位
       huPassed: [false, false, false, false], // 过胡限制：获得下一次抓牌权前禁胡
@@ -2950,7 +2949,7 @@ class GameServer {
   }
 
   /** 贴金出牌后响应：
-   *  1) 截胡单响——只保留逆时针离点炮者最近的可胡者（过胡限制 / 上金锁金资格 / 字牌整副胡只能自摸过滤）；
+   *  1) 截胡单响——只保留逆时针离点炮者最近的可胡者（过胡限制 / 亮金锁金资格 / 字牌整副胡只能自摸过滤）；
    *  2) 同时把可杠/可碰者并入同一响应批（金牌不可杠碰，rules 已过滤）；
    *  3) 由 _tryResolvePendingTieJin 统一收拢：胡优先单响；无胡则标记过胡者、按逆时针最近一家执行杠/碰。 */
   _afterDiscardTieJin(room, discarder) {
@@ -3169,48 +3168,54 @@ class GameServer {
     this._drawAfterGangTieJin(room, seat);
   }
 
-  /** 上金（打出 1 张金牌放入上金区）：打出后若手中金牌清零且此前被锁则解锁；连续上金达到 2 张自动触发锁金（规则） */
-  _shangjin(p, msg) {
+  /** 亮金（摸牌后、出牌前的独立操作）：亮出 1 张金牌放入面前亮金区（不入弃牌堆），
+   *  从牌墙尾补 1 张牌，手牌数量保持不变（不轮转，仍处出牌前 draw 阶段，可继续出牌/再亮金/胡）；
+   *  被锁者亮出手中最后一张金牌后解锁；连续亮金达到 2 张自动触发锁金（规则）。 */
+  _liangjin(p, msg) {
     if (p._auto > 0) this._markAutoActing(p);
     else this._restoreControl(p);
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
     const g = room.game;
     if (!this._isTieJin(room) || room.state !== 'playing' || !g) return this._err(p, '牌局未开始');
-    if (g.stage !== 'draw' || g.turn !== p.seat) return this._err(p, '当前不能上金');
+    if (g.stage !== 'draw' || g.turn !== p.seat) return this._err(p, '当前不能亮金');
     if (!g.goldTile) return this._err(p, '本局无金牌');
     const gold = g.goldTile;
     const hand = g.hands[p.seat];
     if (rules.countGold(hand, gold) <= 0) return this._err(p, '手中没有金牌');
-    // 上金后手牌须 ≥13 张（起手/摸牌后 14 张打出 1 张；碰杠后 13 张不能上金，避免牌数错误）
+    // 亮金后手牌须 ≥13 张（亮 1 张后牌尾补 1 张，手牌数不变；碰/杠后 13 张不能亮金，避免牌数错误）
     const handLen = hand.length;
-    const after = handLen - 1;
-    if (after < 13) return this._err(p, '当前不能上金');
+    if (handLen - 1 < 13) return this._err(p, '当前不能亮金');
+    // 牌墙剩余可补牌数不足（流局阈值已到）时不可亮金
+    if (this._tieJinWallEnded(room, g)) return this._err(p, '牌墙已结束，不能再亮金');
     hand.splice(hand.indexOf(gold), 1);
     g.shangjinTiles[p.seat].push(gold);
     g.shangjinCount[p.seat]++;
-    g.lastAction = { type: 'shangjin', tile: gold };
-    g.drawnTile = null;
-    g.newTiles[p.seat] = null;
+    // 从牌墙尾（wall 尾部）补一张，手牌数量保持不变
+    const bonus = g.wall.pop();
+    hand.push(bonus);
+    g.lastAction = { type: 'liangjin', tile: gold };
+    g.drawnTile = bonus;
+    g.newTiles[p.seat] = bonus;
     this._clearTimer(room, 'draw:' + p.seat);
-    // 被锁者打出最后一张金牌 → 解锁
+    // 被锁者亮出手中最后一张金牌 → 解锁
     if (g.locked[p.seat] && rules.countGold(hand, gold) === 0) {
       g.locked[p.seat] = false;
-      this._log(room, `${this._pName(room, p.seat)} 打出最后一张金牌，解锁！`);
+      this._log(room, `${this._pName(room, p.seat)} 亮出最后一张金牌，解锁！`);
     }
-    this._log(room, `${this._pName(room, p.seat)} 上金 ${rules.tileName(gold)}（上金区）`);
-    // 规则锁金：连续上金达到 2 张后自动锁定其他三家（本家不受锁，仅触发一次）
+    this._log(room, `${this._pName(room, p.seat)} 亮金 ${rules.tileName(gold)}（亮金区），牌尾补入 ${rules.tileName(bonus)}`);
+    // 规则锁金：连续亮金达到 2 张后自动锁定其他三家（本家不受锁，仅触发一次）
     if (g.shangjinCount[p.seat] >= 2 && g.lockSeat === -1) {
       for (let s = 0; s < 4; s++) if (s !== p.seat) g.locked[s] = true;
       g.lockSeat = p.seat;
-      this._log(room, `${this._pName(room, p.seat)} 连续上金两张，自动锁金！其余玩家只能自摸胡！`);
+      this._log(room, `${this._pName(room, p.seat)} 连续亮金两张，自动锁金！其余玩家只能自摸胡！`);
     }
-    this._broadcastGameState(room);
-    this._nextTurn(room, p.seat);
+    // 不轮转：仍由本家出牌/再亮金/胡（重新广播 + 构建出牌前行动提示）
+    this._afterTurnStart(room, p.seat);
   }
 
   /** 贴金胡牌结算：
-   *  - 金分按上金数（三金封顶：>3 按 3 金）计；A=1/3/9，B=5/15/45；
+   *  - 金分按亮金数（三金封顶：>3 按 3 金）计；A=1/3/9，B=5/15/45；
    *  - 计分 A：胡分（闲1庄2，自摸翻倍）+ 金分；点炮通赔且点炮者金分翻倍；
    *  - 计分 B（125 体系）：1金=5/2金=15/3金=45；偏家/庄家按身份×2 口径；
    *  - 杠分已当场结算，此处仅随结算展示；胡牌后金才计分。 */
@@ -3247,7 +3252,7 @@ class GameServer {
     const winLabel = isZimo ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
     this._log(
       room,
-      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${mode === 'B' ? '125' : '边趣'}计分，上金 ${goldCount} 张，金分 ${res.G}）→ +${res.winnerGain} 分`
+      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${mode === 'B' ? '125' : '边趣'}计分，亮金 ${goldCount} 张，金分 ${res.G}）→ +${res.winnerGain} 分`
     );
     g.winners = {
       type: 'hu',
@@ -3328,15 +3333,15 @@ class GameServer {
     this._endRound(room);
   }
 
-  /** 贴金行牌提示：出牌/自摸胡/杠/上金（无报听、禁吃；锁金为自动规则） */
+  /** 贴金行牌提示：出牌/自摸胡/杠/亮金（无报听、禁吃；锁金为自动规则） */
   _buildDrawPromptTieJin(room, seat) {
     const g = room.game;
     const hand = g.hands[seat];
     const actions = ['play'];
     const gangOptions = [];
-    // 碰后（未摸牌）：手牌结构不允许胡/杠/上金，只给出牌
+    // 碰后（未摸牌）：手牌结构不允许胡/杠/亮金，只给出牌
     if (g.lastAction && g.lastAction.type === 'peng') {
-      return { type: 'draw', actions, gangOptions, canHu: false, canShangjin: false, canDeclareTing: false, timeoutMs: HUMAN_TIMEOUT_MS };
+      return { type: 'draw', actions, gangOptions, canHu: false, canLiangjin: false, canDeclareTing: false, timeoutMs: HUMAN_TIMEOUT_MS };
     }
     const canSelfHu = rules.checkHuTieJin(hand, g.melds[seat], g.goldTile);
     if (canSelfHu) actions.push('hu');
@@ -3350,21 +3355,22 @@ class GameServer {
       }
     }
     if (gangOptions.length) actions.push('gang');
+    // 亮金资格：手中有金牌、摸牌后/起手 14 张（手牌≥14）、牌墙仍有可补牌
     const goldCount = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
-    const canShangjin = goldCount > 0;
-    if (canShangjin) actions.push('shangjin');
+    const canLiangjin = goldCount > 0 && hand.length >= 14 && !this._tieJinWallEnded(room, g);
+    if (canLiangjin) actions.push('liangjin');
     return {
       type: 'draw',
       actions,
       gangOptions,
       canHu: canSelfHu,
-      canShangjin,
+      canLiangjin,
       canDeclareTing: false,
       timeoutMs: HUMAN_TIMEOUT_MS,
     };
   }
 
-  // ---- 贴金 AI 决策（简易策略：胡/杠优先，有金必上金，出牌保留金牌） ----
+  // ---- 贴金 AI 决策（简易策略：胡/杠优先，有金必亮金，出牌保留金牌） ----
 
   _decideTieJinDrawAction(g, room, seat) {
     const hand = g.hands[seat];
@@ -3384,9 +3390,9 @@ class GameServer {
       }
     }
     const goldCount = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
-    // 有金必上金：连续上金两张后自动触发锁金
-    if (goldCount > 0 && hand.length - 1 >= 13) {
-      return { type: 'shangjin' };
+    // 有金必亮金（摸牌后/起手 14 张、牌墙未结束）：连续亮金两张后自动触发锁金
+    if (goldCount > 0 && hand.length - 1 >= 13 && !this._tieJinWallEnded(room, g)) {
+      return { type: 'liangjin' };
     }
     return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };
   }
