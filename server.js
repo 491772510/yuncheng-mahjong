@@ -95,7 +95,10 @@ function requestHandler(req, res) {
         return;
       }
       const ext = path.extname(filePath).toLowerCase();
-      res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+      const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+      // HTML 页面禁用缓存：防止手机浏览器缓存旧版 index.html，导致持续加载旧版本号资源（历史踩坑：v9 漏增版本号）
+      if (ext === '.html') headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0';
+      res.writeHead(200, headers);
       res.end(data);
     });
   } catch (e) {
