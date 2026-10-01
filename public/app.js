@@ -1427,7 +1427,7 @@
 
   function initCreateModal() {
     const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
-    const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；胡牌模式 A=标准胡法（平胡/对对胡等按番计分），B=简易胡法；二五八将：将牌需为 2/5/8；下炮子：开局可选下炮，每炮本局 ±1 分（独立于番数）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张翻一倍；抢杠包赔三家；流局庄家连庄。';
+    const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；胡牌模式 A=可点炮/自摸/抢杠胡，B=只能自摸/抢杠胡（不能点炮，西安红中主流玩法）；抢杠仅抢补杠（暗杠不可抢），被抢者包赔三家；二五八将：将牌需为 2/5/8；下炮子：开局可选下炮，每炮本局 ±1 分（独立于番数）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张翻一倍；流局庄家连庄。';
     buildSeg('seg-variant', ['koudian', 'hongzhong'], (v) => (v === 'hongzhong' ? '红中麻将' : '扣点点'), (v) => {
       const hz = v === 'hongzhong';
       $('#settings-hz').classList.toggle('hidden', !hz);
@@ -1436,7 +1436,7 @@
     });
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
     buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
-    buildSeg('seg-hu-mode', ['A', 'B'], (v) => '模式' + v);
+    buildSeg('seg-hu-mode', ['B', 'A'], (v) => '模式' + v);
     buildSeg('seg-zha-ma', [0, 1, 2, 4, 6], (v) => (v === 0 ? '关' : v + ' 张'));
     $('#create-cancel').onclick = () => hideModal('create-modal');
     $('#settle-close').onclick = () => hideModal('settle-modal');
