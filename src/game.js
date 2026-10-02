@@ -104,6 +104,7 @@ class GameServer {
         case 'hu': return this._hu(p);
         case 'pass': return this._pass(p);
         case 'liangjin': return this._liangjin(p, msg);
+        case 'set_hosted': return this._setHosted(p);
         case 'cancel_hosted': return this._cancelHosted(p);
         case 'settle_confirm': return this._settleConfirm(p);
         case 'chat': return this._chat(p, msg);
@@ -2018,6 +2019,38 @@ class GameServer {
 
   _restoreControl(p) {
     if (p && p.hosted && !p.isAI) p.hosted = false;
+  }
+
+  /** 玩家主动开启托管，AI 代打接管（可随时取消） */
+  _setHosted(p) {
+    const room = p.roomId ? this.rooms.get(p.roomId) : null;
+    if (!room || !room.players || room.players[p.seat] !== p) {
+      return this._err(p, '您不在房间中');
+    }
+    if (p.isAI) return this._err(p, 'AI 玩家无需托管');
+    if (!p.connected) return this._err(p, '您当前不在线，无法托管');
+    if (p.hosted) return this._err(p, '您已处于托管状态');
+    p.hosted = true;
+    this._log(room, `${p.name} 手动开启托管`);
+    if (room.state === 'playing' && room.game) {
+      const g = room.game;
+      if (g.stage === 'koupoint' && g.kouPoints[p.seat] == null) {
+        // 扣点阶段未选：自动补扣点，避免四座未填满卡开局
+        this._autoFillKoupoint(room, p.seat);
+      } else if (g.stage === 'response' && g.pending) {
+        const r = g.pending.responders.find((x) => x.seat === p.seat);
+        if (r && r.choice === null) {
+          r.choice = 'pass';
+          this._clearTimer(room, 'resp:' + p.seat);
+          this._log(room, `${p.name} 托管，响应视为过`);
+          this._tryResolvePending(room, g, g.pending);
+        }
+      } else if (this._shouldAutoAct(room, p.seat)) {
+        this._scheduleAutoAct(room, p.seat);
+      }
+    }
+    this._broadcastRoomState(room);
+    if (room.state === 'playing' && room.game) this._broadcastGameState(room);
   }
 
   /** 玩家主动取消托管，恢复真人控制 */

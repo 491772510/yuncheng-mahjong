@@ -594,6 +594,8 @@
   function bindCancelHosted() {
     const btn = document.querySelector('#table-wrap .btn-cancel-hosted');
     if (btn) btn.onclick = () => send({ type: 'cancel_hosted' });
+    const hostedBtn = document.querySelector('#table-wrap .btn-hosted');
+    if (hostedBtn) hostedBtn.onclick = () => send({ type: 'set_hosted' });
   }
 
   function turnText() {
@@ -679,7 +681,7 @@
         ${lockedBadge}
         <span class="pc-name">${esc(p.name)}（我）</span>
         <span class="pc-score">${p.score}</span>
-        ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : ''}
+        ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : '<button class="btn-hosted">托管</button>'}
       </div>
       ${shangjin ? `<div class="shangjin-area" title="亮金区（${shangjin.length}/3）">${shangjin.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('')}</div>` : ''}
       <div class="melds">${meldHtml}</div>
