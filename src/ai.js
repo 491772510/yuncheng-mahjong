@@ -17,6 +17,7 @@ function decideDrawAction(game, room, seat) {
   // 1) 自摸胡（受点数限制：1/2 点不能胡，3/4/5 点可自摸）；明牌区刻子计入已成型面子
   if (
     game.drawnTile !== null &&
+    game.tingSeats.includes(seat) && // A1 修复：136 玩法须报听后方可自摸胡（与真人提示一致，禁止跳过报听）
     rules.checkHu(hand, game.melds[seat]) &&
     rules.canHuByPoints(rules.tilePoints(game.drawnTile), 'zimo')
   ) {

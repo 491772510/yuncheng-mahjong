@@ -2093,6 +2093,27 @@ class GameServer {
     if (room.state === 'playing' && room.game) this._broadcastGameState(room);
   }
 
+  /** A2 修复：报听玩家的摸牌后杠判定（暗杠/补杠），杠牌不得破坏听口（与服务端 _gang 校验一致）；
+   *  红中/贴金无报听概念，永不命中。返回 {tile, gangType} 或 null。 */
+  _tingGangTile(g, room, seat) {
+    if (this._isHongZhong(room) || this._isTieJin(room)) return null;
+    const hand = g.hands[seat];
+    const base = hand.slice();
+    const di = base.lastIndexOf(g.drawnTile);
+    if (di >= 0) base.splice(di, 1);
+    const ting = rules.isTing(base, g.melds[seat]);
+    const cnt = rules.countTiles(hand);
+    for (const [t, c] of cnt) {
+      if (c === 4 && !ting.includes(t) && rules.canAnGang(hand, t)) return { tile: t, gangType: 'angang' };
+    }
+    for (const m of g.melds[seat]) {
+      if (m.type === 'peng' && (cnt.get(m.tile) || 0) >= 1 && !ting.includes(m.tile) && rules.canBuGang(hand, g.melds[seat], m.tile)) {
+        return { tile: m.tile, gangType: 'bugang' };
+      }
+    }
+    return null;
+  }
+
   _scheduleAutoAct(room, seat) {
     const pl = room.players[seat];
     if (!pl) return;
@@ -2130,7 +2151,10 @@ class GameServer {
                 if (decision.type === 'hu') this._hu(pl, {});
                 else this._pass(pl);
               } else {
-                this._autoTingDiscard(room, seat, g.drawnTile);
+                // A2 修复：报听玩家可杠（不破坏听口）则杠，不再一律摸打丢杠分
+                const gangTile = this._tingGangTile(g, room, seat);
+                if (gangTile) this._gang(pl, { tile: gangTile.tile, gangType: gangTile.gangType });
+                else this._autoTingDiscard(room, seat, g.drawnTile);
               }
               return;
             }
