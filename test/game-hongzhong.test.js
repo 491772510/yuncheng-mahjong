@@ -178,7 +178,7 @@ test('自摸胡：三家各付；谁胡谁坐庄（下一局由胜者坐庄）',
   assert.equal(room.lastWinner, 0);
 
   // 下一局：谁胡谁坐庄
-  srv._dealRoundHongZhong(room);
+  srv._dealRound(room);
   assert.equal(room.game.dealer, 0);
   assert.equal(room.dealer, 0);
   cleanupServer(srv);
@@ -352,7 +352,7 @@ test('流局：牌墙摸完最后一张才流局，庄家连庄', () => {
   assert.equal(g.winners.variant, 'hongzhong');
   assert.equal(room.lastWinner, null, '流局不产生新坐庄者');
   // 下一局庄家不变
-  srv._dealRoundHongZhong(room);
+  srv._dealRound(room);
   assert.equal(room.game.dealer, dealer0, '流局后庄家连庄');
   cleanupServer(srv);
 });

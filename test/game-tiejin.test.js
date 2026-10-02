@@ -753,7 +753,7 @@ test('流局开关A：摸完最后一张才流局（剩1张继续行牌），庄
   assert.equal(g.winners.variant, 'tiejin');
   assert.equal(room.lastWinner, null);
   // 无杠：连庄
-  srv._dealRoundTieJin(room);
+  srv._dealRound(room);
   assert.equal(room.game.dealer, dealer0, '流局无杠庄家连庄');
   cleanupServer(srv);
 });
@@ -788,7 +788,7 @@ test('流局杠分不计：本局杠分当场结算后在流局时全部回滚',
   assert.equal(room.players[1].roundScore, 0, '流局杠分不计：付家回滚到 0');
   assert.equal(room.lastFlowHadGang, true, '流局有杠：下局下家坐庄');
   const dealer0 = room.dealer;
-  srv._dealRoundTieJin(room);
+  srv._dealRound(room);
   assert.equal(room.game.dealer, (dealer0 + 1) % 4, '流局有杠下家坐庄');
   cleanupServer(srv);
 });
@@ -808,7 +808,7 @@ test('谁胡谁坐庄：本局胡牌者下局坐庄，庄家胡牌连庄', () =>
   send(wss[0], { type: 'hu' });
   assert.equal(room.lastWinner, 0);
   const d0 = g.dealer;
-  srv._dealRoundTieJin(room);
+  srv._dealRound(room);
   assert.equal(room.game.dealer, 0, '谁胡谁坐庄（庄胡连庄）');
   cleanupServer(srv);
 });

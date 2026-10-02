@@ -476,9 +476,7 @@ class GameServer {
       this._broadcastRoomState(room);
       return;
     }
-    if (room.settings.variant === 'hongzhong') this._dealRoundHongZhong(room);
-    else if (room.settings.variant === 'tiejin') this._dealRoundTieJin(room);
-    else this._dealRound(room);
+    this._dealRound(room);
   }
 
   _addAI(room) {
@@ -507,9 +505,16 @@ class GameServer {
 
   // ============ 牌局 ============
 
+  /** 发牌开局（三玩法统一）：普通 136 张扣点玩法；红中 112 张无扣点直接开局；贴金翻金母定金牌直接开局 */
   _dealRound(room) {
     room.roundNo = (room.roundNo || 0) + 1;
-    const wall = rules.shuffle(rules.createTiles());
+    const isHz = this._isHongZhong(room);
+    const isTj = this._isTieJin(room);
+    const wall = rules.shuffle(isHz ? rules.createTiles112() : rules.createTiles());
+    // 贴金：翻金母，从牌墙末翻一张作为金母（不参与摸牌），按对牌关系确定本局金牌
+    const goldMother = isTj ? wall[wall.length - 1] : null;
+    if (isTj) wall.pop();
+    const goldTile = isTj ? rules.goldFromMother(goldMother) : null;
     const g = (room.game = {
       roundNo: room.roundNo,
       wall,
@@ -517,9 +522,9 @@ class GameServer {
       hands: [[], [], [], []],
       melds: [[], [], [], []],
       discards: [[], [], [], []],
-      kouTiles: [[], [], [], []], // 136 报听时倒扣上架的牌（只存牌值，渲染为背面）
-      kouPoints: [null, null, null, null], // 136 暗扣点数 1-4（结算公开）
-      gangLogs: [], // 本局杠分明细（136 模式）
+      kouTiles: [[], [], [], []],
+      kouPoints: isHz || isTj ? [1, 1, 1, 1] : [null, null, null, null], // 红中/贴金无扣点玩法，固定 1
+      gangLogs: [], // 本局杠分明细
       turn: -1,
       stage: 'draw',
       drawnTile: null,
@@ -529,27 +534,59 @@ class GameServer {
       pending: null,
       dealer: -1,
       winners: null,
-      tingSeats: [], // 已报听（听口）的玩家 seat 列表
+      tingSeats: [], // 已报听（听口）的玩家 seat 列表（红中/贴金无报听，恒空）
+      ...(isHz ? { zhaMaTiles: null, hzWinners: null } : {}), // 红中：本局扎码牌、一炮多响赢家明细
+      ...(isTj
+        ? {
+            goldMother,
+            goldTile,
+            shangjinTiles: [[], [], [], []], // 亮金区（已亮出的金牌）
+            shangjinCount: [0, 0, 0, 0], // 亮金张数（锁金亮出的 2 张也计入，计分时三金封顶）
+            locked: [false, false, false, false], // 锁金状态（被锁者只能自摸）
+            lockSeat: -1, // 锁金者座位
+            huPassed: [false, false, false, false], // 过胡限制：获得下一次抓牌权前禁胡
+          }
+        : {}),
       startAt: Date.now(),
     });
-    for (let i = 0; i < 13; i++) {
-      for (let s = 0; s < 4; s++) g.hands[s].push(g.wall[g.wallPos++]);
-    }
-    // 庄家：上局胡牌者坐庄（谁胡谁坐庄）；流局按设置流转（keep=连庄 / next=下家接庄，默认下家接庄）；首局随机
+    // 坐庄：谁胡谁坐庄（庄胡连庄）；首局普通/红中随机、贴金创建房间者为庄；流局普通按 dealerFlow、红中连庄、贴金有杠下家坐庄
     if (room.lastWinner != null && room.players[room.lastWinner]) {
       room.dealer = room.lastWinner;
     } else if (room.dealer == null || !room.players[room.dealer]) {
-      room.dealer = Math.floor(Math.random() * 4);
-    } else if (room.settings.dealerFlow !== 'keep') {
-      room.dealer = (room.dealer + 1) % 4; // 流局下家接庄
+      if (isTj) {
+        const ownerSeat = room.players.findIndex((pl) => pl && pl.id === room.ownerId);
+        room.dealer = ownerSeat >= 0 ? ownerSeat : Math.floor(Math.random() * 4);
+      } else {
+        room.dealer = Math.floor(Math.random() * 4);
+      }
+    } else if (isTj && room.lastFlowHadGang) {
+      room.dealer = (room.dealer + 1) % 4; // 贴金流局有杠：下家坐庄
+    } else if (!isHz && !isTj && room.settings.dealerFlow !== 'keep') {
+      room.dealer = (room.dealer + 1) % 4; // 普通流局下家接庄
     }
-    // dealerFlow === 'keep' 时：流局连庄，room.dealer 保持不变
+    // dealerFlow === 'keep' 或红中：流局连庄，room.dealer 保持不变
+    if (isTj) room.lastFlowHadGang = false; // 每局重置，流局结算时按本局杠情况设置
     g.dealer = room.dealer;
     for (const pl of room.players) if (pl) pl.roundScore = 0;
     room.state = 'playing';
-    this._log(room, `第 ${room.roundNo} 局开始，${this._pName(room, g.dealer)} 坐庄`);
+    if (isHz) this._log(room, `第 ${room.roundNo} 局开始（红中麻将），${this._pName(room, g.dealer)} 坐庄`);
+    else if (isTj)
+      this._log(room, `第 ${room.roundNo} 局开始（运城贴金麻将），${this._pName(room, g.dealer)} 坐庄，金母 ${rules.tileName(goldMother)} → 金牌 ${rules.tileName(goldTile)}`);
+    else this._log(room, `第 ${room.roundNo} 局开始，${this._pName(room, g.dealer)} 坐庄`);
 
-    // 开局扣点（默认开启）：每人扣 1-4 点（AI 随机），全部选完后庄家摸第 14 张；关闭时跳过扣点，倍数固定 ×1
+    // 发牌：先各发 13 张
+    for (let i = 0; i < 13; i++) {
+      for (let s = 0; s < 4; s++) g.hands[s].push(g.wall[g.wallPos++]);
+    }
+    // 红中/贴金：庄家补第 14 张直接开局（起手即终态，不再摸牌）
+    if (isHz || isTj) {
+      g.hands[g.dealer].push(g.wall[g.wallPos++]);
+      this._broadcastRoomState(room);
+      this._broadcastGameState(room);
+      this._startPlay(room, g.dealer);
+      return;
+    }
+    // 普通：开局扣点（默认开启）：每人扣 1-4 点（AI 随机），全部选完后庄家摸第 14 张；关闭时跳过扣点，倍数固定 ×1
     if (room.settings.enableKoupoint === false) {
       g.kouPoints = [1, 1, 1, 1]; // 关闭：不乘扣点
       this._broadcastRoomState(room);
@@ -639,13 +676,13 @@ class GameServer {
     if (this._isHongZhong(room)) {
       // 红中流局判定：行牌摸完最后一张（牌墙摸空无人胡）才流局；扎码牌另行抓取，不参与此判定
       if (g.wall.length - g.wallPos <= 0) {
-        this._settleDrawHongZhong(room);
+        this._settleDraw(room);
         return;
       }
     } else if (this._isTieJin(room)) {
       // 贴金流局判定：同摸牌（扎码牌另行抓取）
       if (this._tieJinWallEnded(room, g)) {
-        this._settleDrawTieJin(room);
+        this._settleDraw(room);
         return;
       }
     } else {
@@ -1534,33 +1571,67 @@ class GameServer {
       );
   }
 
+  /** 流局结算（三玩法统一）：普通按听牌/未听统计并照常算杠分；红中无胡支付庄家连庄；贴金杠分回滚、有杠下家坐庄 */
   _settleDraw(room) {
     const g = room.game;
+    const isHz = this._isHongZhong(room);
+    const isTj = this._isTieJin(room);
+    if (isTj) {
+      // 贴金流局杠分不计：回滚本局当场结算的杠分
+      for (const lg of g.gangLogs) {
+        if (room.players[lg.seat]) {
+          room.players[lg.seat].score -= lg.points;
+          room.players[lg.seat].roundScore -= lg.points;
+        }
+        for (let s = 0; s < 4; s++) {
+          if (s === lg.seat || !room.players[s]) continue;
+          room.players[s].score += lg.perSeat;
+          room.players[s].roundScore += lg.perSeat;
+        }
+      }
+    }
     g.stage = 'over';
+    // 普通：听牌检测；红中/贴金无听牌概念
     const tingSeats = [];
-    for (let s = 0; s < 4; s++) {
-      if (room.players[s] && rules.isTing(g.hands[s], g.melds[s]).length > 0) tingSeats.push(s);
-    }
     const notTing = [];
-    for (let s = 0; s < 4; s++) {
-      if (room.players[s] && !tingSeats.includes(s)) notTing.push(s);
+    if (!isHz && !isTj) {
+      for (let s = 0; s < 4; s++) {
+        if (room.players[s] && rules.isTing(g.hands[s], g.melds[s]).length > 0) tingSeats.push(s);
+      }
+      for (let s = 0; s < 4; s++) {
+        if (room.players[s] && !tingSeats.includes(s)) notTing.push(s);
+      }
     }
-    g.winners = {
+    const winners = {
       type: 'draw',
-      tingSeats,
-      notTing,
       mode136: true,
       kouPoints: g.kouPoints.slice(), // 结算公开扣点
-      gangLogs: g.gangLogs.slice(), // 杠分照常结算（杠时已即时入账）
-      payments: this._buildGangPayments(room), // 流局无胡牌支付，仅杠分明细
+      gangLogs: g.gangLogs.slice(), // 杠分明细（杠分照常结算时已即时入账；贴金流局回滚不计）
+      payments: isHz || isTj ? [] : this._buildGangPayments(room), // 流局无胡牌支付，普通仅杠分明细
       hands: this._revealHands(room),
     };
-    room.lastWinner = null; // 流局：庄家流转由 _dealRound 按 settings.dealerFlow 处理（连庄/下家接庄）
-    this._log(
-      room,
-      '牌墙剩 6 墩，流局' +
-        (tingSeats.length ? `，听牌者：${tingSeats.map((s) => this._pName(room, s)).join('、')}` : '')
-    );
+    if (isHz) winners.variant = 'hongzhong';
+    else if (isTj) {
+      winners.variant = 'tiejin';
+      winners.goldMother = g.goldMother;
+      winners.goldTile = g.goldTile;
+      winners.shangjinCount = g.shangjinCount.slice();
+      winners.locked = g.locked.slice();
+      winners.lockSeat = g.lockSeat;
+    } else {
+      winners.tingSeats = tingSeats;
+      winners.notTing = notTing;
+    }
+    g.winners = winners;
+    room.lastWinner = null; // 流局：庄家流转由 _dealRound 按玩法处理（普通 dealerFlow / 红中连庄 / 贴金有杠下家）
+    if (isTj) {
+      room.lastFlowHadGang = g.gangLogs.length > 0; // 贴金流局有杠：下家坐庄
+      this._log(room, '流局（运城贴金麻将）' + (g.gangLogs.length > 0 ? '，有杠下家坐庄' : '，无杠庄家连庄'));
+    } else if (isHz) {
+      this._log(room, '牌墙摸完，流局（红中麻将）');
+    } else {
+      this._log(room, '牌墙剩 6 墩，流局' + (tingSeats.length ? `，听牌者：${tingSeats.map((s) => this._pName(room, s)).join('、')}` : ''));
+    }
     this._broadcastGameState(room);
     this._sendSettlement(room);
     this._broadcastRoomState(room);
@@ -1640,9 +1711,7 @@ class GameServer {
     // 全员确认：清理所有结算确认超时定时器
     for (let s = 0; s < 4; s++) this._clearTimer(room, 'settle:' + s);
     this._log(room, '所有玩家已确认，开始下一局');
-    if (room.settings.variant === 'hongzhong') this._dealRoundHongZhong(room);
-    else if (room.settings.variant === 'tiejin') this._dealRoundTieJin(room);
-    else this._dealRound(room);
+    this._dealRound(room);
   }
 
   // ============ 玩家操作（全部服务端校验） ============
@@ -2604,59 +2673,8 @@ class GameServer {
     return rules.getTileTypes();
   }
 
-  _dealRoundHongZhong(room) {
-    room.roundNo = (room.roundNo || 0) + 1;
-    const wall = rules.shuffle(rules.createTiles112());
-    const g = (room.game = {
-      roundNo: room.roundNo,
-      wall,
-      wallPos: 0,
-      hands: [[], [], [], []],
-      melds: [[], [], [], []],
-      discards: [[], [], [], []],
-      kouTiles: [[], [], [], []],
-      kouPoints: [1, 1, 1, 1], // 红中无扣点玩法，固定 1
-      gangLogs: [], // 本局杠分记录（红中杠分当场结算，此处留明细供结算展示）
-      turn: -1,
-      stage: 'draw', // 直接进入行牌
-      drawnTile: null,
-      newTiles: [null, null, null, null],
-      lastDiscard: null,
-      lastAction: null,
-      pending: null,
-      dealer: -1,
-      winners: null,
-      tingSeats: [], // 红中无报听，恒空
-      zhaMaTiles: null, // 本局扎码牌（结算时从牌墙补抓）
-      hzWinners: null, // 红中胡牌赢家明细（一炮多响时多个）
-      startAt: Date.now(),
-    });
-    // 庄家：谁胡谁坐庄；流局连庄（红中固定连庄）；首局随机
-    if (room.lastWinner != null && room.players[room.lastWinner]) {
-      room.dealer = room.lastWinner;
-    } else if (room.dealer == null || !room.players[room.dealer]) {
-      room.dealer = Math.floor(Math.random() * 4);
-    }
-    // 流局：room.dealer 保持不变（连庄）
-    g.dealer = room.dealer;
-    for (const pl of room.players) if (pl) pl.roundScore = 0;
-    room.state = 'playing';
-    this._log(room, `第 ${room.roundNo} 局开始（红中麻将），${this._pName(room, g.dealer)} 坐庄`);
-
-    // 发牌：庄 14 张、闲 13 张
-    for (let i = 0; i < 13; i++) {
-      for (let s = 0; s < 4; s++) g.hands[s].push(g.wall[g.wallPos++]);
-    }
-    g.hands[g.dealer].push(g.wall[g.wallPos++]);
-    this._broadcastRoomState(room);
-    this._broadcastGameState(room);
-
-    // 直接开始行牌
-    this._startHongZhongPlay(room, g.dealer);
-  }
-
-  /** 正式开局：庄家发牌已补 1 张共 14 张（起手即终态），直接进入出牌行动，不再摸牌 */
-  _startHongZhongPlay(room, seat) {
+  /** 正式开局（红中/贴金）：庄家起手 14 张直接进入出牌行动，不再摸牌 */
+  _startPlay(room, seat) {
     const g = room.game;
     g.turn = seat;
     g.stage = 'draw';
@@ -2684,26 +2702,6 @@ class GameServer {
     this._endRound(room);
   }
 
-  /** 红中流局：无胡牌支付，庄家连庄 */
-  _settleDrawHongZhong(room) {
-    const g = room.game;
-    g.stage = 'over';
-    g.winners = {
-      type: 'draw',
-      variant: 'hongzhong',
-      mode136: true,
-      kouPoints: g.kouPoints.slice(),
-      gangLogs: g.gangLogs.slice(),
-      payments: [],
-      hands: this._revealHands(room),
-    };
-    room.lastWinner = null; // 红中：流局庄家连庄（room.dealer 保持不变）
-    this._log(room, '牌墙摸完，流局（红中麻将）');
-    this._broadcastGameState(room);
-    this._sendSettlement(room);
-    this._broadcastRoomState(room);
-    this._endRound(room);
-  }
 
   /** 红中行牌提示：胡/杠/出牌（无报听、禁吃） */
   _buildDrawPromptHongZhong(room, seat) {
@@ -2808,84 +2806,7 @@ class GameServer {
     return true;
   }
 
-  /** 发牌开局：翻金母定金牌；首局创建房间者为庄，此后胡者坐庄（庄胡连庄）/流局有杠下家坐庄无杠连庄 */
-  _dealRoundTieJin(room) {
-    room.roundNo = (room.roundNo || 0) + 1;
-    const wall = rules.shuffle(rules.createTiles());
-    // 翻金母：从牌墙末翻一张作为金母（不参与摸牌），按对牌关系确定本局金牌
-    const goldMother = wall[wall.length - 1];
-    wall.pop();
-    const goldTile = rules.goldFromMother(goldMother);
-    const g = (room.game = {
-      roundNo: room.roundNo,
-      wall,
-      wallPos: 0,
-      hands: [[], [], [], []],
-      melds: [[], [], [], []],
-      discards: [[], [], [], []],
-      kouTiles: [[], [], [], []],
-      kouPoints: [1, 1, 1, 1], // 贴金无扣点玩法，固定 1
-      gangLogs: [], // 杠分明细（杠分当场结算，流局回滚不计）
-      turn: -1,
-      stage: 'draw', // 直接进入行牌
-      drawnTile: null,
-      newTiles: [null, null, null, null],
-      lastDiscard: null,
-      lastAction: null,
-      pending: null,
-      dealer: -1,
-      winners: null,
-      tingSeats: [], // 贴金无报听，恒空
-      goldMother,
-      goldTile,
-      shangjinTiles: [[], [], [], []], // 亮金区（已亮出的金牌）
-      shangjinCount: [0, 0, 0, 0], // 亮金张数（锁金亮出的 2 张也计入，计分时三金封顶）
-      locked: [false, false, false, false], // 锁金状态（被锁者只能自摸）
-      lockSeat: -1, // 锁金者座位
-      huPassed: [false, false, false, false], // 过胡限制：获得下一次抓牌权前禁胡
-      startAt: Date.now(),
-    });
-    // 坐庄：谁胡谁坐庄（庄胡连庄）；流局有杠则下家坐庄、无杠连庄；首局创建房间者为庄
-    if (room.lastWinner != null && room.players[room.lastWinner]) {
-      room.dealer = room.lastWinner;
-    } else if (room.dealer == null || !room.players[room.dealer]) {
-      const ownerSeat = room.players.findIndex((pl) => pl && pl.id === room.ownerId);
-      room.dealer = ownerSeat >= 0 ? ownerSeat : Math.floor(Math.random() * 4);
-    } else if (room.lastFlowHadGang) {
-      room.dealer = (room.dealer + 1) % 4; // 流局有杠：下家坐庄
-    }
-    room.lastFlowHadGang = false; // 每局重置，流局结算时按本局杠情况设置
-    g.dealer = room.dealer;
-    for (const pl of room.players) if (pl) pl.roundScore = 0;
-    room.state = 'playing';
-    this._log(
-      room,
-      `第 ${room.roundNo} 局开始（运城贴金麻将），${this._pName(room, g.dealer)} 坐庄，金母 ${rules.tileName(goldMother)} → 金牌 ${rules.tileName(goldTile)}`
-    );
 
-    // 发牌：庄 14 张、闲 13 张
-    for (let i = 0; i < 13; i++) {
-      for (let s = 0; s < 4; s++) g.hands[s].push(g.wall[g.wallPos++]);
-    }
-    g.hands[g.dealer].push(g.wall[g.wallPos++]);
-    this._broadcastRoomState(room);
-    this._broadcastGameState(room);
-
-    // 直接开始行牌
-    this._startTieJinPlay(room, g.dealer);
-  }
-
-  /** 正式开局：庄家起手 14 张直接进入出牌行动 */
-  _startTieJinPlay(room, seat) {
-    const g = room.game;
-    g.turn = seat;
-    g.stage = 'draw';
-    g.drawnTile = null;
-    g.lastDiscard = null;
-    g.lastAction = null;
-    g.newTiles[seat] = null;
-    this._afterTurnStart(room, seat);
-  }
 
 
 
@@ -2935,43 +2856,6 @@ class GameServer {
     this._afterTurnStart(room, p.seat);
   }
 
-  /** 贴金流局：杠分不计（回滚当场结算的杠分）；有杠下家坐庄、无杠连庄 */
-  _settleDrawTieJin(room) {
-    const g = room.game;
-    // 流局杠分不计：回滚本局当场结算的杠分
-    for (const lg of g.gangLogs) {
-      if (room.players[lg.seat]) {
-        room.players[lg.seat].score -= lg.points;
-        room.players[lg.seat].roundScore -= lg.points;
-      }
-      for (let s = 0; s < 4; s++) {
-        if (s === lg.seat || !room.players[s]) continue;
-        room.players[s].score += lg.perSeat;
-        room.players[s].roundScore += lg.perSeat;
-      }
-    }
-    g.stage = 'over';
-    g.winners = {
-      type: 'draw',
-      variant: 'tiejin',
-      mode136: true,
-      goldMother: g.goldMother,
-      goldTile: g.goldTile,
-      shangjinCount: g.shangjinCount.slice(),
-      locked: g.locked.slice(),
-      lockSeat: g.lockSeat,
-      payments: [],
-      gangLogs: g.gangLogs.slice(), // 流局杠分不计，仅保留明细供展示
-      hands: this._revealHands(room),
-    };
-    room.lastWinner = null;
-    room.lastFlowHadGang = g.gangLogs.length > 0; // 流局有杠：下家坐庄
-    this._log(room, '流局（运城贴金麻将）' + (g.gangLogs.length > 0 ? '，有杠下家坐庄' : '，无杠庄家连庄'));
-    this._broadcastGameState(room);
-    this._sendSettlement(room);
-    this._broadcastRoomState(room);
-    this._endRound(room);
-  }
 
   /** 贴金行牌提示：出牌/自摸胡/杠/亮金（无报听、禁吃；锁金为自动规则） */
   _buildDrawPromptTieJin(room, seat) {
