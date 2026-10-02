@@ -745,10 +745,10 @@ test('流局开关A：摸完最后一张才流局（剩1张继续行牌），庄
   const g = room.game;
   const dealer0 = room.dealer;
   g.wallPos = g.wall.length - 1;
-  srv._drawTileTieJin(room, 0);
+  srv._drawCard(room, 0, false);
   assert.equal(g.winners, null, '开关A：牌墙剩1张应继续摸');
   g.wallPos = g.wall.length;
-  srv._drawTileTieJin(room, 1);
+  srv._drawCard(room, 1, false);
   assert.equal(g.winners.type, 'draw');
   assert.equal(g.winners.variant, 'tiejin');
   assert.equal(room.lastWinner, null);
@@ -762,7 +762,7 @@ test('流局开关B：剩10墩（20张）即黄庄；A模式下剩20张不流局
   const { srv, room, wss } = makeRoom4({ drawEndMode: 'B' });
   const g = room.game;
   g.wallPos = g.wall.length - 20;
-  srv._drawTileTieJin(room, 0);
+  srv._drawCard(room, 0, false);
   assert.equal(g.winners.type, 'draw', '开关B：剩20张（硬10墩）即流局');
   cleanupServer(srv);
 });
@@ -782,7 +782,7 @@ test('流局杠分不计：本局杠分当场结算后在流局时全部回滚',
   assert.equal(room.players[1].roundScore, -2);
   // 流局
   g.wallPos = g.wall.length;
-  srv._drawTileTieJin(room, 1);
+  srv._drawCard(room, 1, false);
   assert.equal(g.winners.type, 'draw');
   assert.equal(room.players[0].roundScore, 0, '流局杠分不计：杠家回滚到 0');
   assert.equal(room.players[1].roundScore, 0, '流局杠分不计：付家回滚到 0');

@@ -122,7 +122,7 @@ test('摸牌后 game_state 下发 newTile（仅自己视角），打出后清除
   assert.ok(g.hands[g.turn].includes(g.newTiles[g.turn]));
 
   // 手动驱动座位 1（玩家乙）摸牌：验证“自己摸牌 → 自己视角收到 newTile”
-  srv._drawTile(room, 1);
+  srv._drawCard(room, 1, false);
   const tileB = g.newTiles[1];
   assert.ok(tileB, '玩家乙摸牌后内部应记录新摸牌');
   const gsB = lastOf(wb, 'game_state');

@@ -342,11 +342,11 @@ test('流局：牌墙摸完最后一张才流局，庄家连庄', () => {
   const dealer0 = room.dealer;
   // 牌墙还有 1 张：应继续摸，不流局
   g.wallPos = g.wall.length - 1;
-  srv._drawTileHongZhong(room, 0);
+  srv._drawCard(room, 0, false);
   assert.equal(g.winners, null, '牌墙还有 1 张应继续行牌');
   // 牌墙摸空：流局
   g.wallPos = g.wall.length;
-  srv._drawTileHongZhong(room, 1);
+  srv._drawCard(room, 1, false);
 
   assert.equal(g.winners.type, 'draw');
   assert.equal(g.winners.variant, 'hongzhong');

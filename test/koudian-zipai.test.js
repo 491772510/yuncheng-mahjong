@@ -207,7 +207,7 @@ test('扣点点：报听玩家杠后补牌低点胡 → _drawAfterGang 直接摸
   g.wallPos = 30; // 牌墙中段，剩余 >12 张不会误触发流局
   g.wall[30] = 'w1';
 
-  srv._drawAfterGang(room, seat);
+  srv._drawCard(room, seat, true);
 
   assert.ok(g.discards[seat].includes('w1'), '补到的 w1 应直接打出');
   assert.equal(g.hands[seat].length, 13, '13 张手牌 + 补 1 打 1 应仍为 13 张');
