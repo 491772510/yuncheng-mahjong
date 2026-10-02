@@ -2756,7 +2756,9 @@ class GameServer {
     const g = room.game;
     g.turn = seat;
     g.stage = 'draw';
-    g.drawnTile = null;
+    // P0 修复：起手第 14 张视为已摸牌，避免 _gang/_hu 因 drawnTile===null 拒绝
+    // 导致庄家起手暗杠/胡被拒、座位永久卡死整局（红中约0.9%、贴金约1/800小局）
+    g.drawnTile = g.hands[seat][g.hands[seat].length - 1];
     g.lastDiscard = null;
     g.lastAction = null;
     g.newTiles[seat] = null;

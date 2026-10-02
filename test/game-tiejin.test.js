@@ -934,3 +934,45 @@ test('结算字段完整：金母/金牌/亮金数/金分/分项计算式/锁金
   assert.ok(r.hands && r.hands.length === 4, '结算需含各家手牌 hands');
   cleanupServer(srv);
 });
+
+
+// ============ P0 回归：庄家起手暗杠 / 起手即胡（修复前 _startPlay 置 drawnTile=null 被 _gang/_hu 拒绝，座位卡死整局） ============
+
+test('P0 贴金庄家起手含 4 张同牌可暗杠（drawnTile 应放行为起手第 14 张）', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  const dealer = g.dealer;
+  assert.equal(g.hands[dealer].length, 14, '庄家起手 14 张');
+  // 起手 14 张：4 张 X 可暗杠（避开金牌，金牌不可杠），其余不成胡
+  const X = g.goldTile === 'w1' ? 'w2' : 'w1';
+  g.hands[dealer] = [X, X, X, X, 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'b1', 'b1', 't1'];
+  g.melds = [[], [], [], []];
+  g.turn = dealer;
+  g.stage = 'draw';
+  send(wss[dealer], { type: 'gang', tile: X, gangType: 'angang' });
+  assert.equal(lastOf(wss[dealer], 'error'), null, '庄家起手暗杠不应被拒（原缺陷：drawnTile=null 返回"当前不能杠"）');
+  const ag = g.gangLogs[0];
+  assert.ok(ag && ag.type === 'angang' && ag.tile === X, '应记录暗杠');
+  assert.equal(room.players[dealer].roundScore, 6, '贴金暗杠：其余每家付 2 分，杠家收 6 分');
+  assert.equal(g.melds[dealer][0].type, 'angang');
+  cleanupServer(srv);
+});
+
+test('P0 贴金庄家起手即胡可胡（drawnTile 应放行为起手第 14 张）', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  const dealer = g.dealer;
+  // 4 组刻子 + 将（将用金牌双张），无论金牌牌面为何均可成胡
+  const gt = g.goldTile;
+  g.hands[dealer] = [gt, gt, 'w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'b1', 'b1', 'b1', 't1', 't1', 't1'];
+  g.melds = [[], [], [], []];
+  g.turn = dealer;
+  g.stage = 'draw';
+  send(wss[dealer], { type: 'hu' });
+  assert.equal(lastOf(wss[dealer], 'error'), null, '庄家起手自摸胡不应被拒（原缺陷：drawnTile=null 拒绝自摸）');
+  const w = g.winners;
+  assert.ok(w, '应产生胡牌结算');
+  assert.equal(w.winType, 'zimo');
+  assert.equal(w.winner, dealer);
+  cleanupServer(srv);
+});
