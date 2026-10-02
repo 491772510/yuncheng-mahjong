@@ -79,6 +79,7 @@ function makeRoom4(settings) {
   send(wss[0], { type: 'create_room', settings: { ...BASE, ...settings } });
   const room = [...srv.rooms.values()][0];
   for (let i = 1; i < 4; i++) send(wss[i], { type: 'join_room', roomId: room.id });
+  send(wss[0], { type: 'start_game' }); // 4 人齐后由房主触发开局
   return { srv, room, wss };
 }
 
@@ -622,6 +623,9 @@ test('过胡限制：点炮响应期内过胡后，获抓牌权前不能再胡',
   g.turn = 0;
   g.stage = 'draw';
   g.drawnTile = 't2';
+  // 固定后续摸牌，避免随机摸到 b2 使 seat3 可碰而阻断轮转断言
+  g.wall[g.wallPos] = 'w1';
+  g.wall[g.wallPos + 1] = 'w1';
 
   send(wss[0], { type: 'play_tile', tile: 'w9' });
   const r1 = g.pending.responders.find((r) => r.seat === 1);

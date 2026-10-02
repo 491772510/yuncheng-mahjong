@@ -75,6 +75,7 @@ function makeRoom4(settings) {
   send(wss[0], { type: 'create_room', settings: { ...BASE, ...settings } });
   const room = [...srv.rooms.values()][0];
   for (let i = 1; i < 4; i++) send(wss[i], { type: 'join_room', roomId: room.id });
+  send(wss[0], { type: 'start_game' }); // 4 人齐后由房主触发开局
   return { srv, room, wss };
 }
 
