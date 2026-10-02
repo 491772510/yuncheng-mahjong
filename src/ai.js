@@ -47,7 +47,7 @@ function decideDrawAction(game, room, seat) {
   // 2) 暗杠 / 3) 补杠：仅摸牌后可杠（碰牌后 drawnTile 为 null，服务端 _gang 会拒绝“当前不能杠”，
   // 若此处仍返回 gang，AI 动作被拒后无后续出牌，牌局将死锁）
   if (game.drawnTile !== null) {
-    const cnt = rules.countTiles(hand);
+  const cnt = rules.countTiles(hand);
     for (const [t, c] of cnt) {
       if (c === 4) return { type: 'gang', gangType: 'angang', tile: t };
     }
@@ -85,6 +85,15 @@ function chooseDiscard(hand, game, room, seat) {
     for (const t of d) safe.add(t);
   }
 
+  // C1 修复：安全牌权重随放炮风险缩放（不再固定 -12）。
+  // 规则依据：未报听者放炮独赔 3 份、已报听者放炮三家各付 1 份；
+  // 无人报听时（未报听者不可胡）点炮风险为零 -> 安全加成归零，避免无差别拆牌；
+  // 有对手报听时按「自己是否报听 + 对手报听人数」调整：自己未报听（独赔 3 份）权重最高，
+  // 已报听（各家 1 份）权重下调，报听人数越多防守权重小幅递增。
+  const oppTing = (game.tingSeats || []).filter((s) => s !== seat).length;
+  const selfTing = (game.tingSeats || []).includes(seat);
+  const safePenalty = oppTing > 0 ? (selfTing ? 6 : 14) + (oppTing - 1) * 3 : 0;
+
   const cnt = rules.countTiles(hand);
   let best = null;
   let bestScore = Infinity;
@@ -103,8 +112,8 @@ function chooseDiscard(hand, game, room, seat) {
     }
     // 边张价值略低
     if (num === 1 || num === 9) score -= 1;
-    // 安全牌优先打出
-    if (safe.has(t)) score -= 12;
+    // 安全牌优先打出（权重随放炮风险缩放）
+    if (safe.has(t)) score -= safePenalty;
     // 与上家刚打出的牌同花色的中张保守处理：无额外逻辑
     if (score < bestScore) {
       bestScore = score;
