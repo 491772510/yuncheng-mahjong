@@ -13,7 +13,6 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { GameServer } = require('../src/game');
 const rules = require('../src/rules');
-const aiTieJin = require('../src/ai-tiejin');
 
 // ---------- 测试工具（与 game-hongzhong.test.js 同构） ----------
 function makeWs() {
@@ -299,7 +298,7 @@ test('亮金条件放宽：碰后/13张手牌持有金牌即可亮金（不再�
   assert.ok(prompt.actions.includes('play'), '碰后仍可出牌');
   assert.equal(prompt.canHu, false, '碰后不列胡');
   // AI 决策：碰后有金必亮金
-  assert.equal(aiTieJin.decideDrawAction(g, room, 0).type, 'liangjin', 'AI 碰后有金必亮金');
+  assert.equal(srv._decideTieJinDrawAction(g, room, 0).type, 'liangjin', 'AI 碰后有金必亮金');
   // 真人亮金执行：13 张亮金后仍 13 张，不轮转
   const wallBefore = g.wall.length;
   send(wss[0], { type: 'liangjin' });
