@@ -818,38 +818,27 @@ class GameServer {
     const huList = pending.responders.filter((r) => r.choice === 'hu');
     if (huList.length > 0) {
       if (this._isHongZhong(room)) {
-        // 红中：一炮多响，全部同时胡
-        const discarder = pending.discarder;
+        // 红中：一炮多响，全部同时胡（hzWinners/_accPayments 在 _settleHu 内累计，收尾统一广播结算）
         for (const r of huList) {
-          this._settleHuHongZhong(room, r.seat, {
+          this._settleHu(room, r.seat, {
             winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
             tile: pending.tile,
-            discarder,
+            discarder: pending.discarder,
           });
         }
-        this._finishHuRoundHongZhong(room);
-        return;
-      }
-      // 普通：距放炮（补杠）者最近的一家胡牌；贴金：截胡单响（huList 至多 1）
-      const pick = this._isTieJin(room)
-        ? huList[0].seat
-        : this._nearestSeat(huList.map((r) => r.seat), pending.discarder);
-      if (this._isTieJin(room)) {
-        this._settleHuTieJin(room, pick, {
+      } else {
+        // 普通：距放炮（补杠）者最近的一家胡牌；贴金：截胡单响（huList 至多 1）
+        const pick = this._isTieJin(room)
+          ? huList[0].seat
+          : this._nearestSeat(huList.map((r) => r.seat), pending.discarder);
+        this._settleHu(room, pick, {
           winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
           tile: pending.tile,
           discarder: pending.discarder,
+          qiangGang: pending.type === 'qianggang',
         });
-        this._finishHuRoundTieJin(room);
-        return;
       }
-      this._settleHu(room, pick, {
-        winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
-        tile: pending.tile,
-        discarder: pending.discarder,
-        qiangGang: pending.type === 'qianggang',
-      });
-      this._endRound(room);
+      this._finishHuRound(room);
       return;
     }
     // 贴金过胡限制：可胡者主动过（或超时）→ 在获得下一次抓牌权前禁止其胡牌
@@ -1219,6 +1208,214 @@ class GameServer {
 
   _settleHu(room, winnerSeat, info) {
     const g = room.game;
+    // ===== 贴金玩法：金分体系（A/B 计分，三金封顶）；杠分已当场结清仅随结算展示 =====
+    if (this._isTieJin(room)) {
+      const goldCount = Math.min(g.shangjinCount[winnerSeat] || 0, 3); // 三金封顶
+      const winnerDealer = winnerSeat === g.dealer;
+      const mode = room.settings && room.settings.scoreMode === 'B' ? 'B' : 'A';
+      const res =
+        mode === 'B'
+          ? rules.calcTieJinScoreB({ winType: info.winType, winnerDealer, goldCount })
+          : rules.calcTieJinScoreA({ winType: info.winType, winnerDealer, goldCount });
+      const isZimo = info.winType === 'zimo';
+      const payerSeats = [];
+      if (isZimo) {
+        // N1 修复：B 模式偏家自摸时 res.payers[0] 为庄家份（dealerShare），
+        // 必须落到实际庄家座位，另两份 base 归两个偏家；不能按座次顺排。
+        if (mode === 'B' && !winnerDealer) {
+          payerSeats.push(g.dealer);
+          for (let i = 1; i <= 3; i++) {
+            const s = (winnerSeat + i) % 4;
+            if (s !== winnerSeat && s !== g.dealer) payerSeats.push(s);
+          }
+        } else {
+          for (let i = 1; i <= 3; i++) payerSeats.push((winnerSeat + i) % 4);
+        }
+      } else {
+        payerSeats.push(info.discarder);
+        for (let i = 1; i <= 3; i++) {
+          const s = (info.discarder + i) % 4;
+          if (s !== winnerSeat) payerSeats.push(s);
+        }
+      }
+      for (let i = 0; i < payerSeats.length; i++) {
+        const ps = payerSeats[i];
+        const amt = res.payers[i].amount;
+        if (room.players[ps]) {
+          room.players[ps].score -= amt;
+          room.players[ps].roundScore -= amt;
+        }
+      }
+      room.players[winnerSeat].score += res.winnerGain;
+      room.players[winnerSeat].roundScore += res.winnerGain;
+      const winLabel = isZimo ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+      this._log(
+        room,
+        `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${mode === 'B' ? '125' : '边趣'}计分，亮金 ${goldCount} 张，金分 ${res.G}）→ +${res.winnerGain} 分`
+      );
+      g.winners = {
+        type: 'hu',
+        variant: 'tiejin',
+        mode136: true,
+        winType: info.winType,
+        winner: winnerSeat,
+        tile: info.tile,
+        discarder: isZimo ? -1 : info.discarder,
+        goldMother: g.goldMother,
+        goldTile: g.goldTile,
+        goldCount,
+        goldScore: res.G,
+        huGain: res.huGain || 0,
+        winnerGain: res.winnerGain,
+        scoreMode: mode,
+        payments: payerSeats.map((ps, i) => ({
+          from: ps,
+          to: winnerSeat,
+          amount: res.payers[i].amount,
+          formula: res.payers[i].formula,
+          role: res.payers[i].role,
+        })),
+        shangjinCount: g.shangjinCount.slice(),
+        locked: g.locked.slice(),
+        lockSeat: g.lockSeat,
+        gangLogs: g.gangLogs.slice(),
+        hands: this._revealHandsWithWinTile(room, winnerSeat, info),
+      };
+      return;
+    }
+
+    // ===== 红中玩法：扎码无番制（中码倍数=2^中码张数；杠分已当场结清仅随结算展示）=====
+    if (this._isHongZhong(room)) {
+      const hand = g.hands[winnerSeat].slice();
+      if (info.winType !== 'zimo') hand.push(info.tile);
+      const winLabel =
+        info.winType === 'zimo' ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+      // 扎码：从牌墙补抓，1/5/9 万筒条 + 红中中码，每张使中码倍数翻一倍
+      let zhaMaCount = 0;
+      const zhaMaTiles = [];
+      if (room.settings.zhaMa > 0 && g.wall.length - g.wallPos > 0) {
+        const n = Math.min(room.settings.zhaMa, g.wall.length - g.wallPos);
+        for (let i = 0; i < n; i++) {
+          const t = g.wall[g.wallPos++];
+          zhaMaTiles.push(t);
+          if (rules.isZhongMa(t)) zhaMaCount++;
+        }
+      }
+      g.zhaMaTiles = zhaMaTiles;
+      const zmaMult = Math.pow(2, zhaMaCount); // 中码倍数：中0码=1倍，每中一张翻一倍
+      const base = 1; // 红中底注恒为 1 分
+
+      const zimoPay = () => (2 + zmaMult) * base;
+      const baoShare = (1 + zmaMult) * base;
+      const baoTotal = baoShare * 3;
+
+      let winnerGain = 0;
+      const payments = [];
+      if (info.winType === 'zimo') {
+        // 自摸：三家各付
+        let total = 0;
+        const rows = [];
+        for (let s = 0; s < 4; s++) {
+          if (s === winnerSeat || !room.players[s]) continue;
+          const pay = zimoPay();
+          room.players[s].score -= pay;
+          room.players[s].roundScore -= pay;
+          total += pay;
+          rows.push({
+            seat: s,
+            amount: -pay,
+            role: '自摸',
+            formula: `1底注×(2+${zmaMult}中码倍数)=${pay}`,
+          });
+        }
+        room.players[winnerSeat].score += total;
+        room.players[winnerSeat].roundScore += total;
+        winnerGain = total;
+        payments.push({
+          kind: 'hu',
+          title: `自摸${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · 三家各付`,
+          toSeat: winnerSeat,
+          toAmount: total,
+          rows,
+        });
+      } else {
+        // 点炮 / 抢杠：放炮者（被抢杠者）包赔三家
+        const loser = room.players[info.discarder];
+        if (loser) {
+          loser.score -= baoTotal;
+          loser.roundScore -= baoTotal;
+        }
+        room.players[winnerSeat].score += baoTotal;
+        room.players[winnerSeat].roundScore += baoTotal;
+        winnerGain = baoTotal;
+        const role = info.winType === 'qianggang' ? '被抢杠者（包三家）' : '放炮者（包三家）';
+        payments.push({
+          kind: 'hu',
+          title: `${winLabel}${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · ${role}独赔 ${baoTotal} 分`,
+          toSeat: winnerSeat,
+          toAmount: baoTotal,
+          rows: [{
+            seat: info.discarder,
+            amount: -baoTotal,
+            role,
+            formula: `1底注×(1+${zmaMult}中码倍数)×3家=${baoTotal}`,
+          }],
+        });
+      }
+
+      g.hzWinners = g.hzWinners || [];
+      const isMulti = g.hzWinners.length > 0; // 一炮多响：已有赢家记录
+      g.hzWinners.push({
+        winnerSeat,
+        winType: info.winType,
+        tile: info.tile,
+        discarder: info.winType === 'zimo' ? null : info.discarder,
+        fan: 0,
+        mult: zmaMult,
+        zmaMult,
+        noFan: true,
+        names: ['无番'],
+        scorePer: winnerGain / 3,
+        paoGain: 0,
+        zhaMaCount,
+        zhaMaTiles: zhaMaTiles.slice(),
+      });
+      // 多响时累计各家支付记录（杠支付只在最后一次补上，避免重复）
+      g._accPayments = g._accPayments || [];
+      if (!isMulti) g._accPayments = [];
+      g._accPayments = g._accPayments.concat(payments);
+      const gangPay = this._buildGangPayments(room);
+      const allPayments = isMulti ? g._accPayments.concat(gangPay) : g._accPayments.concat(gangPay);
+      // 兼容结算视图（一炮多响时保留最后一家主信息 + winners 明细列表）
+      g.winners = {
+        type: 'hu',
+        variant: 'hongzhong',
+        winnerSeat,
+        winType: info.winType,
+        winners: g.hzWinners.slice(),
+        totalFan: 0,
+        mult: zmaMult,
+        zmaMult,
+        noFan: true,
+        fanNames: ['无番'],
+        zhaMaCount,
+        zhaMaTiles: zhaMaTiles.slice(),
+        kouPoints: g.kouPoints.slice(),
+        gangLogs: g.gangLogs.slice(),
+        score: winnerGain,
+        tile: info.tile,
+        discarder: info.winType === 'zimo' ? null : info.discarder,
+        payments: allPayments,
+        hands: this._revealHandsWithWinTile(room, winnerSeat, info),
+      };
+      room.lastWinner = winnerSeat;
+      this._log(
+        room,
+        `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}${zhaMaCount ? `（中码 ${zhaMaCount} 张 ×${zmaMult}）` : ''} → +${winnerGain} 分`
+      );
+      return;
+    }
+
     // 算番型时必须使用完整手牌：自摸时胡牌已在手牌；点炮/抢杠时 info.tile 是打出的胡牌，需并入
     const hand = g.hands[winnerSeat].slice();
     if (info.winType !== 'zimo') hand.push(info.tile);
@@ -1335,9 +1532,6 @@ class GameServer {
         room,
         `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${tilePoints}点 × ${mult}倍 × 扣${kp}${payLabel} → ${score}分）`
       );
-      this._broadcastGameState(room);
-      this._sendSettlement(room);
-      this._broadcastRoomState(room);
   }
 
   _settleDraw(room) {
@@ -1650,8 +1844,8 @@ class GameServer {
         if (!rules.checkHuTieJin(g.hands[p.seat], g.melds[p.seat], g.goldTile)) {
           return this._err(p, '手牌不构成胡牌');
         }
-        this._settleHuTieJin(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
-        this._finishHuRoundTieJin(room);
+        this._settleHu(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
+        this._finishHuRound(room);
         return;
       }
       // 红中麻将：癞子胡判定（无点数限制），按红中结算
@@ -1659,8 +1853,8 @@ class GameServer {
         if (!rules.checkHuHongZhong(g.hands[p.seat], g.melds[p.seat])) {
           return this._err(p, '手牌不构成胡牌');
         }
-        this._settleHuHongZhong(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
-        this._finishHuRoundHongZhong(room);
+        this._settleHu(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
+        this._finishHuRound(room);
         return;
       }
       if (!rules.checkHu(g.hands[p.seat], g.melds[p.seat])) return this._err(p, '手牌不构成胡牌');
@@ -1672,7 +1866,7 @@ class GameServer {
         winType: 'zimo',
         tile: g.drawnTile,
       });
-      this._endRound(room);
+      this._finishHuRound(room);
       return;
     }
     return this._err(p, '当前不能胡');
@@ -2477,146 +2671,13 @@ class GameServer {
 
 
 
-  /** 红中胡牌结算（无番制新规则）：
-   *  - 自摸：每家付 = 2手底注 + 中码倍数×底注；
-   *  - 抢杠/点炮：由被抢者/放炮者按 (1手底注 + 中码倍数×底注)×3 包赔三家；
-   *  - 杠分已当场结算（放杠2手/补杠每家1手/暗杠每家2手），结算仅展示不再重复扣分；
-   *  - 中码倍数 = 2^中码张数（中0码=1倍，每张中码翻一倍）。
-   */
-  _settleHuHongZhong(room, winnerSeat, info) {
+  /** 胡牌收尾（三玩法统一）：广播状态 + 结算 + 结束本局；贴金玩法额外记录庄家流转 */
+  _finishHuRound(room) {
     const g = room.game;
-    const hand = g.hands[winnerSeat].slice();
-    if (info.winType !== 'zimo') hand.push(info.tile);
-    const winLabel =
-      info.winType === 'zimo' ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-
-    // 扎码：从牌墙补抓，1/5/9 万筒条 + 红中中码，每张使中码倍数翻一倍
-    let zhaMaCount = 0;
-    const zhaMaTiles = [];
-    if (room.settings.zhaMa > 0 && g.wall.length - g.wallPos > 0) {
-      const n = Math.min(room.settings.zhaMa, g.wall.length - g.wallPos);
-      for (let i = 0; i < n; i++) {
-        const t = g.wall[g.wallPos++];
-        zhaMaTiles.push(t);
-        if (rules.isZhongMa(t)) zhaMaCount++;
-      }
+    if (this._isTieJin(room)) {
+      room.lastWinner = g.winners ? g.winners.winner : null; // 谁胡谁坐庄（庄胡连庄）
+      room.lastFlowHadGang = false;
     }
-    g.zhaMaTiles = zhaMaTiles;
-    const zmaMult = Math.pow(2, zhaMaCount); // 中码倍数：中0码=1倍，每中一张翻一倍
-    const base = 1; // 红中底注恒为 1 分
-
-    const zimoPay = () => (2 + zmaMult) * base;
-    const baoShare = (1 + zmaMult) * base;
-    const baoTotal = baoShare * 3;
-
-    let winnerGain = 0;
-    const payments = [];
-    if (info.winType === 'zimo') {
-      // 自摸：三家各付
-      let total = 0;
-      const rows = [];
-      for (let s = 0; s < 4; s++) {
-        if (s === winnerSeat || !room.players[s]) continue;
-        const pay = zimoPay();
-        room.players[s].score -= pay;
-        room.players[s].roundScore -= pay;
-        total += pay;
-        rows.push({
-          seat: s,
-          amount: -pay,
-          role: '自摸',
-          formula: `1底注×(2+${zmaMult}中码倍数)=${pay}`,
-        });
-      }
-      room.players[winnerSeat].score += total;
-      room.players[winnerSeat].roundScore += total;
-      winnerGain = total;
-      payments.push({
-        kind: 'hu',
-        title: `自摸${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · 三家各付`,
-        toSeat: winnerSeat,
-        toAmount: total,
-        rows,
-      });
-    } else {
-      // 点炮 / 抢杠：放炮者（被抢杠者）包赔三家
-      const loser = room.players[info.discarder];
-      if (loser) {
-        loser.score -= baoTotal;
-        loser.roundScore -= baoTotal;
-      }
-      room.players[winnerSeat].score += baoTotal;
-      room.players[winnerSeat].roundScore += baoTotal;
-      winnerGain = baoTotal;
-      const role = info.winType === 'qianggang' ? '被抢杠者（包三家）' : '放炮者（包三家）';
-      payments.push({
-        kind: 'hu',
-        title: `${winLabel}${zhaMaCount ? `，中码 ${zhaMaCount} 张 ×${zmaMult}` : ''} · ${role}独赔 ${baoTotal} 分`,
-        toSeat: winnerSeat,
-        toAmount: baoTotal,
-        rows: [{
-          seat: info.discarder,
-          amount: -baoTotal,
-          role,
-          formula: `1底注×(1+${zmaMult}中码倍数)×3家=${baoTotal}`,
-        }],
-      });
-    }
-
-    g.hzWinners = g.hzWinners || [];
-    const isMulti = g.hzWinners.length > 0; // 一炮多响：已有赢家记录
-    g.hzWinners.push({
-      winnerSeat,
-      winType: info.winType,
-      tile: info.tile,
-      discarder: info.winType === 'zimo' ? null : info.discarder,
-      fan: 0,
-      mult: zmaMult,
-      zmaMult,
-      noFan: true,
-      names: ['无番'],
-      scorePer: winnerGain / 3,
-      paoGain: 0,
-      zhaMaCount,
-      zhaMaTiles: zhaMaTiles.slice(),
-    });
-    // 多响时累计各家支付记录（杠支付只在最后一次补上，避免重复）
-    g._accPayments = g._accPayments || [];
-    if (!isMulti) g._accPayments = [];
-    g._accPayments = g._accPayments.concat(payments);
-    const gangPay = this._buildGangPayments(room);
-    const allPayments = isMulti ? g._accPayments.concat(gangPay) : g._accPayments.concat(gangPay);
-    // 兼容结算视图（一炮多响时保留最后一家主信息 + winners 明细列表）
-    g.winners = {
-      type: 'hu',
-      variant: 'hongzhong',
-      winnerSeat,
-      winType: info.winType,
-      winners: g.hzWinners.slice(),
-      totalFan: 0,
-      mult: zmaMult,
-      zmaMult,
-      noFan: true,
-      fanNames: ['无番'],
-      zhaMaCount,
-      zhaMaTiles: zhaMaTiles.slice(),
-      kouPoints: g.kouPoints.slice(),
-      gangLogs: g.gangLogs.slice(),
-      score: winnerGain,
-      tile: info.tile,
-      discarder: info.winType === 'zimo' ? null : info.discarder,
-      payments: allPayments,
-      hands: this._revealHandsWithWinTile(room, winnerSeat, info),
-    };
-    room.lastWinner = winnerSeat;
-    this._log(
-      room,
-      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}${zhaMaCount ? `（中码 ${zhaMaCount} 张 ×${zmaMult}）` : ''} → +${winnerGain} 分`
-    );
-  }
-
-  /** 红中胡牌收尾：广播状态 + 结算 + 结束本局 */
-  _finishHuRoundHongZhong(room) {
     this._broadcastGameState(room);
     this._sendSettlement(room);
     this._broadcastRoomState(room);
@@ -2872,97 +2933,6 @@ class GameServer {
     }
     // 不轮转：仍由本家出牌/再亮金/胡（重新广播 + 构建出牌前行动提示）
     this._afterTurnStart(room, p.seat);
-  }
-
-  /** 贴金胡牌结算：
-   *  - 金分按亮金数（三金封顶：>3 按 3 金）计；A=1/3/9，B=5/15/45；
-   *  - 计分 A：胡分（闲1庄2，自摸翻倍）+ 金分；点炮通赔且点炮者金分翻倍；
-   *  - 计分 B（125 体系）：1金=5/2金=15/3金=45；偏家/庄家按身份×2 口径；
-   *  - 杠分已当场结算，此处仅随结算展示；胡牌后金才计分。 */
-  _settleHuTieJin(room, winnerSeat, info) {
-    const g = room.game;
-    const goldCount = Math.min(g.shangjinCount[winnerSeat] || 0, 3); // 三金封顶
-    const winnerDealer = winnerSeat === g.dealer;
-    const mode = room.settings && room.settings.scoreMode === 'B' ? 'B' : 'A';
-    const res =
-      mode === 'B'
-        ? rules.calcTieJinScoreB({ winType: info.winType, winnerDealer, goldCount })
-        : rules.calcTieJinScoreA({ winType: info.winType, winnerDealer, goldCount });
-    const isZimo = info.winType === 'zimo';
-    const payerSeats = [];
-    if (isZimo) {
-      // N1 修复：B 模式偏家自摸时 res.payers[0] 为庄家份（dealerShare），
-      // 必须落到实际庄家座位，另两份 base 归两个偏家；不能按座次顺排。
-      if (mode === 'B' && !winnerDealer) {
-        payerSeats.push(g.dealer);
-        for (let i = 1; i <= 3; i++) {
-          const s = (winnerSeat + i) % 4;
-          if (s !== winnerSeat && s !== g.dealer) payerSeats.push(s);
-        }
-      } else {
-        for (let i = 1; i <= 3; i++) payerSeats.push((winnerSeat + i) % 4);
-      }
-    } else {
-      payerSeats.push(info.discarder);
-      for (let i = 1; i <= 3; i++) {
-        const s = (info.discarder + i) % 4;
-        if (s !== winnerSeat) payerSeats.push(s);
-      }
-    }
-    for (let i = 0; i < payerSeats.length; i++) {
-      const ps = payerSeats[i];
-      const amt = res.payers[i].amount;
-      if (room.players[ps]) {
-        room.players[ps].score -= amt;
-        room.players[ps].roundScore -= amt;
-      }
-    }
-    room.players[winnerSeat].score += res.winnerGain;
-    room.players[winnerSeat].roundScore += res.winnerGain;
-    const winLabel = isZimo ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-    this._log(
-      room,
-      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${mode === 'B' ? '125' : '边趣'}计分，亮金 ${goldCount} 张，金分 ${res.G}）→ +${res.winnerGain} 分`
-    );
-    g.winners = {
-      type: 'hu',
-      variant: 'tiejin',
-      mode136: true,
-      winType: info.winType,
-      winner: winnerSeat,
-      tile: info.tile,
-      discarder: isZimo ? -1 : info.discarder,
-      goldMother: g.goldMother,
-      goldTile: g.goldTile,
-      goldCount,
-      goldScore: res.G,
-      huGain: res.huGain || 0,
-      winnerGain: res.winnerGain,
-      scoreMode: mode,
-      payments: payerSeats.map((ps, i) => ({
-        from: ps,
-        to: winnerSeat,
-        amount: res.payers[i].amount,
-        formula: res.payers[i].formula,
-        role: res.payers[i].role,
-      })),
-      shangjinCount: g.shangjinCount.slice(),
-      locked: g.locked.slice(),
-      lockSeat: g.lockSeat,
-      gangLogs: g.gangLogs.slice(),
-      hands: this._revealHandsWithWinTile(room, winnerSeat, info),
-    };
-  }
-
-  /** 贴金胡牌收尾：记录庄家流转 + 广播状态 + 结算 + 结束本局 */
-  _finishHuRoundTieJin(room) {
-    const g = room.game;
-    room.lastWinner = g.winners ? g.winners.winner : null; // 谁胡谁坐庄（庄胡连庄）
-    room.lastFlowHadGang = false;
-    this._broadcastGameState(room);
-    this._sendSettlement(room);
-    this._broadcastRoomState(room);
-    this._endRound(room);
   }
 
   /** 贴金流局：杠分不计（回滚当场结算的杠分）；有杠下家坐庄、无杠连庄 */
