@@ -664,11 +664,33 @@
     const ting = tH === undefined ? 0 : tH;
     // 报听选牌阶段：仅进入提示列表（含 ≥6 点听口）的选项可点击，未进入置灰；绝听（tH===0）仍可报听
     const canDiscard = state.tingPick ? tH !== undefined : true;
-    // 新摸牌标志：与 newTile 同值且为排序后手牌中第一张该牌（其余同值牌不标记）
-    const isNew = game.newTile === t && p.hand.indexOf(t) === i;
+    // 新摸牌不再高亮（改为置右 + 空格占位展示，见 renderSelfHand；服务端出牌后清除 newTile 自动回原位）
+    const isNew = false;
     // 选中态：普通出牌受「单击直接出牌」开关影响（开启时不选中）；报听阶段始终走选中交互，不受开关影响
     const selected = (state.tingPick || !isTapToDiscard()) && state.selectedIndex === i;
     return tileHtml(t, '', ting, canDiscard, isNew, i, selected, game.goldTile);
+  }
+
+  // 手牌渲染：新摸牌（game.newTile）不高亮，单独放到最右并在其前留一个空格占位；
+  // newTile 由服务端在出牌/碰/杠/报听后清除，届时自动回到原排序位置
+  function renderSelfHand(p) {
+    const game = state.game;
+    const hand = p.hand || [];
+    const nt = game.newTile;
+    if (nt) {
+      const ntIdx = hand.indexOf(nt);
+      if (ntIdx >= 0) {
+        const html = [];
+        for (let i = 0; i < hand.length; i++) {
+          if (i === ntIdx) continue;
+          html.push(selfTileHtml(p, hand[i], i));
+        }
+        html.push('<span class="tile hand-gap"></span>');
+        html.push(selfTileHtml(p, hand[ntIdx], ntIdx));
+        return html.join('');
+      }
+    }
+    return hand.map((t, i) => selfTileHtml(p, t, i)).join('');
   }
 
   function renderSelfCard(p, seat) {
@@ -676,7 +698,7 @@
     const isTurn = game.turn === seat && !game.winners;
     const hz = isHongZhongOf(game);
     const goldTile = game.goldTile || null;
-    const hand = (p.hand || []).map((t, i) => selfTileHtml(p, t, i)).join('');
+    const hand = renderSelfHand(p);
     const meldHtml = renderMelds(p.melds, true, goldTile);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
     const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
@@ -861,7 +883,7 @@
     const p = game.players && game.players[seat];
     if (!p) return;
     const handTilesBox = card.querySelector('.hand-tiles');
-    if (handTilesBox) handTilesBox.innerHTML = (p.hand || []).map((t, i) => selfTileHtml(p, t, i)).join('');
+    if (handTilesBox) handTilesBox.innerHTML = renderSelfHand(p);
     applyWeakHighlight();
     bindTileClicks();
   }
