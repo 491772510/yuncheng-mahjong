@@ -95,6 +95,7 @@ class GameServer {
         case 'leave_room': return this._leaveRoom(p);
         case 'start_game': return this._startGame(p);
         case 'add_ai': return this._addAIByPlayer(p);
+        case 'kick_player': return this._kickPlayer(p, msg);
         case 'dissolve': return this._dissolve(p);
         case 'play_tile': return this._playTile(p, msg);
         case 'ting': return this._ting(p, msg);
@@ -390,10 +391,7 @@ class GameServer {
     this._send(p, { type: 'room_state', room: this._buildRoomView(room, p.seat) });
     this._broadcastRoomState(room);
     this._broadcastLobby();
-    // 4 人满自动开局
-    if (room.players.filter(Boolean).length === 4) {
-      this._startGameInternal(room);
-    }
+    // 不再自动开局：人齐后由房主点击「开始游戏」触发
   }
 
   _leaveRoom(p) {
@@ -437,9 +435,29 @@ class GameServer {
     this._addAI(room);
     this._broadcastRoomState(room);
     this._broadcastLobby();
-    if (room.players.filter(Boolean).length === 4) {
-      this._startGameInternal(room);
+    // 不再自动开局：人齐后由房主点击「开始游戏」触发
+  }
+
+  _kickPlayer(p, msg) {
+    const room = p.roomId ? this.rooms.get(p.roomId) : null;
+    if (!room) return this._err(p, '您不在房间中');
+    if (p.id !== room.ownerId) return this._err(p, '只有房主可以踢出玩家');
+    if (room.state !== 'waiting') return this._err(p, '牌局进行中，无法踢出玩家');
+    const targetId = String((msg && msg.targetId) || '').trim();
+    const target = room.players.find((x) => x && x.id === targetId);
+    if (!target) return this._err(p, '目标玩家不在房间中');
+    if (target.id === p.id) return this._err(p, '不能踢出自己');
+    this._unseatPlayer(room, target);
+    if (target.isAI) {
+      this.players.delete(target.id);
+      this._log(room, `${p.name} 将 ${target.name}（AI）踢出了房间`);
+    } else {
+      this._send(target, { type: 'room_state', room: null });
+      this._sendLobbyState(target);
+      this._log(room, `${p.name} 将 ${target.name} 踢出了房间`);
     }
+    this._broadcastRoomState(room);
+    this._broadcastLobby();
   }
 
   _startGame(p) {
