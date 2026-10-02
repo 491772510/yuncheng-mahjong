@@ -86,13 +86,12 @@ function chooseDiscard(hand, game, room, seat) {
   }
 
   // C1 修复：安全牌权重随放炮风险缩放（不再固定 -12）。
-  // 规则依据：未报听者放炮独赔 3 份、已报听者放炮三家各付 1 份；
+  // 规则依据：未报听者放炮独赔 3 份；自己报听后摸牌只能胡或系统自动摸打，
+  // 不再走选牌逻辑，因此只需按对手报听情况计算。
   // 无人报听时（未报听者不可胡）点炮风险为零 -> 安全加成归零，避免无差别拆牌；
-  // 有对手报听时按「自己是否报听 + 对手报听人数」调整：自己未报听（独赔 3 份）权重最高，
-  // 已报听（各家 1 份）权重下调，报听人数越多防守权重小幅递增。
+  // 有对手报听时按报听人数递增防守权重。
   const oppTing = (game.tingSeats || []).filter((s) => s !== seat).length;
-  const selfTing = (game.tingSeats || []).includes(seat);
-  const safePenalty = oppTing > 0 ? (selfTing ? 6 : 14) + (oppTing - 1) * 3 : 0;
+  const safePenalty = oppTing > 0 ? 14 + (oppTing - 1) * 3 : 0;
 
   const cnt = rules.countTiles(hand);
   let best = null;
