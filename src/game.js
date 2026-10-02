@@ -729,22 +729,59 @@ class GameServer {
 
   /** 出牌后的响应判定 */
   _afterDiscard(room, discarder) {
-    if (this._isHongZhong(room)) return this._afterDiscardHongZhong(room, discarder);
-    if (this._isTieJin(room)) return this._afterDiscardTieJin(room, discarder);
     const g = room.game;
     const tile = g.lastDiscard.tile;
     const responders = [];
-    for (let s = 0; s < 4; s++) {
-      if (!room.players[s] || s === discarder) continue;
-      // 胡牌受点数限制（6 点及以上才可点炮胡）；仅报听玩家可胡/可杠，不能碰
-      const canHu = g.tingSeats.includes(s) && rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
-      // 报听玩家杠不能破坏听张：杠牌若在当前听口中则不允许明杠
-      const canGang = g.tingSeats.includes(s)
-        ? (rules.canGang(g.hands[s], tile) && !rules.isTing(g.hands[s], g.melds[s]).includes(tile))
-        : rules.canGang(g.hands[s], tile);
-      const canPeng = g.tingSeats.includes(s) ? false : rules.canPeng(g.hands[s], tile);
-      if (canHu || canGang || canPeng) {
-        responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
+    if (this._isTieJin(room)) {
+      // 贴金：截胡单响（逆时针最近的可胡者；字牌整副胡只能自摸），其余座位按杠/碰判定
+      const gold = g.goldTile;
+      let huSeat = -1;
+      for (let i = 1; i <= 3; i++) {
+        const s = (discarder + i) % 4;
+        if (!room.players[s]) continue;
+        if (g.huPassed[s]) continue;
+        if (!this._tieJinCanDianpao(room, s)) continue;
+        if (!rules.canHuTieJinWith(g.hands[s], tile, g.melds[s], gold)) continue;
+        if (rules.isAllHonorShape([...g.hands[s], tile], g.melds[s], gold)) continue; // 字牌整副胡只能自摸
+        huSeat = s;
+        break;
+      }
+      for (let i = 1; i <= 3; i++) {
+        const s = (discarder + i) % 4;
+        if (!room.players[s]) continue;
+        if (s === huSeat) {
+          responders.push({ seat: s, canHu: true, canGang: false, canPeng: false, choice: null });
+          continue;
+        }
+        const canGang = rules.canGangTieJin(g.hands[s], tile, gold);
+        const canPeng = rules.canPengTieJin(g.hands[s], tile, gold);
+        if (canGang || canPeng) {
+          responders.push({ seat: s, canHu: false, canGang, canPeng, choice: null });
+        }
+      }
+    } else if (this._isHongZhong(room)) {
+      for (let s = 0; s < 4; s++) {
+        if (!room.players[s] || s === discarder) continue;
+        const canHu = false; // 禁点炮胡，仅自摸/抢杠可胡
+        const canGang = rules.canGangHongZhong(g.hands[s], tile);
+        const canPeng = rules.canPengHongZhong(g.hands[s], tile);
+        if (canHu || canGang || canPeng) {
+          responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
+        }
+      }
+    } else {
+      for (let s = 0; s < 4; s++) {
+        if (!room.players[s] || s === discarder) continue;
+        // 胡牌受点数限制（6 点及以上才可点炮胡）；仅报听玩家可胡/可杠，不能碰
+        const canHu = g.tingSeats.includes(s) && rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'dianpao');
+        // 报听玩家杠不能破坏听张：杠牌若在当前听口中则不允许明杠
+        const canGang = g.tingSeats.includes(s)
+          ? (rules.canGang(g.hands[s], tile) && !rules.isTing(g.hands[s], g.melds[s]).includes(tile))
+          : rules.canGang(g.hands[s], tile);
+        const canPeng = g.tingSeats.includes(s) ? false : rules.canPeng(g.hands[s], tile);
+        if (canHu || canGang || canPeng) {
+          responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
+        }
       }
     }
     if (responders.length === 0) {
@@ -772,8 +809,6 @@ class GameServer {
   }
 
   _tryResolvePending(room, g, pending) {
-    if (this._isHongZhong(room)) return this._tryResolvePendingHongZhong(room, g, pending);
-    if (this._isTieJin(room)) return this._tryResolvePendingTieJin(room, g, pending);
     if (!pending) return;
     const allDecided = pending.responders.every((r) => r.choice !== null);
     if (!allDecided) return;
@@ -782,8 +817,32 @@ class GameServer {
 
     const huList = pending.responders.filter((r) => r.choice === 'hu');
     if (huList.length > 0) {
-      // 不支持一炮多响：仅距离放炮（补杠）者最近的一家胡牌
-      const pick = this._nearestSeat(huList.map((r) => r.seat), pending.discarder);
+      if (this._isHongZhong(room)) {
+        // 红中：一炮多响，全部同时胡
+        const discarder = pending.discarder;
+        for (const r of huList) {
+          this._settleHuHongZhong(room, r.seat, {
+            winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
+            tile: pending.tile,
+            discarder,
+          });
+        }
+        this._finishHuRoundHongZhong(room);
+        return;
+      }
+      // 普通：距放炮（补杠）者最近的一家胡牌；贴金：截胡单响（huList 至多 1）
+      const pick = this._isTieJin(room)
+        ? huList[0].seat
+        : this._nearestSeat(huList.map((r) => r.seat), pending.discarder);
+      if (this._isTieJin(room)) {
+        this._settleHuTieJin(room, pick, {
+          winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
+          tile: pending.tile,
+          discarder: pending.discarder,
+        });
+        this._finishHuRoundTieJin(room);
+        return;
+      }
       this._settleHu(room, pick, {
         winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
         tile: pending.tile,
@@ -792,6 +851,12 @@ class GameServer {
       });
       this._endRound(room);
       return;
+    }
+    // 贴金过胡限制：可胡者主动过（或超时）→ 在获得下一次抓牌权前禁止其胡牌
+    if (this._isTieJin(room)) {
+      for (const r of pending.responders) {
+        if (r.canHu && r.choice === 'pass') g.huPassed[r.seat] = true;
+      }
     }
     const gangList = pending.responders.filter((r) => r.choice === 'gang');
     if (gangList.length > 0) {
@@ -1057,7 +1122,7 @@ class GameServer {
         grabbers.push(s);
         break;
       }
-      resolveFn = (r2, g2, pending) => this._tryResolvePendingTieJin(r2, g2, pending);
+      resolveFn = (r2, g2, pending) => this._tryResolvePending(r2, g2, pending);
       onPass = (g2, s) => { g2.huPassed[s] = true; };
     } else if (this._isHongZhong(room)) {
       // 红中：一炮多响
@@ -1065,7 +1130,7 @@ class GameServer {
         if (s === seat || !room.players[s]) continue;
         if (rules.canHuHongZhongWith(g.hands[s], tile, g.melds[s])) grabbers.push(s);
       }
-      resolveFn = (r2, g2, pending) => this._tryResolvePendingHongZhong(r2, g2, pending);
+      resolveFn = (r2, g2, pending) => this._tryResolvePending(r2, g2, pending);
     } else {
       // 普通：抢杠胡算点炮，受点数限制（6 点及以上才可胡）；仅报听玩家可抢杠；明牌区刻子计入已成型面子
       for (let s = 0; s < 4; s++) {
@@ -2409,77 +2474,7 @@ class GameServer {
   }
 
 
-  _afterDiscardHongZhong(room, discarder) {
-    const g = room.game;
-    const tile = g.lastDiscard.tile;
-    const responders = [];
-    for (let s = 0; s < 4; s++) {
-      if (!room.players[s] || s === discarder) continue;
-      const canHu = false; // 禁点炮胡，仅自摸/抢杠可胡
-      const canGang = rules.canGangHongZhong(g.hands[s], tile);
-      const canPeng = rules.canPengHongZhong(g.hands[s], tile);
-      if (canHu || canGang || canPeng) {
-        responders.push({ seat: s, canHu, canGang, canPeng, choice: null });
-      }
-    }
-    if (responders.length === 0) {
-      g.lastAction = null;
-      this._nextTurn(room, discarder);
-      return;
-    }
-    g.stage = 'response';
-    g.pending = { type: 'discard', tile, discarder, responders };
-    this._broadcastGameState(room);
-    for (const r of responders) {
-      this._prompt(room, r.seat, this._buildResponsePrompt(room, r));
-      this._setTimer(room, 'resp:' + r.seat, RESPONSE_TIMEOUT_MS, () => {
-        const g2 = room.game;
-        if (room.state === 'playing' && g2 === g && g.pending === r._pendingRef && r.choice === null) {
-          r.choice = 'pass';
-          this._tryResolvePendingHongZhong(room, g, g.pending);
-        }
-      });
-      r._pendingRef = g.pending;
-      if (this._shouldAutoAct(room, r.seat)) this._scheduleAutoAct(room, r.seat);
-    }
-  }
 
-  /** 红中响应收拢：胡牌一炮多响（全部同时胡）；杠/碰取距离最近一家 */
-  _tryResolvePendingHongZhong(room, g, pending) {
-    if (!pending) return;
-    const allDecided = pending.responders.every((r) => r.choice !== null);
-    if (!allDecided) return;
-    for (const r of pending.responders) this._clearTimer(room, 'resp:' + r.seat);
-    g.pending = null;
-
-    const huList = pending.responders.filter((r) => r.choice === 'hu');
-    if (huList.length > 0) {
-      const discarder = pending.discarder;
-      for (const r of huList) {
-        this._settleHuHongZhong(room, r.seat, {
-          winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
-          tile: pending.tile,
-          discarder,
-        });
-      }
-      this._finishHuRoundHongZhong(room);
-      return;
-    }
-    const gangList = pending.responders.filter((r) => r.choice === 'gang');
-    if (gangList.length > 0) {
-      const pick = this._nearestSeat(gangList.map((r) => r.seat), pending.discarder);
-      this._doGangFromDiscard(room, pick, pending.tile, pending.discarder);
-      return;
-    }
-    const pengList = pending.responders.filter((r) => r.choice === 'peng');
-    if (pengList.length > 0) {
-      const pick = this._nearestSeat(pengList.map((r) => r.seat), pending.discarder);
-      this._doPeng(room, pick, pending.tile, pending.discarder);
-      return;
-    }
-    g.lastAction = null;
-    this._nextTurn(room, pending.discarder);
-  }
 
 
   /** 红中胡牌结算（无番制新规则）：
@@ -2831,101 +2826,7 @@ class GameServer {
     this._afterTurnStart(room, seat);
   }
 
-  /** 贴金出牌后响应：
-   *  1) 截胡单响——只保留逆时针离点炮者最近的可胡者（过胡限制 / 亮金锁金资格 / 字牌整副胡只能自摸过滤）；
-   *  2) 同时把可杠/可碰者并入同一响应批（金牌不可杠碰，rules 已过滤）；
-   *  3) 由 _tryResolvePendingTieJin 统一收拢：胡优先单响；无胡则标记过胡者、按逆时针最近一家执行杠/碰。 */
-  _afterDiscardTieJin(room, discarder) {
-    const g = room.game;
-    const tile = g.lastDiscard.tile;
-    const gold = g.goldTile;
-    // 1) 截胡单响者
-    let huSeat = -1;
-    for (let i = 1; i <= 3; i++) {
-      const s = (discarder + i) % 4;
-      if (!room.players[s]) continue;
-      if (g.huPassed[s]) continue;
-      if (!this._tieJinCanDianpao(room, s)) continue;
-      if (!rules.canHuTieJinWith(g.hands[s], tile, g.melds[s], gold)) continue;
-      if (rules.isAllHonorShape([...g.hands[s], tile], g.melds[s], gold)) continue; // 字牌整副胡只能自摸
-      huSeat = s;
-      break;
-    }
-    // 2) 合并可杠/可碰者（截胡者本人只响应胡；其余座位按杠/碰判定）
-    const responders = [];
-    for (let i = 1; i <= 3; i++) {
-      const s = (discarder + i) % 4;
-      if (!room.players[s]) continue;
-      if (s === huSeat) {
-        responders.push({ seat: s, canHu: true, canGang: false, canPeng: false, choice: null });
-        continue;
-      }
-      const canGang = rules.canGangTieJin(g.hands[s], tile, gold);
-      const canPeng = rules.canPengTieJin(g.hands[s], tile, gold);
-      if (canGang || canPeng) {
-        responders.push({ seat: s, canHu: false, canGang, canPeng, choice: null });
-      }
-    }
-    if (responders.length === 0) {
-      g.lastAction = null;
-      this._nextTurn(room, discarder);
-      return;
-    }
-    g.stage = 'response';
-    g.pending = { type: 'discard', tile, discarder, responders };
-    this._broadcastGameState(room);
-    for (const r of responders) {
-      this._prompt(room, r.seat, this._buildResponsePrompt(room, r));
-      this._setTimer(room, 'resp:' + r.seat, RESPONSE_TIMEOUT_MS, () => {
-        const g2 = room.game;
-        if (room.state === 'playing' && g2 === g && g.pending === r._pendingRef && r.choice === null) {
-          r.choice = 'pass';
-          this._tryResolvePendingTieJin(room, g2, g2.pending);
-        }
-      });
-      r._pendingRef = g.pending;
-      if (this._shouldAutoAct(room, r.seat)) this._scheduleAutoAct(room, r.seat);
-    }
-  }
 
-  /** 贴金响应收拢：截胡单响（huList 至多 1）；杠/碰取逆时针最近一家 */
-  _tryResolvePendingTieJin(room, g, pending) {
-    if (!pending) return;
-    const allDecided = pending.responders.every((r) => r.choice !== null);
-    if (!allDecided) return;
-    for (const r of pending.responders) this._clearTimer(room, 'resp:' + r.seat);
-    g.pending = null;
-
-    const huList = pending.responders.filter((r) => r.choice === 'hu');
-    if (huList.length > 0) {
-      const r = huList[0];
-      this._settleHuTieJin(room, r.seat, {
-        winType: pending.type === 'qianggang' ? 'qianggang' : 'dianpao',
-        tile: pending.tile,
-        discarder: pending.discarder,
-      });
-      this._finishHuRoundTieJin(room);
-      return;
-    }
-    // 过胡限制：可胡者主动过（或超时）→ 在获得下一次抓牌权前禁止其胡牌
-    for (const r of pending.responders) {
-      if (r.canHu && r.choice === 'pass') g.huPassed[r.seat] = true;
-    }
-    const gangList = pending.responders.filter((r) => r.choice === 'gang');
-    if (gangList.length > 0) {
-      const pick = this._nearestSeat(gangList.map((r) => r.seat), pending.discarder);
-      this._doGangFromDiscard(room, pick, pending.tile, pending.discarder);
-      return;
-    }
-    const pengList = pending.responders.filter((r) => r.choice === 'peng');
-    if (pengList.length > 0) {
-      const pick = this._nearestSeat(pengList.map((r) => r.seat), pending.discarder);
-      this._doPeng(room, pick, pending.tile, pending.discarder);
-      return;
-    }
-    g.lastAction = null;
-    this._nextTurn(room, pending.discarder);
-  }
 
 
   /** 亮金（摸牌后、出牌前的独立操作）：亮出 1 张金牌放入面前亮金区（不入弃牌堆），
