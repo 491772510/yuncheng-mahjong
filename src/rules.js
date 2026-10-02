@@ -444,6 +444,48 @@ function calcMultiplier136(hand, info = {}, opts = {}, detail = false) {
   return detail ? { mult, names } : mult;
 }
 
+/**
+ * 加算模型（山西扣点点·洪洞固定加分）：清一色 +20、一条龙 +20、七小对 +20、豪七额外 +40；
+ * 固定加分可叠加、自摸不翻倍（自摸只翻倍胡牌底分与庄底）。
+ * @param {string[]} hand 胡牌时的 14 张手牌
+ * @param {object} info { winType, gangShang, qiangGang, melds }
+ * @param {object} opts { qingyise:{enabled}, yitiaolong:{enabled} }
+ * @returns {{ add:number, names:string[] }} 固定加分合计与牌型名
+ */
+function calcAddPoints136(hand, info = {}, opts = {}) {
+  const melds = info.melds || [];
+  const qing = opts.qingyise || { enabled: false };
+  const long = opts.yitiaolong || { enabled: false };
+  const allTiles = hand.slice();
+  for (const m of melds) {
+    for (const t of m.tiles) allTiles.push(t);
+  }
+  const allSuit =
+    allTiles.length > 0 &&
+    allTiles.every((t) => !HONOR_NAMES[t]) &&
+    allTiles.every((t) => suitOf(t) === suitOf(allTiles[0]));
+  let add = 0;
+  const names = [];
+  const isQD = melds.length === 0 && isQiDui(hand);
+  if (isQD) {
+    add += 20;
+    names.push('七小对');
+    if (isLuxuryQiDui(hand)) {
+      add += 40;
+      names.push('豪七');
+    }
+  }
+  if (qing.enabled && allSuit) {
+    add += 20;
+    names.push('清一色');
+  }
+  if (long.enabled && isYiTiaoLong(hand, melds)) {
+    add += 20;
+    names.push('一条龙');
+  }
+  return { add, names };
+}
+
 // ============ 红中麻将（西安红中）判定模块 ============
 // 独立于扣点点 136 模式：112 张牌（万筒条 1-9 各 4 + 红中 z0 × 4），红中为万能癞子。
 // 不改动扣点点既有函数行为，仅新增以下红中专用函数。
@@ -1047,6 +1089,7 @@ module.exports = {
   isYiTiaoLong,
   isShiSanYao,
   calcMultiplier136,
+  calcAddPoints136,
   // 红中麻将（西安红中）模块
   HONG_ZHONG,
   getHongZhongTileTypes,

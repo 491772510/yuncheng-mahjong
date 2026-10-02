@@ -1414,10 +1414,13 @@
     const prefix = opts.prefix || '';
     const winnerLabel = opts.winnerLabel || '（胡）';
     const compact = !!opts.compact;
-    const kouText = (result.kouPoints || []).map((v, s) => {
-      const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
-      return `${esc(nm)} 扣${v}点`;
-    }).join(' · ');
+    const isAdd = result.scoreModel === 'add';
+    const kouText = isAdd
+      ? '加分制（固定加番，无扣点）'
+      : (result.kouPoints || []).map((v, s) => {
+          const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
+          return `${esc(nm)} 扣${v}点`;
+        }).join(' · ');
     const handsHtml = (withScore) => (result.hands || []).map((h) => h ? `
         <div class="row">
           <b>${esc(h.name)}${h.seat === result.winnerSeat ? winnerLabel : ''}</b>
@@ -1441,10 +1444,14 @@
     }
     const winner = result.hands && result.hands[result.winnerSeat];
     const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
-    const multText = (result.multNames && result.multNames.length ? result.multNames.join('、') : '平胡');
-    const calcText = result.winType === 'zimo'
-      ? `${result.tilePoints}点 × 2 × ${result.mult}倍 × 扣${result.kouPoint}点`
-      : `${result.tilePoints}点 × ${result.mult}倍 × 扣${result.kouPoint}点`;
+    const multText = isAdd
+      ? ((result.addNames && result.addNames.length) ? result.addNames.join('、') : '平胡')
+      : (result.multNames && result.multNames.length ? result.multNames.join('、') : '平胡');
+    const calcText = isAdd
+      ? `${result.tilePoints}点${result.winType === 'zimo' ? ' × 2' : ''}${result.addPoints ? ' + ' + result.addPoints + '分' : ''}${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`
+      : result.winType === 'zimo'
+        ? `${result.tilePoints}点 × 2 × ${result.mult}倍 × 扣${result.kouPoint}点${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`
+        : `${result.tilePoints}点 × ${result.mult}倍 × 扣${result.kouPoint}点${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`;
     const shooterNote = result.winType !== 'zimo'
       ? (result.discarderTing ? ' · 放炮者已报听，三家各出1份' : ' · 放炮者未报听，独赔3份')
       : '';
@@ -1460,7 +1467,7 @@
     return `
       <div class="settle-head">
         <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
-        <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}（×${result.mult}）</div>
+        <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}${isAdd ? `（+${result.addPoints || 0}）` : `（×${result.mult}）`}</div>
         <div class="settle-sub">${calcText}${shooterNote}</div>
         <div class="settle-sub">扣点：${kouText}</div>
       </div>
@@ -1561,7 +1568,7 @@
   function hideModal(id) { $('#' + id).classList.add('hidden'); }
 
   function initCreateModal() {
-    const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：开局每人暗扣 1-4 点（本局倍数），报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
+    const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：计分模型可选乘算（点数×牌型倍数×扣点）或加算（底分+固定加番，清一色/一条龙/七小对+20、豪七额外+40）；庄底加分默认开启（非自摸+5/自摸+10，庄家胡三家各加、闲家胡庄家份加）；开局扣点默认关闭；报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
     const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；只能自摸或抢杠胡，不能点炮；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
     const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），金牌亮出为「亮金」独立操作（摸牌后、出牌前亮出金牌摆面前、牌尾补一张、手牌数不变），金牌不可当普通牌打出；亮金一次才有点炮胡资格，亮金区独立展示，三金封顶；连续亮金两张自动锁金（锁定其他三家只能自摸，被锁者亮出最后金牌解锁）；可碰可杠不可吃，无报听；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
     buildSeg('seg-variant', ['koudian', 'hongzhong', 'tiejin'], (v) => (v === 'hongzhong' ? '红中麻将' : v === 'tiejin' ? '贴金麻将' : '扣点点'), (v) => {
@@ -1573,6 +1580,16 @@
       $('#create-tip').textContent = hz ? hongzhongTip : tj ? tiejinTip : koudianTip;
     });
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
+    buildSeg('seg-score-model', ['multiply', 'add'], (v) => (v === 'add' ? '加分（固定加番）' : '乘算（倍数）'), (v) => {
+      // 加算模型无扣点：联动禁用开局扣点开关
+      const kp = $('#opt-koupoint');
+      if (v === 'add') {
+        kp.checked = false;
+        kp.disabled = true;
+      } else {
+        kp.disabled = false;
+      }
+    });
     buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
     buildSeg('seg-zha-ma', [0, 1, 2, 4, 6], (v) => (v === 0 ? '关' : v + ' 张'));
     buildSeg('seg-draw-end', ['A', 'B'], (v) => (v === 'B' ? 'B 剩10墩流局' : 'A 摸完流局'));
@@ -1602,11 +1619,14 @@
         const enableYiTiaoLong = $('#opt-yitiaolong').checked;
         const enableShiSanYao = $('#opt-shisanyao').checked;
         const dealerFlow = segValue('seg-dealer-flow') === 'keep' ? 'keep' : 'next';
+        const scoreModel = segValue('seg-score-model') === 'add' ? 'add' : 'multiply';
         send({ type: 'create_room', settings: {
           ...base,
           variant: 'koudian',
           dealerFlow,
+          scoreModel,
           enableKoupoint: $('#opt-koupoint').checked,
+          zhuangDi: $('#opt-zhuangdi').checked,
           enableQingYiSe, qingYiSeMult: Number($('#opt-qingyise-mult').value) || 4,
           enableYiTiaoLong, yiTiaoLongMult: Number($('#opt-yitiaolong-mult').value) || 4,
           enableShiSanYao, shiSanYaoMult: Number($('#opt-shisanyao-mult').value) || 8,

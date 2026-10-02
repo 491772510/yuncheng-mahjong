@@ -1485,70 +1485,112 @@ class GameServer {
     const winLabel =
       info.winType === 'zimo' ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
 
-    // ===== 点数 × 牌型倍数 × 自己扣点；包胡一包三 =====
+    // ===== 计分模型：乘算（点数 × 牌型倍数 × 扣点）或 加算（底分 + 固定加番）；庄底独立开关 =====
       const tilePoints = rules.tilePoints(info.tile);
       const multOpts = {
         qingyise: { enabled: room.settings.enableQingYiSe, mult: room.settings.qingYiSeMult },
         yitiaolong: { enabled: room.settings.enableYiTiaoLong, mult: room.settings.yiTiaoLongMult },
         shisanyao: { enabled: room.settings.enableShiSanYao, mult: room.settings.shiSanYaoMult },
       };
-      const multCalc = rules.calcMultiplier136(
-        hand,
-        {
-          winType: info.winType,
-          gangShang,
-          qiangGang: !!info.qiangGang,
-          melds: g.melds[winnerSeat],
-        },
-        multOpts,
-        true
-      );
-      const mult = multCalc.mult;
-      const multNames = multCalc.names;
-      const kp = g.kouPoints[winnerSeat] || 1; // 胡牌者自己的扣点
+      const scoreModel = room.settings.scoreModel === 'add' ? 'add' : 'multiply';
+      const zhuangDiOn = room.settings.zhuangDi !== false;
+      const zhuangSeat = g.dealer;
+      const isZhuang = winnerSeat === zhuangSeat;
+      // 庄底：非自摸 +5 / 自摸 +10；庄家胡三家各加，闲家胡仅庄家那份加
+      const zhuangBonus = !zhuangDiOn ? 0 : info.winType === 'zimo' ? 10 : 5;
+      const zhuangExtra = (s) => (zhuangBonus && (isZhuang || s === zhuangSeat) ? zhuangBonus : 0);
+
+      let mult = 1;
+      let multNames = [];
+      let kp = null;
+      let addPoints = 0;
+      let addNames = [];
+      let baseScore; // 每份基础分（不含庄底）
+      if (scoreModel === 'add') {
+        // 加算（洪洞固定加分）：底分=胡牌点数（自摸翻倍）+ 清一色/一条龙/七小对+20、豪七额外+40（叠加不翻倍），无扣点
+        const addCalc = rules.calcAddPoints136(
+          hand,
+          { winType: info.winType, gangShang, qiangGang: !!info.qiangGang, melds: g.melds[winnerSeat] },
+          { qingyise: multOpts.qingyise, yitiaolong: multOpts.yitiaolong }
+        );
+        addPoints = addCalc.add;
+        addNames = addCalc.names;
+        baseScore = tilePoints * (info.winType === 'zimo' ? 2 : 1) + addPoints;
+      } else {
+        // 乘算：点数 × 牌型倍数 × 自己扣点
+        const multCalc = rules.calcMultiplier136(
+          hand,
+          { winType: info.winType, gangShang, qiangGang: !!info.qiangGang, melds: g.melds[winnerSeat] },
+          multOpts,
+          true
+        );
+        mult = multCalc.mult;
+        multNames = multCalc.names;
+        kp = g.kouPoints[winnerSeat] || 1; // 胡牌者自己的扣点（扣点关闭时恒为1）
+        baseScore = tilePoints * (info.winType === 'zimo' ? 2 : 1) * mult * kp;
+      }
       const discarderTing = info.winType !== 'zimo' && g.tingSeats.includes(info.discarder);
 
       let score;
       const huPayments = [];
+      const zhuangNote = zhuangBonus
+        ? isZhuang
+          ? `（庄底+${zhuangBonus}，三家各加）`
+          : `（庄家份+${zhuangBonus}）`
+        : '';
       if (info.winType === 'zimo') {
-        // 自摸 = 点数 × 2 × 倍数 × 扣点，三家都给
-        score = tilePoints * 2 * mult * kp;
+        // 自摸：三家都给（每份=基础分+庄底加成）
+        score = baseScore + (isZhuang ? zhuangBonus : 0);
+        const perDesc = isZhuang
+          ? `三家各付 ${baseScore + zhuangBonus} 分`
+          : `闲家各付 ${baseScore} 分，庄家付 ${baseScore + zhuangBonus} 分`;
         for (let s = 0; s < 4; s++) {
           if (s === winnerSeat || !room.players[s]) continue;
-          room.players[s].score -= score;
-          room.players[s].roundScore -= score;
-          room.players[winnerSeat].score += score;
-          room.players[winnerSeat].roundScore += score;
+          const pay = baseScore + zhuangExtra(s);
+          room.players[s].score -= pay;
+          room.players[s].roundScore -= pay;
+          room.players[winnerSeat].score += pay;
+          room.players[winnerSeat].roundScore += pay;
         }
         huPayments.push({
           kind: 'hu',
-          title: `自摸 · 三家各付 ${score} 分`,
+          title: `自摸 · ${perDesc}${zhuangNote}`,
           toSeat: winnerSeat,
-          toAmount: score * 3,
-          rows: [0, 1, 2, 3].filter((s) => s !== winnerSeat).map((s) => ({ seat: s, amount: -score, role: '闲家' })),
-        });
-      } else if (discarderTing) {
-        // 点炮且放炮者已报听：三家各出 1 份（放炮者与另两家闲家各付 score），胡牌者共收 3 份
-        score = tilePoints * mult * kp;
-        for (let s = 0; s < 4; s++) {
-          if (s === winnerSeat || !room.players[s]) continue;
-          room.players[s].score -= score;
-          room.players[s].roundScore -= score;
-          room.players[winnerSeat].score += score;
-          room.players[winnerSeat].roundScore += score;
-        }
-        huPayments.push({
-          kind: 'hu',
-          title: `${winLabel}（放炮者已报听）· 三家各付 ${score} 分`,
-          toSeat: winnerSeat,
-          toAmount: score * 3,
+          toAmount: baseScore * 3 + (isZhuang ? zhuangBonus * 3 : zhuangBonus),
           rows: [0, 1, 2, 3]
             .filter((s) => s !== winnerSeat)
-            .map((s) => ({ seat: s, amount: -score, role: s === info.discarder ? '放炮者（已报听）' : '闲家' })),
+            .map((s) => ({ seat: s, amount: -(baseScore + zhuangExtra(s)), role: s === zhuangSeat ? '庄家' : '闲家' })),
+        });
+      } else if (discarderTing) {
+        // 点炮且放炮者已报听：三家各出 1 份（放炮者与另两家各付），胡牌者共收 3 份
+        score = baseScore + (isZhuang ? zhuangBonus : 0);
+        const perDesc = isZhuang
+          ? `三家各付 ${baseScore + zhuangBonus} 分`
+          : `闲家各付 ${baseScore} 分，庄家付 ${baseScore + zhuangBonus} 分`;
+        for (let s = 0; s < 4; s++) {
+          if (s === winnerSeat || !room.players[s]) continue;
+          const pay = baseScore + zhuangExtra(s);
+          room.players[s].score -= pay;
+          room.players[s].roundScore -= pay;
+          room.players[winnerSeat].score += pay;
+          room.players[winnerSeat].roundScore += pay;
+        }
+        huPayments.push({
+          kind: 'hu',
+          title: `${winLabel}（放炮者已报听）· ${perDesc}${zhuangNote}`,
+          toSeat: winnerSeat,
+          toAmount: baseScore * 3 + (isZhuang ? zhuangBonus * 3 : zhuangBonus),
+          rows: [0, 1, 2, 3]
+            .filter((s) => s !== winnerSeat)
+            .map((s) => ({
+              seat: s,
+              amount: -(baseScore + zhuangExtra(s)),
+              role: s === info.discarder ? '放炮者（已报听）' : s === zhuangSeat ? '庄家' : '闲家',
+            })),
         });
       } else {
-        // 点炮且放炮者未报听：放炮者独赔 3 份点炮分（含原包胡情形），胡牌者共收 3 份
-        score = tilePoints * mult * kp * 3;
+        // 点炮且放炮者未报听：放炮者独赔 3 份（含原包胡情形），胡牌者共收 3 份
+        score = baseScore * 3 + (isZhuang ? zhuangBonus * 3 : zhuangBonus);
         const loser = room.players[info.discarder];
         if (loser) {
           loser.score -= score;
@@ -1558,7 +1600,7 @@ class GameServer {
         }
         huPayments.push({
           kind: 'hu',
-          title: `${winLabel}（放炮者未报听）· 放炮者独赔 ${score} 分`,
+          title: `${winLabel}（放炮者未报听）· 放炮者独赔 ${score} 分${zhuangNote}`,
           toSeat: winnerSeat,
           toAmount: score,
           rows: [{ seat: info.discarder, amount: -score, role: '放炮者（未报听，独赔3份）' }],
@@ -1570,11 +1612,15 @@ class GameServer {
         winnerSeat,
         winType: info.winType,
         mode136: true,
+        scoreModel,
         tilePoints,
         mult,
         multNames,
         kouPoint: kp,
         kouPoints: g.kouPoints.slice(), // 结算公开全部玩家扣点
+        addPoints,
+        addNames,
+        zhuangBonus,
         discarderTing,
         score,
         tile: info.tile,
@@ -1590,9 +1636,12 @@ class GameServer {
           : discarderTing
             ? '（放炮者已报听，三家各出1份）'
             : '（放炮者未报听，独赔3份）';
+      const calcLog = scoreModel === 'add'
+        ? `${tilePoints}点${info.winType === 'zimo' ? '×2' : ''}${addPoints ? `+${addPoints}（${addNames.join('、')}）` : ''}${zhuangBonus ? `+庄底${zhuangBonus}` : ''}`
+        : `${tilePoints}点 × ${mult}倍 × 扣${kp}`;
       this._log(
         room,
-        `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${tilePoints}点 × ${mult}倍 × 扣${kp}${payLabel} → ${score}分）`
+        `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${calcLog}${payLabel} → ${score}分）`
       );
   }
 
@@ -2571,6 +2620,7 @@ class GameServer {
     const qingYiSeMult = Number(s.qingYiSeMult) || 4;
     const yiTiaoLongMult = Number(s.yiTiaoLongMult) || 4;
     const shiSanYaoMult = Number(s.shiSanYaoMult) || 8;
+    const scoreModel = s.scoreModel === 'add' ? 'add' : 'multiply'; // 计分模型：multiply=乘算（点数×倍数）/ add=加算（底分+固定加番）
     return {
       totalRounds,
       aiFill: !!s.aiFill,
@@ -2583,7 +2633,9 @@ class GameServer {
       yiTiaoLongMult,
       shiSanYaoMult,
       dealerFlow: s.dealerFlow === 'keep' ? 'keep' : 'next', // 流局庄家：keep=连庄 / next=下家接庄（默认）
-      enableKoupoint: s.enableKoupoint !== false, // 开局扣点开关（默认开启）
+      enableKoupoint: scoreModel === 'add' ? false : s.enableKoupoint === true, // 开局扣点开关（默认关闭；加算模型无扣点，强制无效）
+      scoreModel,
+      zhuangDi: s.zhuangDi !== false, // 庄底加分开关（默认开启：非自摸+5 / 自摸+10）
     };
   }
 

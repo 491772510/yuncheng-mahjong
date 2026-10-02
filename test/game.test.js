@@ -62,7 +62,7 @@ function cleanupServer(srv) {
   }
 }
 
-const BASE_SETTINGS = { enableKoupoint: false, aiFill: true, totalRounds: 4 };
+const BASE_SETTINGS = { enableKoupoint: false, aiFill: true, totalRounds: 4, zhuangDi: false };
 
 // ============ 功能2：房间列表显示创建者名称 ============
 test('房间列表包含创建者名称 ownerName；房主离开转让后创建者名称保持原创建者', () => {
@@ -714,7 +714,7 @@ test('支付明细-点炮已报听：三家各付 1 份，放炮者带已报听�
   assert.ok(hu.rows.every((r) => r.amount === -28), '每份 28 分');
   const discarderRow = hu.rows.find((r) => r.seat === 1);
   assert.match(discarderRow.role, /已报听/, '放炮者角色标签含已报听');
-  assert.ok(hu.rows.filter((r) => r.seat !== 1).every((r) => r.role === '闲家'), '另两家为闲家');
+  assert.ok(hu.rows.filter((r) => r.seat !== 1).every((r) => r.role === '闲家' || r.role === '庄家'), '另两家为闲家/庄家（首局庄家随机）');
   await sleep(400);
   cleanupServer(srv);
 });
@@ -735,7 +735,7 @@ test('支付明细-自摸：三家各付 1 份自摸分，角色均为闲家', a
   assert.equal(hu.toAmount, 168, '胡牌者共收 3 份自摸分 = 56 × 3 = 168');
   assert.equal(hu.rows.length, 3);
   assert.ok(hu.rows.every((r) => r.amount === -56), '三家各付 56 分');
-  assert.ok(hu.rows.every((r) => r.role === '闲家'), '角色均为闲家');
+  assert.ok(hu.rows.every((r) => r.role === '闲家' || r.role === '庄家'), '角色均为闲家/庄家（首局庄家随机）');
   await sleep(400);
   cleanupServer(srv);
 });
@@ -1219,5 +1219,120 @@ test('补杠不触及弃牌区：g.discards[discarder] 原样保留', async () =
   await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
+
+// ============ 新计分模型与庄底（scoreModel / zhuangDi） ============
+
+test('扣点默认关闭：不传 enableKoupoint 时 settings 为 false，且开局不进入扣点阶段', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, { enableKoupoint: undefined });
+  assert.equal(room.settings.enableKoupoint, false, '扣点默认关闭');
+  assert.notEqual(room.game.stage, 'koupoint', '扣点关闭时不进入暗扣阶段');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('乘算+庄底开启-庄家自摸：三家各付 基础分+10，胡牌者共收 3 份', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, { zhuangDi: true });
+  const winnerSeat = 0;
+  const g = room.game;
+  g.dealer = 0; // 显式指定庄家为 seat0
+  g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
+  g.melds[winnerSeat] = [];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+
+  srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
+  // 基础 56 = 7×2×4×1，庄家自摸每家 +10
+  assert.equal(g.winners.zhuangBonus, 10, '庄底自摸 +10');
+  assert.equal(room.players[0].roundScore, 198, '胡牌者共收 3×66');
+  assert.equal(room.players[1].roundScore, -66, '闲家1出 56+10');
+  assert.equal(room.players[2].roundScore, -66, '闲家2出 56+10');
+  assert.equal(room.players[3].roundScore, -66, '闲家3出 56+10');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('乘算+庄底开启-闲家点炮已报听：仅庄家那份 +5，另两家不加', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, { zhuangDi: true });
+  const winnerSeat = 1; // 闲家胡
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.dealer = 0; // 显式指定庄家为 seat0
+  g.tingSeats = [2]; // 放炮者 seat2 已报听（非庄家）
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 2, qiangGang: false });
+  // 基础 28 = 7×4×1；庄家 seat0 份 +5
+  assert.equal(g.winners.zhuangBonus, 5, '庄底非自摸 +5');
+  assert.equal(room.players[1].roundScore, 89, '胡牌者共收 28+28+33');
+  assert.equal(room.players[0].roundScore, -33, '庄家出 28+5');
+  assert.equal(room.players[2].roundScore, -28, '放炮者（已报听）出 28');
+  assert.equal(room.players[3].roundScore, -28, '闲家出 28');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('加算模型-平胡点炮已报听：底分=牌点，无加番无庄底', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, { scoreModel: 'add' });
+  const winnerSeat = 1;
+  const hand13 = ['t1', 't2', 't3', 'w4', 'w5', 'w6', 'b7', 'b8', 'b9', 'z1', 'z2', 'z3', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.tingSeats = [2];
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 2, qiangGang: false });
+  assert.equal(room.settings.scoreModel, 'add');
+  assert.equal(room.settings.enableKoupoint, false, '加算模型强制无扣点');
+  assert.equal(g.winners.addPoints, 0, '平胡无加番');
+  assert.equal(g.winners.score, 7, '单份 = 点数7');
+  assert.equal(room.players[1].roundScore, 21, '已报听三家各付 3×7');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('加算模型-庄家七对自摸杠红中（攻略示例）：每家 10×2+20(七对)+40(豪七)+10(庄底) = 90', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, { scoreModel: 'add', zhuangDi: true });
+  const winnerSeat = 0; // 庄家
+  const g = room.game;
+  g.dealer = 0; // 显式指定庄家为 seat0
+  g.hands[winnerSeat] = ['z', 'z', 'z', 'z', 't1', 't1', 't2', 't2', 'w3', 'w3', 'w4', 'w4', 'b5', 'b5'];
+  g.melds[winnerSeat] = [];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+
+  srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'z' });
+  assert.equal(g.winners.scoreModel, 'add');
+  assert.equal(g.winners.addPoints, 60, '七对 20 + 豪七 40');
+  assert.deepEqual(g.winners.addNames, ['七小对', '豪七']);
+  assert.equal(g.winners.zhuangBonus, 10, '庄底自摸 +10');
+  assert.equal(room.players[0].roundScore, 270, '庄家胡共收 3×90');
+  assert.equal(room.players[1].roundScore, -90, '闲家1出 底分20+加番60+庄底10');
+  assert.equal(room.players[2].roundScore, -90);
+  assert.equal(room.players[3].roundScore, -90);
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('加算模型-清一色开关开启叠加：底分+清一色20+七小对20', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, { scoreModel: 'add', enableQingYiSe: true, zhuangDi: false });
+  const winnerSeat = 0;
+  const g = room.game;
+  g.hands[winnerSeat] = ['b1', 'b1', 'b2', 'b2', 'b3', 'b3', 'b4', 'b4', 'b5', 'b5', 'b6', 'b6', 'b7', 'b7'];
+  g.melds[winnerSeat] = [];
+  g.kouPoints = [1, 1, 1, 1];
+  g.tingSeats = [];
+
+  srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
+  assert.equal(g.winners.addPoints, 40, '清一色20 + 七小对20');
+  assert.deepEqual(g.winners.addNames, ['七小对', '清一色']);
+  assert.equal(g.winners.score, 7 * 2 + 40, '单份 = 底分14 + 加番40');
+  assert.equal(room.players[0].roundScore, (7 * 2 + 40) * 3, '胡牌者共收 3 份');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
 
 
