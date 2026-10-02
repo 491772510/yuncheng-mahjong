@@ -488,7 +488,7 @@
       if (!full) html += `<button class="btn small" id="btn-add-ai">＋ AI 补位</button>`;
       html += full
         ? `<button class="btn small primary" id="btn-start">开始游戏</button>`
-        : `<button class="btn small" id="btn-start" disabled>开始游戏（需 4 人）</button>`;
+        : `<button class="btn small" id="btn-start">开始游戏</button>`;
     }
     if (isOwner && room.state === 'settled') {
       html += `<button class="btn small primary" id="btn-restart">再来一轮</button>`;
@@ -537,7 +537,7 @@
     html += '</div>';
     html += `<div class="wait-hint">${
       isOwner
-        ? (full ? '人员已齐，点击「开始游戏」开局。' : '点击「开始游戏」开局；未满 4 人时可点击「＋ AI 补位」加入机器人。')
+        ? (full ? '人员已齐，点击「开始游戏」开局。' : '点击「开始游戏」开局；开启 AI 补位时不足 4 人将自动补位，也可点「＋ AI 补位」手动加入机器人。')
         : '等待房主开始游戏…'
     }</div>`;
     wrap.innerHTML = html;

@@ -467,6 +467,9 @@ class GameServer {
     if (room.state !== 'waiting' && room.state !== 'settled') {
       return this._err(p, '牌局正在进行中');
     }
+    if (!room.settings.aiFill && room.players.filter(Boolean).length < 4) {
+      return this._err(p, '人数不足 4 人，无法开局（AI 补位已关闭）');
+    }
     this._startGameInternal(room);
   }
 
