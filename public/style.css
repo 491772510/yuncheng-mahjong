@@ -335,13 +335,13 @@ body {
   0%, 100% { transform: scale(1); }
   50%      { transform: scale(1.15); }
 }
-/* 新摸牌视觉标志：金色高亮边框（仅自己视角手牌区） */
+/* 新摸牌视觉标志：低亮边框（弱于旧版金色高亮） */
 .tile.new-tile {
-  box-shadow: 0 0 0 2px #ffd75e, 0 2px 3px rgba(0,0,0,.35);
+  box-shadow: 0 0 0 1px rgba(255, 215, 94, .5), 0 2px 3px rgba(0,0,0,.35);
 }
-/* 新摸牌置右时的空格占位：透明保留尺寸，仅撑开与前面手牌的间隔 */
+/* 新摸牌置右时的半格占位：透明保留高度，仅撑开与前面手牌的半个牌宽间隔 */
 .hand-tiles .tile.hand-gap {
-  opacity: 0; pointer-events: none;
+  width: 20px; opacity: 0; pointer-events: none;
 }
 .tile.discarded { opacity: .85; cursor: default; }
 

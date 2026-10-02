@@ -664,8 +664,9 @@
     const ting = tH === undefined ? 0 : tH;
     // 报听选牌阶段：仅进入提示列表（含 ≥6 点听口）的选项可点击，未进入置灰；绝听（tH===0）仍可报听
     const canDiscard = state.tingPick ? tH !== undefined : true;
-    // 新摸牌不再高亮（改为置右 + 空格占位展示，见 renderSelfHand；服务端出牌后清除 newTile 自动回原位）
-    const isNew = false;
+    // 新摸牌标志：仅加低亮边框（样式见 .tile.new-tile），置右 + 空格占位展示见 renderSelfHand；
+    // 服务端出牌后清除 newTile，自动回原位
+    const isNew = game.newTile === t && p.hand.indexOf(t) === i;
     // 选中态：普通出牌受「单击直接出牌」开关影响（开启时不选中）；报听阶段始终走选中交互，不受开关影响
     const selected = (state.tingPick || !isTapToDiscard()) && state.selectedIndex === i;
     return tileHtml(t, '', ting, canDiscard, isNew, i, selected, game.goldTile);
