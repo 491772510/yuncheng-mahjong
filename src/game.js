@@ -944,6 +944,7 @@ class GameServer {
     return pays;
   }
 
+  /** 明杠（放杠）：普通玩法延迟统一结算；红中杠牌当场结（放杠者付 2 手）；贴金杠牌当场结（其余三家各付 1 分，含放杠者） */
   _doGangFromDiscard(room, seat, tile, discarder) {
     const g = room.game;
     const hand = g.hands[seat];
@@ -970,13 +971,44 @@ class GameServer {
     g.lastAction = { type: 'gang' };
     g.turn = seat;
     g.newTiles[seat] = null; // 杠后补牌前清除旧标志（补牌后重新设置）
+    if (this._isHongZhong(room)) {
+      // 红中：杠牌当场结——放杠者付 2 手（2 分）给杠家
+      if (discarder != null && room.players[discarder]) {
+        room.players[discarder].score -= 2;
+        room.players[discarder].roundScore -= 2;
+        room.players[seat].score += 2;
+        room.players[seat].roundScore += 2;
+      }
+      g.gangLogs.push({ seat, tile, type: 'gang', perSeat: 2, points: 2, kou: 1, payer: discarder, hz: true });
+      this._log(room, `${this._pName(room, seat)} 放杠 ${rules.tileName(tile)}（${this._pName(room, discarder)} 付 2 手）`);
+      this._drawAfterGangHongZhong(room, seat);
+      return;
+    }
+    if (this._isTieJin(room)) {
+      // 贴金：杠牌当场结——其余三家各付 1 分给杠家（含放杠者）
+      for (let s = 0; s < 4; s++) {
+        if (s === seat || !room.players[s]) continue;
+        room.players[s].score -= 1;
+        room.players[s].roundScore -= 1;
+      }
+      room.players[seat].score += 3;
+      room.players[seat].roundScore += 3;
+      g.gangLogs.push({ seat, tile, type: 'gang', perSeat: 1, points: 3, payer: discarder, kou: 1 });
+      this._log(room, `${this._pName(room, seat)} 放杠 ${rules.tileName(tile)}（每家付 1 分）`);
+      this._drawAfterGangTieJin(room, seat);
+      return;
+    }
+    // 普通玩法：杠分统一延迟结算
     this._log(room, `${this._pName(room, seat)} 明杠了 ${rules.tileName(tile)}`);
     this._settleGangScore(room, seat, tile, 'ming');
     this._drawAfterGang(room, seat);
   }
 
+  /** 暗杠：普通玩法延迟统一结算；红中杠牌当场结（其余每家付 2 手）；贴金杠牌当场结（其余每家付 2 分，金牌不可杠） */
   _doAnGang(room, seat, tile) {
     const g = room.game;
+    // 贴金双保险（金牌不可杠）
+    if (this._isTieJin(room) && !rules.canAnGangTieJin(g.hands[seat], tile, g.goldTile)) return;
     const hand = g.hands[seat];
     let removed = 0;
     for (let i = 0; i < hand.length && removed < 4; i++) {
@@ -989,20 +1021,78 @@ class GameServer {
     g.melds[seat].push({ type: 'angang', tile, tiles: [tile, tile, tile, tile] });
     g.lastAction = { type: 'gang' };
     g.newTiles[seat] = null; // 杠后补牌前清除旧标志（补牌后重新设置）
+    if (this._isHongZhong(room)) {
+      // 红中：杠牌当场结——其余每家付 2 手（2 分）给杠家
+      for (let s = 0; s < 4; s++) {
+        if (s === seat || !room.players[s]) continue;
+        room.players[s].score -= 2;
+        room.players[s].roundScore -= 2;
+      }
+      room.players[seat].score += 6;
+      room.players[seat].roundScore += 6;
+      g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 2, points: 2, kou: 1, hz: true });
+      this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 手）`, seat, `${this._pName(room, seat)} 暗杠（每家付 2 手）`);
+      this._drawAfterGangHongZhong(room, seat);
+      return;
+    }
+    if (this._isTieJin(room)) {
+      // 贴金：杠牌当场结——其余每家付 2 分给杠家
+      for (let s = 0; s < 4; s++) {
+        if (s === seat || !room.players[s]) continue;
+        room.players[s].score -= 2;
+        room.players[s].roundScore -= 2;
+      }
+      room.players[seat].score += 6;
+      room.players[seat].roundScore += 6;
+      g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 2, points: 6, kou: 1 });
+      this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 分）`, seat, `${this._pName(room, seat)} 暗杠（每家付 2 分）`);
+      this._drawAfterGangTieJin(room, seat);
+      return;
+    }
+    // 普通玩法：杠分统一延迟结算
     this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 暗杠`);
     this._settleGangScore(room, seat, tile, 'angang');
     this._drawAfterGang(room, seat);
   }
 
+  /** 补杠：普通玩法延迟统一结算；红中杠牌当场结（其余每家付 1 手）；贴金杠牌当场结（其余每家付 1 分）。抢杠判定：普通/红中多响，贴金截胡单响 */
   _doBuGang(room, seat, tile) {
     const g = room.game;
-    // 先检查抢杠胡
+    // 贴金双保险（金牌不可杠）
+    if (this._isTieJin(room) && !rules.canBuGangTieJin(g.hands[seat], g.melds[seat], tile, g.goldTile)) return;
+    // 先检查抢杠胡（玩法判定各异）
     const grabbers = [];
-    for (let s = 0; s < 4; s++) {
-      if (s === seat || !room.players[s]) continue;
-      // 抢杠胡算点炮，受点数限制（6 点及以上才可胡）；仅报听玩家可抢杠；明牌区刻子计入已成型面子
-      const canHu = g.tingSeats.includes(s) && rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'qianggang');
-      if (canHu) grabbers.push(s);
+    let resolveFn = null;
+    let onPass = null;
+    if (this._isTieJin(room)) {
+      // 贴金：截胡单响（逆时针最近的可胡者；字牌整副胡只能自摸）
+      for (let i = 1; i <= 3; i++) {
+        const s = (seat + i) % 4;
+        if (!room.players[s]) continue;
+        if (g.huPassed[s]) continue;
+        if (!this._tieJinCanDianpao(room, s)) continue;
+        if (!rules.canHuTieJinWith(g.hands[s], tile, g.melds[s], g.goldTile)) continue;
+        if (rules.isAllHonorShape([...g.hands[s], tile], g.melds[s], g.goldTile)) continue;
+        grabbers.push(s);
+        break;
+      }
+      resolveFn = (r2, g2, pending) => this._tryResolvePendingTieJin(r2, g2, pending);
+      onPass = (g2, s) => { g2.huPassed[s] = true; };
+    } else if (this._isHongZhong(room)) {
+      // 红中：一炮多响
+      for (let s = 0; s < 4; s++) {
+        if (s === seat || !room.players[s]) continue;
+        if (rules.canHuHongZhongWith(g.hands[s], tile, g.melds[s])) grabbers.push(s);
+      }
+      resolveFn = (r2, g2, pending) => this._tryResolvePendingHongZhong(r2, g2, pending);
+    } else {
+      // 普通：抢杠胡算点炮，受点数限制（6 点及以上才可胡）；仅报听玩家可抢杠；明牌区刻子计入已成型面子
+      for (let s = 0; s < 4; s++) {
+        if (s === seat || !room.players[s]) continue;
+        const canHu = g.tingSeats.includes(s) && rules.canHuWith(g.hands[s], tile, g.melds[s]) && rules.canHuByPoints(rules.tilePoints(tile), 'qianggang');
+        if (canHu) grabbers.push(s);
+      }
+      resolveFn = (r2, g2, pending) => this._tryResolvePending(r2, g2, pending);
     }
     if (grabbers.length > 0) {
       g.stage = 'response';
@@ -1026,7 +1116,8 @@ class GameServer {
           const g2 = room.game;
           if (room.state === 'playing' && g2 === g && g.pending === r._pendingRef && r.choice === null) {
             r.choice = 'pass';
-            this._tryResolvePending(room, g, g.pending);
+            if (onPass) onPass(g2, r.seat);
+            resolveFn(room, g2, g2.pending);
           }
         });
         r._pendingRef = g.pending;
@@ -1045,10 +1136,40 @@ class GameServer {
     }
     g.lastAction = { type: 'gang' };
     g.newTiles[seat] = null; // 杠后补牌前清除旧标志（补牌后重新设置；抢杠分支不动，牌仍在手）
+    if (this._isHongZhong(room)) {
+      // 红中：杠牌当场结——其余每家付 1 手给杠家
+      for (let s = 0; s < 4; s++) {
+        if (s === seat || !room.players[s]) continue;
+        room.players[s].score -= 1;
+        room.players[s].roundScore -= 1;
+      }
+      room.players[seat].score += 3;
+      room.players[seat].roundScore += 3;
+      g.gangLogs.push({ seat, tile, type: 'bugang', perSeat: 1, points: 1, kou: 1, hz: true });
+      this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}（每家付 1 手）`);
+      this._drawAfterGangHongZhong(room, seat);
+      return;
+    }
+    if (this._isTieJin(room)) {
+      // 贴金：杠牌当场结——其余每家付 1 分给杠家
+      for (let s = 0; s < 4; s++) {
+        if (s === seat || !room.players[s]) continue;
+        room.players[s].score -= 1;
+        room.players[s].roundScore -= 1;
+      }
+      room.players[seat].score += 3;
+      room.players[seat].roundScore += 3;
+      g.gangLogs.push({ seat, tile, type: 'bugang', perSeat: 1, points: 3, kou: 1 });
+      this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}（每家付 1 分）`);
+      this._drawAfterGangTieJin(room, seat);
+      return;
+    }
+    // 普通玩法：杠分统一延迟结算
     this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}`);
     this._settleGangScore(room, seat, tile, 'bugang');
     this._drawAfterGang(room, seat);
   }
+
 
   _settleHu(room, winnerSeat, info) {
     const g = room.game;
@@ -1424,10 +1545,10 @@ class GameServer {
       if (this._isTieJin(room)) {
         if (gangType === 'angang') {
           if (!rules.canAnGangTieJin(g.hands[p.seat], tile, g.goldTile)) return this._err(p, '不能暗杠');
-          this._doAnGangTieJin(room, p.seat, tile);
+          this._doAnGang(room, p.seat, tile);
         } else {
           if (!rules.canBuGangTieJin(g.hands[p.seat], g.melds[p.seat], tile, g.goldTile)) return this._err(p, '不能补杠');
-          this._doBuGangTieJin(room, p.seat, tile);
+          this._doBuGang(room, p.seat, tile);
         }
         return;
       }
@@ -1435,10 +1556,10 @@ class GameServer {
       if (this._isHongZhong(room)) {
         if (gangType === 'angang') {
           if (!rules.canAnGangHongZhong(g.hands[p.seat], tile)) return this._err(p, '不能暗杠');
-          this._doAnGangHongZhong(room, p.seat, tile);
+          this._doAnGang(room, p.seat, tile);
         } else {
           if (!rules.canBuGang(g.hands[p.seat], g.melds[p.seat], tile)) return this._err(p, '不能补杠');
-          this._doBuGangHongZhong(room, p.seat, tile);
+          this._doBuGang(room, p.seat, tile);
         }
         return;
       }
@@ -2408,7 +2529,7 @@ class GameServer {
     const gangList = pending.responders.filter((r) => r.choice === 'gang');
     if (gangList.length > 0) {
       const pick = this._nearestSeat(gangList.map((r) => r.seat), pending.discarder);
-      this._doGangFromDiscardHongZhong(room, pick, pending.tile, pending.discarder);
+      this._doGangFromDiscard(room, pick, pending.tile, pending.discarder);
       return;
     }
     const pengList = pending.responders.filter((r) => r.choice === 'peng');
@@ -2421,139 +2542,6 @@ class GameServer {
     this._nextTurn(room, pending.discarder);
   }
 
-  /** 红中明杠（放杠）：不可抢；杠牌当场结——放杠者付 2 手（2 分）给杠家 */
-  _doGangFromDiscardHongZhong(room, seat, tile, discarder) {
-    const g = room.game;
-    const hand = g.hands[seat];
-    let removed = 0;
-    for (let i = 0; i < hand.length && removed < 3; i++) {
-      if (hand[i] === tile) {
-        hand.splice(i, 1);
-        i--;
-        removed++;
-      }
-    }
-    if (discarder != null && g.discards[discarder]) {
-      const arr = g.discards[discarder];
-      for (let i = arr.length - 1; i >= 0; i--) {
-        if (arr[i] === tile) {
-          arr.splice(i, 1);
-          break;
-        }
-      }
-    }
-    g.melds[seat].push({ type: 'gang', tile, tiles: [tile, tile, tile, tile] });
-    g.lastDiscard = null;
-    g.lastAction = { type: 'gang' };
-    g.turn = seat;
-    g.newTiles[seat] = null;
-    // 杠牌当场结：放杠 2 手（放杠者独付 2 分给杠家）
-    if (discarder != null && room.players[discarder]) {
-      room.players[discarder].score -= 2;
-      room.players[discarder].roundScore -= 2;
-      room.players[seat].score += 2;
-      room.players[seat].roundScore += 2;
-    }
-    g.gangLogs.push({ seat, tile, type: 'gang', perSeat: 2, points: 2, kou: 1, payer: discarder, hz: true });
-    this._log(
-      room,
-      `${this._pName(room, seat)} 放杠 ${rules.tileName(tile)}（${this._pName(room, discarder)} 付 2 手）`
-    );
-    this._drawAfterGangHongZhong(room, seat);
-  }
-
-  /** 红中暗杠：不可抢；杠牌当场结——其余每家付 2 手（2 分）给杠家 */
-  _doAnGangHongZhong(room, seat, tile) {
-    const g = room.game;
-    const hand = g.hands[seat];
-    let removed = 0;
-    for (let i = 0; i < hand.length && removed < 4; i++) {
-      if (hand[i] === tile) {
-        hand.splice(i, 1);
-        i--;
-        removed++;
-      }
-    }
-    g.melds[seat].push({ type: 'angang', tile, tiles: [tile, tile, tile, tile] });
-    g.lastAction = { type: 'gang' };
-    g.newTiles[seat] = null;
-    // 杠牌当场结：暗杠每家 2 手（其余三家各付 2 分给杠家）
-    for (let s = 0; s < 4; s++) {
-      if (s === seat || !room.players[s]) continue;
-      room.players[s].score -= 2;
-      room.players[s].roundScore -= 2;
-    }
-    room.players[seat].score += 6;
-    room.players[seat].roundScore += 6;
-    g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 2, points: 2, kou: 1, hz: true });
-    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 手）`, seat, `${this._pName(room, seat)} 暗杠（每家付 2 手）`);
-    this._drawAfterGangHongZhong(room, seat);
-  }
-
-  /** 红中补杠：唯一可抢杠的杠型；无人抢则正常补杠（杠牌当场结：其余每家付 1 手给杠家） */
-  _doBuGangHongZhong(room, seat, tile) {
-    const g = room.game;
-    // 先检查抢杠胡（一炮多响：所有可胡者都能抢）
-    const grabbers = [];
-    for (let s = 0; s < 4; s++) {
-      if (s === seat || !room.players[s]) continue;
-      if (rules.canHuHongZhongWith(g.hands[s], tile, g.melds[s])) {
-        grabbers.push(s);
-      }
-    }
-    if (grabbers.length > 0) {
-      g.stage = 'response';
-      g.pending = {
-        type: 'qianggang',
-        tile,
-        discarder: seat,
-        responders: grabbers.map((s) => ({
-          seat: s,
-          canHu: true,
-          canGang: false,
-          canPeng: false,
-          choice: null,
-        })),
-      };
-      this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}，触发抢杠胡判定`);
-      this._broadcastGameState(room);
-      for (const r of g.pending.responders) {
-        this._prompt(room, r.seat, this._buildResponsePrompt(room, r));
-        this._setTimer(room, 'resp:' + r.seat, RESPONSE_TIMEOUT_MS, () => {
-          const g2 = room.game;
-          if (room.state === 'playing' && g2 === g && g.pending === r._pendingRef && r.choice === null) {
-            r.choice = 'pass';
-            this._tryResolvePendingHongZhong(room, g, g.pending);
-          }
-        });
-        r._pendingRef = g.pending;
-        if (this._shouldAutoAct(room, r.seat)) this._scheduleAutoAct(room, r.seat);
-      }
-      return;
-    }
-    // 无人抢杠 → 正常补杠
-    const hand = g.hands[seat];
-    const idx = hand.indexOf(tile);
-    if (idx >= 0) hand.splice(idx, 1);
-    const m = g.melds[seat].find((mm) => mm.type === 'peng' && mm.tile === tile);
-    if (m) {
-      m.type = 'bugang';
-      m.tiles.push(tile);
-    }
-    g.lastAction = { type: 'gang' };
-    g.newTiles[seat] = null;
-    // 杠牌当场结：补杠每家 1 手（其余三家各付 1 分给杠家）
-    for (let s = 0; s < 4; s++) {
-      if (s === seat || !room.players[s]) continue;
-      room.players[s].score -= 1;
-      room.players[s].roundScore -= 1;
-    }
-    room.players[seat].score += 3;
-    room.players[seat].roundScore += 3;
-    g.gangLogs.push({ seat, tile, type: 'bugang', perSeat: 1, points: 1, kou: 1, hz: true });
-    this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}（每家付 1 手）`);
-    this._drawAfterGangHongZhong(room, seat);
-  }
 
   /** 红中胡牌结算（无番制新规则）：
    *  - 自摸：每家付 = 2手底注 + 中码倍数×底注；
@@ -3031,7 +3019,7 @@ class GameServer {
     const gangList = pending.responders.filter((r) => r.choice === 'gang');
     if (gangList.length > 0) {
       const pick = this._nearestSeat(gangList.map((r) => r.seat), pending.discarder);
-      this._doGangFromDiscardTieJin(room, pick, pending.tile, pending.discarder);
+      this._doGangFromDiscard(room, pick, pending.tile, pending.discarder);
       return;
     }
     const pengList = pending.responders.filter((r) => r.choice === 'peng');
@@ -3044,129 +3032,6 @@ class GameServer {
     this._nextTurn(room, pending.discarder);
   }
 
-  /** 贴金明杠（放杠）：金牌不可杠；杠牌当场结——其余三家各付 1 分给杠家（含放杠者） */
-  _doGangFromDiscardTieJin(room, seat, tile, discarder) {
-    const g = room.game;
-    const hand = g.hands[seat];
-    let removed = 0;
-    for (let i = 0; i < hand.length && removed < 3; i++) {
-      if (hand[i] === tile) {
-        hand.splice(i, 1);
-        i--;
-        removed++;
-      }
-    }
-    if (discarder != null && g.discards[discarder]) {
-      const arr = g.discards[discarder];
-      for (let i = arr.length - 1; i >= 0; i--) {
-        if (arr[i] === tile) {
-          arr.splice(i, 1);
-          break;
-        }
-      }
-    }
-    g.melds[seat].push({ type: 'gang', tile, tiles: [tile, tile, tile, tile] });
-    g.lastDiscard = null;
-    g.lastAction = { type: 'gang' };
-    g.turn = seat;
-    g.newTiles[seat] = null;
-    // 杠牌当场结：明杠每家 1 分（其余三家各付 1 分给杠家，含放杠者）
-    for (let s = 0; s < 4; s++) {
-      if (s === seat || !room.players[s]) continue;
-      room.players[s].score -= 1;
-      room.players[s].roundScore -= 1;
-    }
-    room.players[seat].score += 3;
-    room.players[seat].roundScore += 3;
-    g.gangLogs.push({ seat, tile, type: 'gang', perSeat: 1, points: 3, payer: discarder, kou: 1 });
-    this._log(room, `${this._pName(room, seat)} 放杠 ${rules.tileName(tile)}（每家付 1 分）`);
-    this._drawAfterGangTieJin(room, seat);
-  }
-
-  /** 贴金暗杠：不可抢；杠牌当场结——其余每家付 2 分给杠家 */
-  _doAnGangTieJin(room, seat, tile) {
-    const g = room.game;
-    if (!rules.canAnGangTieJin(g.hands[seat], tile, g.goldTile)) return; // 双保险（金牌不可杠）
-    const hand = g.hands[seat];
-    let removed = 0;
-    for (let i = 0; i < hand.length && removed < 4; i++) {
-      if (hand[i] === tile) {
-        hand.splice(i, 1);
-        i--;
-        removed++;
-      }
-    }
-    g.melds[seat].push({ type: 'angang', tile, tiles: [tile, tile, tile, tile] });
-    g.lastAction = { type: 'gang' };
-    g.newTiles[seat] = null;
-    for (let s = 0; s < 4; s++) {
-      if (s === seat || !room.players[s]) continue;
-      room.players[s].score -= 2;
-      room.players[s].roundScore -= 2;
-    }
-    room.players[seat].score += 6;
-    room.players[seat].roundScore += 6;
-    g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 2, points: 6, kou: 1 });
-    this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 分）`, seat, `${this._pName(room, seat)} 暗杠（每家付 2 分）`);
-    this._drawAfterGangTieJin(room, seat);
-  }
-
-  /** 贴金补杠：明杠可抢（截胡单响：逆时针离杠家最近的可胡者）；无人抢则正常补杠（其余每家付 1 分） */
-  _doBuGangTieJin(room, seat, tile) {
-    const g = room.game;
-    if (!rules.canBuGangTieJin(g.hands[seat], g.melds[seat], tile, g.goldTile)) return; // 双保险
-    // 抢杠判定（截胡单响：逆时针最近；暗杠不可抢）
-    let grabber = -1;
-    for (let i = 1; i <= 3; i++) {
-      const s = (seat + i) % 4;
-      if (!room.players[s]) continue;
-      if (g.huPassed[s]) continue;
-      if (!this._tieJinCanDianpao(room, s)) continue;
-      if (!rules.canHuTieJinWith(g.hands[s], tile, g.melds[s], g.goldTile)) continue;
-      if (rules.isAllHonorShape([...g.hands[s], tile], g.melds[s], g.goldTile)) continue; // 字牌整副胡只能自摸
-      grabber = s;
-      break;
-    }
-    if (grabber >= 0) {
-      const r = { seat: grabber, canHu: true, canGang: false, canPeng: false, choice: null };
-      g.stage = 'response';
-      g.pending = { type: 'qianggang', tile, discarder: seat, responders: [r] };
-      this._broadcastGameState(room);
-      this._prompt(room, r.seat, this._buildResponsePrompt(room, r));
-      this._setTimer(room, 'resp:' + r.seat, RESPONSE_TIMEOUT_MS, () => {
-        const g2 = room.game;
-        if (room.state === 'playing' && g2 === g && g.pending === r._pendingRef && r.choice === null) {
-          r.choice = 'pass';
-          g2.huPassed[r.seat] = true;
-          this._tryResolvePendingTieJin(room, g2, g2.pending);
-        }
-      });
-      r._pendingRef = g.pending;
-      if (this._shouldAutoAct(room, r.seat)) this._scheduleAutoAct(room, r.seat);
-      return;
-    }
-    // 无人抢杠 → 正常补杠
-    const hand = g.hands[seat];
-    const idx = hand.indexOf(tile);
-    if (idx >= 0) hand.splice(idx, 1);
-    const m = g.melds[seat].find((mm) => mm.type === 'peng' && mm.tile === tile);
-    if (m) {
-      m.type = 'bugang';
-      m.tiles.push(tile);
-    }
-    g.lastAction = { type: 'gang' };
-    g.newTiles[seat] = null;
-    for (let s = 0; s < 4; s++) {
-      if (s === seat || !room.players[s]) continue;
-      room.players[s].score -= 1;
-      room.players[s].roundScore -= 1;
-    }
-    room.players[seat].score += 3;
-    room.players[seat].roundScore += 3;
-    g.gangLogs.push({ seat, tile, type: 'bugang', perSeat: 1, points: 3, kou: 1 });
-    this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}（每家付 1 分）`);
-    this._drawAfterGangTieJin(room, seat);
-  }
 
   /** 亮金（摸牌后、出牌前的独立操作）：亮出 1 张金牌放入面前亮金区（不入弃牌堆），
    *  从牌墙尾补 1 张牌，手牌数量保持不变（不轮转，仍处出牌前 draw 阶段，可继续出牌/再亮金/胡）；
