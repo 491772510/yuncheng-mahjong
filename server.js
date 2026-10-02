@@ -14,7 +14,7 @@ const path = require('path');
 const selfsigned = require('selfsigned');
 const { WebSocketServer } = require('ws');
 const { GameServer } = require('./src/game');
-const { createTtsBridge } = require('./src/tts-bridge');
+const { createTtsBridge, PRESET_TEXTS } = require('./src/tts-bridge');
 
 const PORT = Number(process.env.PORT || 3100);
 const PORT_HTTPS = Number(process.env.PORT_HTTPS || 3443);
@@ -54,6 +54,12 @@ function requestHandler(req, res) {
         if (!text || (voice !== 'male' && voice !== 'female')) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'text and voice(male|female) are required' }));
+          return;
+        }
+        // 防滥用/防刷盘：仅接受预置白名单文本（34 种牌名 + 动作词）且长度受限，拒绝任意自定义文本
+        if (text.length > 16 || !PRESET_TEXTS.includes(text)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'text not allowed' }));
           return;
         }
         ttsBridge.getAudioUrl(text, voice)
@@ -141,6 +147,8 @@ const game = new GameServer();
 
 function attachWs(server) {
   const wss = new WebSocketServer({ server });
+  // 连接异常等错误：记录日志而非触发未捕获异常崩溃进程
+  wss.on('error', (e) => console.error('[server] WebSocket 错误:', e.message));
   wss.on('connection', (ws) => {
     game.handleConnection(ws);
   });
@@ -149,6 +157,12 @@ function attachWs(server) {
 
 const server = http.createServer(requestHandler);
 attachWs(server);
+
+// 端口占用（EADDRINUSE）等启动错误：记录日志并标记退出码，避免进程直接崩溃
+server.on('error', (e) => {
+  console.error('[server] HTTP 服务启动失败:', e.message);
+  process.exitCode = 1;
+});
 
 server.listen(PORT, () => {
   console.log(`[server] 运城扣点点麻将服务已启动: http://localhost:${PORT}`);
@@ -164,6 +178,9 @@ server.listen(PORT, () => {
     const creds = await ensureSelfSignedCert();
     const httpsServer = https.createServer(creds, requestHandler);
     attachWs(httpsServer);
+    httpsServer.on('error', (e) => {
+      console.error('[server] HTTPS 服务启动失败:', e.message);
+    });
     httpsServer.listen(PORT_HTTPS, () => {
       console.log(`[server] HTTPS 服务已启动: https://localhost:${PORT_HTTPS}`);
       console.log(`[server] 语音对讲请访问 https://${localIPv4()}:${PORT_HTTPS}`);

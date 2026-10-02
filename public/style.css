@@ -559,6 +559,7 @@ body {
 .koupoint-opt .kp-tip { font-size: 13px; color: #999; }
 
 .pc-koupoint { background: #8e44ad; color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
+.pc-hand { background: rgba(46,134,172,.18); color: #2e86c1; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
 .pc-lock { background: #b7950b; color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
 .hz-badge { display: inline-block; background: rgba(192,57,43,.12); color: #c0392b; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 12px; border: 1px solid rgba(192,57,43,.35); }
 

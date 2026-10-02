@@ -645,6 +645,7 @@
         ${!p.connected ? '<span class="pc-off">离线</span>' : ''}
         ${p.hosted ? '<span class="pc-host">托管</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
+        ${p.handCount != null ? `<span class="pc-hand">手牌${p.handCount}</span>` : ''}
         ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
         ${lockedBadge}
         <span class="pc-name">${esc(p.name)}</span>
@@ -1280,7 +1281,7 @@
         return `<div class="settle-head"><div class="settle-sub">${prefix}流局（红中 · ${flowLabel}）</div></div>` + settleHands;
       }
       return `
-        <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（红中麻将 · ${flowLabel}）</div></div>
+        <div class="settle-head"><div class="settle-sub">牌墙摸完，流局（红中麻将 · ${flowLabel}）</div></div>
         ${paymentTableHtml(result)}
         ${settleHands}`;
     }
@@ -1357,7 +1358,7 @@
             <tbody>${pays.map((pay) => `
               <tr>
                 <td class="pay-item">${esc(pay.role || '胡牌')}${pay.formula ? '<span class="pay-formula">' + esc(pay.formula) + '</span>' : ''}</td>
-                <td class="pay-from"><div class="pay-line">${esc(nameOf(pay.from))} <span class="pay-neg">${pay.amount}</span></div></td>
+                <td class="pay-from"><div class="pay-line">${esc(nameOf(pay.from))} <span class="pay-neg">-${pay.amount}</span></div></td>
                 <td class="pay-to"><span class="pay-actor">胡牌</span>${esc(nameOf(pay.to))} <span class="pay-pos">+${pay.amount}</span></td>
               </tr>`).join('')}
             </tbody>

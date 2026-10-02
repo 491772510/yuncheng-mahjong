@@ -72,6 +72,19 @@ test('getAudioUrl：voice 非法抛错', async () => {
   await assert.rejects(() => bridge.getAudioUrl('五万', ''), /invalid voice/);
 });
 
+test('getAudioUrl：非白名单文本拒绝合成（防刷盘）', async () => {
+  const dir = tempPublicDir();
+  const calls = [];
+  const bridge = createTtsBridge({
+    publicDir: dir,
+    synthesize: async (text, voice) => { calls.push({ text, voice }); return Buffer.from('MP3'); },
+  });
+  await assert.rejects(() => bridge.getAudioUrl('给我转账一百块', 'male'), /text not in whitelist/);
+  await assert.rejects(() => bridge.getAudioUrl('五万' + 'x', 'male'), /text not in whitelist/);
+  assert.equal(calls.length, 0, '白名单外文本不触发合成，不落盘');
+  assert.equal(fs.readdirSync(dir).filter((n) => n !== 'tts').length, 0, '未产生额外文件');
+});
+
 test('getAudioUrl：首次合成失败抛错', async () => {
   const bridge = createTtsBridge({
     publicDir: tempPublicDir(),

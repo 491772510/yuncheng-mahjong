@@ -178,6 +178,9 @@ class GameServer {
           if (r && r.choice === null) {
             this._send(p, { type: 'action_prompt', prompt: this._buildResponsePrompt(room, r) });
           }
+        } else if (g.stage === 'koupoint' && g.kouPoints[p.seat] == null) {
+          // 重连补发扣点提示，避免前端无操作按钮卡在扣点阶段
+          this._send(p, { type: 'action_prompt', prompt: { type: 'koupoint' } });
         }
       }
       if (room.game && room.game.winners) this._sendSettlement(room, p);
@@ -1444,7 +1447,7 @@ class GameServer {
       if (!isMulti) g._accPayments = [];
       g._accPayments = g._accPayments.concat(payments);
       const gangPay = this._buildGangPayments(room);
-      const allPayments = isMulti ? g._accPayments.concat(gangPay) : g._accPayments.concat(gangPay);
+      const allPayments = g._accPayments.concat(gangPay);
       // 兼容结算视图（一炮多响时保留最后一家主信息 + winners 明细列表）
       g.winners = {
         type: 'hu',
@@ -1667,6 +1670,13 @@ class GameServer {
     const ownerOfflineTimer = room.timers.get('owner:offline');
     for (const [k, t] of room.timers) if (k !== 'owner:offline') clearTimeout(t);
     room.timers.clear();
+    // 清理 AI 代打计数：本局结束所有挂起的自动代打定时器已清除，计数复位防泄漏
+    for (const pl of room.players) {
+      if (pl) {
+        pl._auto = 0;
+        pl._autoRetry = 0;
+      }
+    }
     if (ownerOfflineTimer) room.timers.set('owner:offline', ownerOfflineTimer);
     // 房主离线超时：本局结算已广播，直接解散房间，通知所有玩家回大厅
     if (room.pendingDisband) {
@@ -1687,10 +1697,16 @@ class GameServer {
     // 非最后一局：进入结算确认阶段，全员确认后才自动开始下一局
     room.settleConfirms = [false, false, false, false];
     for (let s = 0; s < 4; s++) {
-      // AI / 托管 / 断线玩家自动确认；在线真人等待手动点击「确定」
-      if (room.players[s] && this._shouldAutoAct(room, s)) room.settleConfirms[s] = true;
-      // 在线真人：启动 60 秒确认超时定时器，超时未点「确定」则自动确认
-      else if (room.players[s]) this._setTimer(room, 'settle:' + s, SETTLE_TIMEOUT_MS, () => this._handleSettleTimeout(room, s));
+      if (!room.players[s]) {
+        // 空座位：无人确认，直接视为已确认，避免结算确认阶段卡死
+        room.settleConfirms[s] = true;
+      } else if (this._shouldAutoAct(room, s)) {
+        // AI / 托管 / 断线玩家自动确认；在线真人等待手动点击「确定」
+        room.settleConfirms[s] = true;
+      } else {
+        // 在线真人：启动 60 秒确认超时定时器，超时未点「确定」则自动确认
+        this._setTimer(room, 'settle:' + s, SETTLE_TIMEOUT_MS, () => this._handleSettleTimeout(room, s));
+      }
     }
     this._broadcast(room, { type: 'settlement_confirm', confirms: room.settleConfirms.slice() });
     this._broadcastRoomState(room);
@@ -2034,8 +2050,8 @@ class GameServer {
   }
 
   _markAutoActing(p) {
-    // AI 代打中的动作：不恢复真人控制
-    void p;
+    // AI 代打中的动作：维持托管状态，不恢复真人控制（_restoreControl 的反面）
+    if (p && !p.isAI) p.hosted = true;
   }
 
   _restoreControl(p) {
@@ -2192,6 +2208,7 @@ class GameServer {
           g.turn === snap.turn &&
           g.drawnTile === snap.drawn &&
           (g.lastAction && g.lastAction.type) === snap.lastAction &&
+          (g.pending ? g.pending.responders.map((r) => r.choice).join(',') : '') === snap.choices &&
           this._shouldAutoAct(room, seat)
         ) {
           pl._autoRetry = (pl._autoRetry || 0) + 1;
@@ -2292,13 +2309,14 @@ class GameServer {
             type: g.pending.type,
             tile: g.pending.tile,
             discarder: g.pending.discarder,
-            responders: g.pending.responders.map((r) => ({
-              seat: r.seat,
-              canHu: r.canHu,
-              canGang: r.canGang,
-              canPeng: r.canPeng,
-              choice: r.choice,
-            })),
+            // 信息脱敏：仅本人可见自己的 canHu/canGang/canPeng 选项（他人只能看到座位与是否已决策）
+            responders: g.pending.responders.map((r) => {
+              const base = { seat: r.seat, choice: r.choice };
+              if (r.seat === viewerSeat) {
+                return { ...base, canHu: r.canHu, canGang: r.canGang, canPeng: r.canPeng };
+              }
+              return base;
+            }),
           }
         : null,
       winners: g.winners,
@@ -2313,7 +2331,7 @@ class GameServer {
       canLiangjin: isDrawTurn && !!g.goldTile && rules.countGold(g.hands[viewerSeat], g.goldTile) > 0 && !this._tieJinWallEnded(room, g),
       logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
-    if (isDrawTurn && !this._isHongZhong(room) && !g.tingSeats.includes(viewerSeat)) {
+    if (isDrawTurn && !this._isHongZhong(room) && !this._isTieJin(room) && !g.tingSeats.includes(viewerSeat)) {
       // 听牌提示：打出某张后，听口剩余可胡张数（4 - 已见张数）
       // 性能优化：以 手牌牌型/自身明牌/已见牌 快照为 key 缓存，手牌未变化时直接复用，
       // 避免每次广播对整副牌型做 去重手牌×34牌型×checkHu 回溯重算（约 2000 次 checkHu）。
@@ -2453,14 +2471,14 @@ class GameServer {
     };
   }
 
-  _revealHands(room) {
+  _revealHands(room, opts = {}) {
     const g = room.game;
     return [0, 1, 2, 3].map((s) =>
       room.players[s]
         ? {
             seat: s,
             name: room.players[s].name,
-            hand: rules.sortTiles(g.hands[s]),
+            hand: rules.sortTiles(this._revealHandOf(room, s, opts.skipSeat)),
             melds: g.melds[s],
             roundScore: room.players[s].roundScore,
           }
@@ -2468,12 +2486,22 @@ class GameServer {
     );
   }
 
+  // 结算展示手牌：报听玩家的暗扣牌补回，保持 14 张完整口径（skipSeat 用于排除已按胡牌结构展示的赢家）
+  _revealHandOf(room, seat, skipSeat) {
+    const g = room.game;
+    const hand = g.hands[seat].slice();
+    if (g.tingSeats.includes(seat) && g.kouTiles[seat] && seat !== skipSeat) {
+      hand.push(g.kouTiles[seat]);
+    }
+    return hand;
+  }
+
   /**
    * 结算手牌展示：基于真实手牌（_revealHands），点炮/抢杠胡赢家补入胡的那张牌（14 张完整展示），自摸不补（胡牌已在手）。
    * 仅影响展示，g.hands 原始数据与 _settleHu 局部算番副本均不受影响。
    */
   _revealHandsWithWinTile(room, winnerSeat, info) {
-    const revealed = this._revealHands(room);
+    const revealed = this._revealHands(room, { skipSeat: winnerSeat });
     if (info.winType !== 'zimo') {
       const w = revealed.find((r) => r && r.seat === winnerSeat);
       if (w) w.hand = rules.sortTiles([...w.hand, info.tile]);
@@ -2590,6 +2618,8 @@ class GameServer {
         pl.roomId = null;
         pl.seat = null;
         pl.hosted = false;
+        pl._auto = 0;
+        pl._autoRetry = 0;
         if (pl.disconnectTimer) {
           clearTimeout(pl.disconnectTimer);
           pl.disconnectTimer = null;

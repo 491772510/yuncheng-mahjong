@@ -1009,7 +1009,8 @@ function calcTieJinScoreB(info) {
     add(base + 1, '点炮', `${base}+1炮=${base + 1}`);
     for (let i = 0; i < 2; i++) add(base, '闲家', `${base}`);
   }
-  return { payers, winnerGain, G, base, dealerShare, isZimo, winnerIsDealer };
+  // 金分 = 三家各付一份金 G（庄家相关份含 G，点炮+1 不参与），故金分总额恒为 3G
+  return { payers, winnerGain, huGain: winnerGain - 3 * G, G, base, dealerShare, isZimo, winnerIsDealer };
 }
 
 module.exports = {

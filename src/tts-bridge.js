@@ -23,6 +23,8 @@ const path = require('path');
 
 const DEFAULT_TTS_API_URL = 'http://127.0.0.1:8000';
 const VALID_VOICES = ['male', 'female'];
+// 内存缓存上限（防御性：白名单文本天然受限，这里兜底防止异常路径导致无界增长）
+const MAX_CACHE_ENTRIES = 512;
 
 // 常用播报文本：34 种牌名（万/条/筒各 1-9 + 东南西北中发白）+ 动作词，
 // 与 public/app.js 的 tileSpeech()/checkSpeakEvents() 播报文本保持一致
@@ -87,6 +89,12 @@ function createTtsBridge(options = {}) {
   async function getAudioUrl(text, voice) {
     if (!text) throw new Error('text required');
     assertVoice(voice);
+    // 防刷盘（桥接层防御纵深，与 server.js 白名单一致）：仅允许预置播报文本，拒绝任意自定义文本合成落盘
+    if (text.length > 16 || !PRESET_TEXTS.includes(text)) {
+      const err = new Error('text not in whitelist');
+      err.code = 'TEXT_NOT_ALLOWED';
+      throw err;
+    }
     const key = text + '|' + voice;
     const cached = cache.get(key);
     if (cached) return cached;
@@ -99,7 +107,12 @@ function createTtsBridge(options = {}) {
     }
     const audio = await synthesize(text, voice);
     fs.mkdirSync(path.join(ttsRoot, voice), { recursive: true });
-    fs.writeFileSync(filePath, audio);
+    // 异步写盘：避免合成音频写入阻塞事件循环
+    await fs.promises.writeFile(filePath, audio);
+    if (cache.size >= MAX_CACHE_ENTRIES) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
     cache.set(key, url);
     return url;
   }

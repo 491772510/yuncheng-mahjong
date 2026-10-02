@@ -253,3 +253,13 @@ test('calcTieJinScoreB 庄家吃胡（点炮）：每家 10、点炮者 +1 炮�
   assert.equal(r.payers[2].amount, 10);
   assert.equal(r.winnerGain, 31);
 });
+
+test('calcTieJinScoreB 返回 huGain（总收入减金分，非恒 0）', () => {
+  const r = rules.calcTieJinScoreB({ winType: 'zimo', winnerDealer: false, goldCount: 2 });
+  assert.equal(r.G, 15, '2金金分=15（125体系）');
+  assert.equal(r.payers[0].amount, 20, '庄家 20');
+  assert.equal(r.payers[1].amount, 17, '偏家 17');
+  assert.equal(r.winnerGain, 54, '偏家自摸 2 金：庄 20 + 偏家各 17 = 54');
+  assert.equal(r.huGain, r.winnerGain - 3 * r.G, 'huGain = 总收入 - 3×金分');
+  assert.ok(r.huGain > 0, 'huGain 应为正数');
+});
