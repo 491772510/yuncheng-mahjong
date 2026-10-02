@@ -1015,6 +1015,7 @@ module.exports = {
   createTiles,
   shuffle,
   sortTiles,
+  rankOf,
   suitOf,
   numOf,
   tileName,

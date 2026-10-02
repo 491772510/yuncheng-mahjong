@@ -2975,13 +2975,26 @@ class GameServer {
     };
   }
 
-  // ---- 贴金 AI 决策（简易策略：胡/杠优先，有金必亮金，出牌保留金牌） ----
+  // ---- 贴金 AI 决策（简易策略：胡/杠优先，亮金按收益判断：够 1 张就停，出牌保留金牌） ----
+
+  // 亮金收益判断：跳过零收益分支，够 1 张就停（返回 true 才亮金）
+  _shouldLiangjinTieJin(g, room, seat) {
+    const gold = g.goldTile;
+    if (!gold) return false;
+    const inHand = rules.countGold(g.hands[seat], gold);
+    if (inHand <= 0) return false;
+    if (this._tieJinWallEnded(room, g)) return false;
+    const done = (g.shangjinCount || [])[seat] || 0;
+    if (done >= 3) return false;                                      // 三金封顶，第 4 张零增益
+    if (g.locked && g.locked[seat] && done + inHand < 2) return false; // 亮完照样被锁，拿不到点炮资格
+    if (done >= 1 && inHand < 2) return false;                        // 够 1 张就停：保留最后一枚万能牌
+    return true;
+  }
 
   _decideTieJinDrawAction(g, room, seat) {
     const hand = g.hands[seat];
     if (g.lastAction && g.lastAction.type === 'peng') {
-      const goldCountAfterPeng = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
-      if (goldCountAfterPeng > 0 && !this._tieJinWallEnded(room, g)) {
+      if (this._shouldLiangjinTieJin(g, room, seat)) {
         return { type: 'liangjin' };
       }
       return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };
@@ -2998,9 +3011,8 @@ class GameServer {
         return { type: 'gang', tile: m.tile, gangType: 'bugang' };
       }
     }
-    const goldCount = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
-    // 有金必亮金（拥有出牌权、牌墙未结束）：连续亮金两张后自动触发锁金
-    if (goldCount > 0 && !this._tieJinWallEnded(room, g)) {
+    // 亮金策略：够 1 张就停（先拿点炮资格；已有 1 张且这是最后一枚万能牌时保留），并跳过零收益分支
+    if (this._shouldLiangjinTieJin(g, room, seat)) {
       return { type: 'liangjin' };
     }
     return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };
@@ -3019,7 +3031,7 @@ class GameServer {
     if (candidates.length === 0) {
       return g.hands[seat].find((t) => !rules.isGold(t, g.goldTile)) || g.hands[seat][0];
     }
-    candidates.sort((a, b) => rules.numOf(a) - rules.numOf(b));
+    candidates.sort((a, b) => rules.rankOf(a) - rules.rankOf(b));
     return candidates[0];
   }
 
