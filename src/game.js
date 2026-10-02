@@ -3230,7 +3230,17 @@ class GameServer {
     const isZimo = info.winType === 'zimo';
     const payerSeats = [];
     if (isZimo) {
-      for (let i = 1; i <= 3; i++) payerSeats.push((winnerSeat + i) % 4);
+      // N1 修复：B 模式偏家自摸时 res.payers[0] 为庄家份（dealerShare），
+      // 必须落到实际庄家座位，另两份 base 归两个偏家；不能按座次顺排。
+      if (mode === 'B' && !winnerDealer) {
+        payerSeats.push(g.dealer);
+        for (let i = 1; i <= 3; i++) {
+          const s = (winnerSeat + i) % 4;
+          if (s !== winnerSeat && s !== g.dealer) payerSeats.push(s);
+        }
+      } else {
+        for (let i = 1; i <= 3; i++) payerSeats.push((winnerSeat + i) % 4);
+      }
     } else {
       payerSeats.push(info.discarder);
       for (let i = 1; i <= 3; i++) {

@@ -544,6 +544,37 @@ test('计分B 庄家自摸共收 30（2金=15：每家 7+8? 口径为庄家身�
   cleanupServer(srv);
 });
 
+test('计分B 偏家自摸：庄家份必须落到实际庄家座位（N1 庄家份额错配回归）', () => {
+  const { srv, room, wss } = makeRoom4({ scoreMode: 'B' });
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  g.dealer = 2; // 庄家不是胡家下家（seat0 下家为 seat1），验证错配修复
+  g.hands[0] = SELFHU_W9_14.slice();
+  g.melds[0] = [];
+  g.shangjinCount[0] = 1;
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w9';
+  send(wss[0], { type: 'hu' });
+  const w = g.winners;
+  // 1金 → G=5，base=1+1+5=7，偏家自摸：庄家付 base+3=10，两偏家各 7 → 共 24
+  assert.equal(w.scoreMode, 'B');
+  assert.equal(w.goldScore, 5);
+  assert.equal(w.winnerGain, 24, '庄家10 + 偏家7×2 = 24');
+  const dealerPay = w.payments.find((p) => p.role === '庄家');
+  assert.ok(dealerPay, '应存在庄家角色支付项');
+  assert.equal(dealerPay.from, 2, '庄家份必须由 seat2（实际庄家）支付');
+  assert.equal(dealerPay.amount, 10, '庄家份=base+3=10');
+  const biasPays = w.payments.filter((p) => p.role === '偏家');
+  assert.equal(biasPays.length, 2, '两个偏家支付项');
+  for (const p of biasPays) {
+    assert.equal(p.amount, 7, '偏家份=base=7');
+    assert.ok(p.from !== 0 && p.from !== 2, '偏家支付者不能是胡家或庄家');
+  }
+  cleanupServer(srv);
+});
+
 // ============ 截胡（不可一炮多响，逆时针最近） ============
 
 test('截胡单响：多个玩家同时可胡时仅逆时针离点炮者最近者胡', () => {
