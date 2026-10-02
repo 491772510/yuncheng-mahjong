@@ -357,6 +357,45 @@ test('贴金 AI 亮金策略：已有1张但手上还有第2张金时继续亮�
   cleanupServer(srv);
 });
 
+test('贴金 AI 亮金策略：被锁且亮完累计仍不足 2 张时不再亮金', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 已被锁金、已亮 0 张、手上仅 1 张金牌 w5 → 亮完累计仍 < 2，拿不到点炮资格，保留不亮
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
+  g.melds[0] = [];
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
+  g.locked = [true, false, false, false];
+  g.lockSeat = 0;
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w5';
+  g.lastAction = null;
+  assert.equal(srv._decideTieJinDrawAction(g, room, 0).type, 'play', '被锁且亮完仍 < 2：保留万能牌，回 play');
+  cleanupServer(srv);
+});
+
+test('贴金 AI 亮金策略：碰后分支已亮1张且仅剩1张金时停手不亮', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 刚碰牌（碰后分支），已亮 1 张、手上仅剩 1 张金牌 w5 → 够 1 张就停，不再亮
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'w5'];
+  g.melds[0] = [];
+  g.shangjinCount = [1, 0, 0, 0];
+  g.shangjinTiles = [['w5'], [], [], []];
+  g.locked = [false, false, false, false];
+  g.lockSeat = -1;
+  g.turn = 0;
+  g.stage = 'draw';
+  g.lastAction = { type: 'peng', tile: 'b1', seat: 0 };
+  assert.equal(srv._decideTieJinDrawAction(g, room, 0).type, 'play', '碰后且仅剩1张金：保留万能牌，回 play');
+  cleanupServer(srv);
+});
+
 test('被锁者只能自摸：被锁时点炮无胡响应；解锁后可点炮', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;

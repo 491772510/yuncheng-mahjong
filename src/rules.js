@@ -68,6 +68,13 @@ function sortTiles(hand) {
   return hand.slice().sort((a, b) => rankOf(a) - rankOf(b));
 }
 
+/** 出牌优先级：孤张字牌最先打（字牌只能成刻子，成搭潜力最低），其余按 rankOf */
+function discardRank(t) {
+  if (t === HONG_ZHONG) return -1;                      // 红中万能牌，永不出（保险）
+  if (HONOR_ORDER[t] !== undefined) return HONOR_ORDER[t] - 10;  // 字牌：-10..-4
+  return rankOf(t);                                     // 数牌：1..29
+}
+
 function suitOf(t) { return t[0]; }
 function numOf(t) { return Number(t[1]); }
 function tileName(t) {
@@ -1016,6 +1023,7 @@ module.exports = {
   shuffle,
   sortTiles,
   rankOf,
+  discardRank,
   suitOf,
   numOf,
   tileName,

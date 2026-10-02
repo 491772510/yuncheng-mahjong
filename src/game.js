@@ -2849,7 +2849,7 @@ class GameServer {
         candidates.push(t);
       }
     }
-    candidates.sort((a, b) => rules.numOf(a) - rules.numOf(b));
+    candidates.sort((a, b) => rules.discardRank(a) - rules.discardRank(b));
     const tile = candidates[0];
     if (tile) return tile;
     return g.hands[seat].find((t) => t !== rules.HONG_ZHONG) || g.hands[seat][0];
@@ -2986,7 +2986,7 @@ class GameServer {
     if (this._tieJinWallEnded(room, g)) return false;
     const done = (g.shangjinCount || [])[seat] || 0;
     if (done >= 3) return false;                                      // 三金封顶，第 4 张零增益
-    if (g.locked && g.locked[seat] && done + inHand < 2) return false; // 亮完照样被锁，拿不到点炮资格
+    if (g.locked && g.locked[seat] && done + inHand < 2) return false; // 亮完累计仍 < 2，拿不到点炮资格
     if (done >= 1 && inHand < 2) return false;                        // 够 1 张就停：保留最后一枚万能牌
     return true;
   }
@@ -3031,7 +3031,7 @@ class GameServer {
     if (candidates.length === 0) {
       return g.hands[seat].find((t) => !rules.isGold(t, g.goldTile)) || g.hands[seat][0];
     }
-    candidates.sort((a, b) => rules.rankOf(a) - rules.rankOf(b));
+    candidates.sort((a, b) => rules.discardRank(a) - rules.discardRank(b));
     return candidates[0];
   }
 
