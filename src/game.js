@@ -13,6 +13,8 @@
 
 const rules = require('./rules');
 const ai = require('./ai');
+const aiHongZhong = require('./ai-hongzhong');
+const aiTieJin = require('./ai-tiejin');
 
 const RECONNECT_MS = 60000; // 断线重连窗口
 const HEARTBEAT_INTERVAL_MS = 30000; // 心跳 ping 间隔
@@ -2146,7 +2148,7 @@ class GameServer {
             if (g.drawnTile !== null) {
               if (rules.checkHu(g.hands[seat], g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo')) {
                 const decision = this._isHongZhong(room)
-                  ? this._decideHongZhongDrawAction(g, room, seat)
+                  ? aiHongZhong.decideDrawAction(g, room, seat)
                   : ai.decideDrawAction(g, room, seat);
                 if (decision.type === 'hu') this._hu(pl, {});
                 else this._pass(pl);
@@ -2161,9 +2163,9 @@ class GameServer {
             return; // 报听玩家尚未摸牌：等待系统摸打，不代打
           }
           const decision = this._isTieJin(room)
-            ? this._decideTieJinDrawAction(g, room, seat)
+            ? aiTieJin.decideDrawAction(g, room, seat)
             : (this._isHongZhong(room)
-              ? this._decideHongZhongDrawAction(g, room, seat)
+              ? aiHongZhong.decideDrawAction(g, room, seat)
               : ai.decideDrawAction(g, room, seat));
           if (decision.type === 'hu') this._hu(pl, {});
           else if (decision.type === 'ting') this._ting(pl, { tile: decision.tile });
@@ -2174,9 +2176,9 @@ class GameServer {
           const r = g.pending.responders.find((x) => x.seat === seat);
           if (r && r.choice === null) {
             const choice = this._isTieJin(room)
-              ? this._decideTieJinResponse(g, room, seat, r)
+              ? aiTieJin.decideResponse(g, room, seat, r)
               : (this._isHongZhong(room)
-                ? this._decideHongZhongResponse(g, room, seat, r)
+                ? aiHongZhong.decideResponse(g, room, seat, r)
                 : ai.decideResponse(g, room, seat, r));
             if (choice === 'hu') this._hu(pl, {});
             else if (choice === 'gang') this._gang(pl, {});
@@ -2813,54 +2815,8 @@ class GameServer {
     };
   }
 
-  // ---- 红中 AI 决策（简易策略：自摸/杠优先，出牌保留红中、优先拆孤张） ----
+  // 红中/贴金 AI 决策已拆分为独立模块：src/ai-hongzhong.js、src/ai-tiejin.js（调度见 _scheduleAutoAct）
 
-  _decideHongZhongDrawAction(g, room, seat) {
-    const hand = g.hands[seat];
-    // 碰后（未摸牌）：手牌结构不允许胡/杠，只能出牌（与 _buildDrawPromptHongZhong 保持一致，防止 AI 卡死）
-    if (g.lastAction && g.lastAction.type === 'peng') {
-      return { type: 'play', tile: this._chooseHongZhongDiscard(g, room, seat) };
-    }
-    if (rules.checkHuHongZhong(hand, g.melds[seat])) {
-      return { type: 'hu' };
-    }
-    const cnt = rules.countTiles(hand);
-    for (const [t, c] of cnt) {
-      if (c === 4) return { type: 'gang', tile: t, gangType: 'angang' };
-    }
-    for (const m of g.melds[seat]) {
-      if (m.type === 'peng' && cnt.get(m.tile) >= 1) {
-        return { type: 'gang', tile: m.tile, gangType: 'bugang' };
-      }
-    }
-    return { type: 'play', tile: this._chooseHongZhongDiscard(g, room, seat) };
-  }
-
-  _chooseHongZhongDiscard(g, room, seat) {
-    const cnt = rules.countTiles(g.hands[seat]);
-    const candidates = [];
-    for (const [t, c] of cnt) {
-      if (t === rules.HONG_ZHONG) continue; // 红中万能牌永不出
-      if (c === 1) candidates.push(t); // 孤张优先
-    }
-    if (candidates.length === 0) {
-      for (const [t, c] of cnt) {
-        if (t === rules.HONG_ZHONG) continue;
-        candidates.push(t);
-      }
-    }
-    candidates.sort((a, b) => rules.numOf(a) - rules.numOf(b));
-    const tile = candidates[0];
-    if (tile) return tile;
-    return g.hands[seat].find((t) => t !== rules.HONG_ZHONG) || g.hands[seat][0];
-  }
-
-  _decideHongZhongResponse(g, room, seat, r) {
-    if (r.canHu) return 'hu';
-    if (r.canGang) return 'gang';
-    if (r.canPeng) return 'peng';
-    return 'pass';
-  }
 
   // ============ 运城贴金麻将流程模块（variant='tiejin'：136 张、庄14闲13、禁吃可碰杠、金牌万能、亮金/锁金/流局/计分开关） ============
 
@@ -2975,60 +2931,7 @@ class GameServer {
     };
   }
 
-  // ---- 贴金 AI 决策（简易策略：胡/杠优先，有金必亮金，出牌保留金牌） ----
 
-  _decideTieJinDrawAction(g, room, seat) {
-    const hand = g.hands[seat];
-    if (g.lastAction && g.lastAction.type === 'peng') {
-      const goldCountAfterPeng = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
-      if (goldCountAfterPeng > 0 && !this._tieJinWallEnded(room, g)) {
-        return { type: 'liangjin' };
-      }
-      return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };
-    }
-    if (rules.checkHuTieJin(hand, g.melds[seat], g.goldTile)) {
-      return { type: 'hu' };
-    }
-    const cnt = rules.countTiles(hand);
-    for (const [t, c] of cnt) {
-      if (c === 4 && !rules.isGold(t, g.goldTile)) return { type: 'gang', tile: t, gangType: 'angang' };
-    }
-    for (const m of g.melds[seat]) {
-      if ((m.type === 'peng' || m.type === 'bugang') && (cnt.get(m.tile) || 0) >= 1 && !rules.isGold(m.tile, g.goldTile)) {
-        return { type: 'gang', tile: m.tile, gangType: 'bugang' };
-      }
-    }
-    const goldCount = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
-    // 有金必亮金（拥有出牌权、牌墙未结束）：连续亮金两张后自动触发锁金
-    if (goldCount > 0 && !this._tieJinWallEnded(room, g)) {
-      return { type: 'liangjin' };
-    }
-    return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };
-  }
-
-  _chooseTieJinDiscard(g, room, seat) {
-    const cnt = rules.countTiles(g.hands[seat]);
-    const candidates = [];
-    for (const [t, c] of cnt) {
-      if (rules.isGold(t, g.goldTile)) continue; // 金牌万能牌保留
-      if (c === 1) candidates.push(t);
-    }
-    if (candidates.length === 0) {
-      for (const [t, c] of cnt) if (!rules.isGold(t, g.goldTile)) candidates.push(t);
-    }
-    if (candidates.length === 0) {
-      return g.hands[seat].find((t) => !rules.isGold(t, g.goldTile)) || g.hands[seat][0];
-    }
-    candidates.sort((a, b) => rules.numOf(a) - rules.numOf(b));
-    return candidates[0];
-  }
-
-  _decideTieJinResponse(g, room, seat, r) {
-    if (r.canHu) return 'hu';
-    if (r.canGang) return 'gang';
-    if (r.canPeng) return 'peng';
-    return 'pass';
-  }
 }
 
 module.exports = { GameServer, HEARTBEAT_INTERVAL_MS, HEARTBEAT_MAX_MISS };
