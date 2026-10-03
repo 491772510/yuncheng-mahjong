@@ -99,7 +99,6 @@ class GameServer {
         case 'dissolve': return this._dissolve(p);
         case 'play_tile': return this._playTile(p, msg);
         case 'ting': return this._ting(p, msg);
-        case 'koupoint': return this._koupoint(p, msg);
         case 'peng': return this._peng(p);
         case 'gang': return this._gang(p, msg);
         case 'hu': return this._hu(p);
@@ -178,9 +177,6 @@ class GameServer {
           if (r && r.choice === null) {
             this._send(p, { type: 'action_prompt', prompt: this._buildResponsePrompt(room, r) });
           }
-        } else if (g.stage === 'koupoint' && g.kouPoints[p.seat] == null) {
-          // 重连补发扣点提示，避免前端无操作按钮卡在扣点阶段
-          this._send(p, { type: 'action_prompt', prompt: { type: 'koupoint' } });
         }
       }
       if (room.game && room.game.winners) this._sendSettlement(room, p);
@@ -213,10 +209,6 @@ class GameServer {
         p.hosted = true;
         // 若正等该玩家响应 → 立即视为过，避免卡局
         const g = room.game;
-        if (g.stage === 'koupoint' && g.kouPoints[p.seat] == null) {
-          // 扣点阶段断线：立即自动补扣点，避免四座填不满卡在扣点阶段无法开局
-          this._autoFillKoupoint(room, p.seat);
-        }
         if (g.stage === 'response' && g.pending) {
           const r = g.pending.responders.find((x) => x.seat === p.seat);
           if (r && r.choice === null) {
@@ -530,7 +522,7 @@ class GameServer {
 
   // ============ 牌局 ============
 
-  /** 发牌开局（三玩法统一）：普通 136 张扣点玩法；红中 112 张无扣点直接开局；贴金翻金母定金牌直接开局 */
+  /** 发牌开局（三玩法统一）：普通 136 张扣点点；红中 112 张直接开局；贴金翻金母定金牌直接开局 */
   _dealRound(room) {
     room.roundNo = (room.roundNo || 0) + 1;
     const isHz = this._isHongZhong(room);
@@ -548,7 +540,6 @@ class GameServer {
       melds: [[], [], [], []],
       discards: [[], [], [], []],
       kouTiles: [[], [], [], []],
-      kouPoints: isHz || isTj ? [1, 1, 1, 1] : [null, null, null, null], // 红中/贴金无扣点玩法，固定 1
       gangLogs: [], // 本局杠分明细
       turn: -1,
       stage: 'draw',
@@ -611,88 +602,11 @@ class GameServer {
       this._startPlay(room, g.dealer);
       return;
     }
-    // 普通：开局扣点（默认开启）：每人扣 1-4 点（AI 随机），全部选完后庄家摸第 14 张；关闭时跳过扣点，倍数固定 ×1
-    if (room.settings.enableKoupoint === false) {
-      g.kouPoints = [1, 1, 1, 1]; // 关闭：不乘扣点
-      this._broadcastRoomState(room);
-      this._broadcastGameState(room);
-      this._drawCard(room, g.dealer, false);
-      return;
-    }
-    g.stage = 'koupoint';
-    for (let s = 0; s < 4; s++) {
-      const pl = room.players[s];
-      if (!pl) continue;
-      if (pl.isAI || pl.hosted || !pl.connected) {
-        // AI / 托管 / 断线真人：自动随机补 1-4 扣点，保证不卡扣点阶段
-        g.kouPoints[s] = 1 + Math.floor(Math.random() * 4);
-        this._log(room, `${this._pName(room, s)} 自动暗扣（${g.kouPoints[s]} 点）`);
-      } else {
-        // 在线未托管真人：等待选择；超时未选则自动补
-        this._setTimer(room, 'koupoint:' + s, HUMAN_TIMEOUT_MS, () => {
-          this._autoFillKoupoint(room, s);
-        });
-      }
-    }
+    // 普通：发牌后庄家直接摸第 14 张开局（已去除开局扣点玩法）
     this._broadcastRoomState(room);
     this._broadcastGameState(room);
-    this._promptKoupoint(room);
-    if (g.kouPoints.every((x) => x != null)) this._tryStartAfterKouPoint(room);
-    return;
-  }
-
-  /** 自动为未选扣点座位随机补 1-4 点（AI/托管/断线/超时），确保四座填满正常开局 */
-  _autoFillKoupoint(room, seat) {
-    const g = room && room.game;
-    if (!room || !g || room.state !== 'playing' || g.stage !== 'koupoint') return;
-    if (g.kouPoints[seat] != null) return;
-    g.kouPoints[seat] = 1 + Math.floor(Math.random() * 4);
-    this._log(room, `${this._pName(room, seat)} 未选择扣点，系统自动暗扣（${g.kouPoints[seat]} 点）`);
-    const pl = room.players[seat];
-    if (pl && !pl.isAI && !pl.hosted) {
-      // 在线真人超时未确认：进入托管，由 AI 代打后续出牌
-      pl.hosted = true;
-      this._log(room, `${this._pName(room, seat)} 扣点阶段未确认，已由 AI 托管`);
-      this._broadcastRoomState(room);
-    }
-    this._broadcastGameState(room);
-    if (g.kouPoints.every((x) => x != null)) this._tryStartAfterKouPoint(room);
-  }
-
-  /** 136 扣点阶段：通知未选择扣点的真人玩家 */
-  _promptKoupoint(room) {
-    const g = room.game;
-    for (let s = 0; s < 4; s++) {
-      const pl = room.players[s];
-      if (pl && !pl.isAI && pl.connected && g.kouPoints[s] == null) {
-        this._send(pl, { type: 'action_prompt', prompt: { type: 'koupoint' } });
-      }
-    }
-  }
-
-  /** 136 扣点选择 */
-  _koupoint(p, msg) {
-    const room = this.rooms.get(p.roomId);
-    const g = room && room.game;
-    if (this._isHongZhong(room)) return this._err(p, '红中麻将无扣点玩法');
-    if (!room || !g || room.state !== 'playing' || g.stage !== 'koupoint') {
-      return this._err(p, '当前不在扣点阶段');
-    }
-    const points = Number(msg && msg.points);
-    if (![1, 2, 3, 4].includes(points)) return this._err(p, '扣点必须为 1-4 点');
-    if (g.kouPoints[p.seat] != null) return this._err(p, '本局已选择过扣点');
-    g.kouPoints[p.seat] = points;
-    this._log(room, `${this._pName(room, p.seat)} 已暗扣（${points} 点）`);
-    this._broadcastGameState(room);
-    if (g.kouPoints.every((x) => x != null)) this._tryStartAfterKouPoint(room);
-  }
-
-  /** 扣点全部选择完成后，庄家摸第 14 张正式开始 */
-  _tryStartAfterKouPoint(room) {
-    const g = room.game;
-    if (!g || g.stage !== 'koupoint') return;
-    if (!g.kouPoints.every((x) => x != null)) return;
     this._drawCard(room, g.dealer, false);
+    return;
   }
 
   /** 摸牌 / 杠后补牌（三玩法统一）：流局判定按玩法分支；普通报听锁死摸打，红中/贴金直接行动，贴金解除过胡限制 */
@@ -970,12 +884,11 @@ class GameServer {
     this._afterTurnStart(room, seat);
   }
 
-  /** 136 模式杠分：明杠/补杠=该牌点数（字牌 10 点）、暗杠=点数×2，再乘以杠主本局开局扣点数；其余三家各付一份给杠主；杠时即时结算；抢杠胡成立时不结算（调用方在抢杠分支直接返回，不会进入本方法） */
+  /** 136 模式杠分：明杠/补杠=该牌点数（字牌 10 点）、暗杠=点数×2；其余三家各付一份给杠主；杠时即时结算；抢杠胡成立时不结算（调用方在抢杠分支直接返回，不会进入本方法） */
   _settleGangScore(room, seat, tile, type) {
     const g = room.game;
     const points = rules.tilePoints(tile); // 数牌按面值、字牌 10 点
-    const kou = g.kouPoints[seat] || 1; // 杠主本局开局扣点（开关关闭时恒为 1）
-    const perSeat = (type === 'angang' ? points * 2 : points) * kou;
+    const perSeat = type === 'angang' ? points * 2 : points;
     const gain = perSeat * 3;
     for (let s = 0; s < 4; s++) {
       if (s === seat || !room.players[s]) continue;
@@ -984,13 +897,13 @@ class GameServer {
     }
     room.players[seat].score += gain;
     room.players[seat].roundScore += gain;
-    g.gangLogs.push({ seat, tile, type, perSeat, points, kou });
+    g.gangLogs.push({ seat, tile, type, perSeat, points, kou: 1 });
     const typeName = type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : '明杠';
-    this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点×扣${kou}），每家 ${perSeat} 分`);
+    this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点），每家 ${perSeat} 分`);
   }
 
   /** 杠分支付明细条目（统一支付明细表用）：
-   *  136：明杠/补杠=牌点、暗杠=牌点×2，乘杠主扣点，其余三家各付一份给杠主；
+   *  136：明杠/补杠=牌点、暗杠=牌点×2，其余三家各付一份给杠主；
    *  红中（lg.hz）：杠分当场已结算——放杠(有payer)放杠者独付2手、补杠每家1手、暗杠每家2手，这里仅补展示明细
    */
   _buildGangPayments(room) {
@@ -1024,7 +937,6 @@ class GameServer {
         continue;
       }
       const typeName = lg.type === 'angang' ? '暗杠' : lg.type === 'bugang' ? '补杠' : '明杠';
-      const kouText = lg.kou != null && lg.kou > 1 ? '×扣' + lg.kou : '';
       const rows = [];
       for (let s = 0; s < 4; s++) {
         if (s === lg.seat) continue;
@@ -1032,7 +944,7 @@ class GameServer {
       }
       pays.push({
         kind: 'gang',
-        title: `${typeName} ${rules.tileName(lg.tile)}（${lg.points}点${kouText}）`,
+        title: `${typeName} ${rules.tileName(lg.tile)}（${lg.points}点）`,
         toSeat: lg.seat,
         toAmount: lg.perSeat * 3,
         rows,
@@ -1462,7 +1374,6 @@ class GameServer {
         fanNames: ['无番'],
         zhaMaCount,
         zhaMaTiles: zhaMaTiles.slice(),
-        kouPoints: g.kouPoints.slice(),
         gangLogs: g.gangLogs.slice(),
         score: winnerGain,
         tile: info.tile,
@@ -1485,7 +1396,7 @@ class GameServer {
     const winLabel =
       info.winType === 'zimo' ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
 
-    // ===== 计分模型：乘算（点数 × 牌型倍数 × 扣点）或 加算（底分 + 固定加番）；庄底独立开关 =====
+    // ===== 计分模型：乘算（点数 × 牌型倍数）或 加算（底分 + 固定加番）；庄底独立开关 =====
       const tilePoints = rules.tilePoints(info.tile);
       const multOpts = {
         qingyise: { enabled: room.settings.enableQingYiSe, mult: room.settings.qingYiSeMult },
@@ -1502,12 +1413,11 @@ class GameServer {
 
       let mult = 1;
       let multNames = [];
-      let kp = null;
       let addPoints = 0;
       let addNames = [];
       let baseScore; // 每份基础分（不含庄底）
       if (scoreModel === 'add') {
-        // 加算（洪洞固定加分）：底分=胡牌点数（自摸翻倍）+ 清一色/一条龙/七小对+20、豪七额外+40（叠加不翻倍），无扣点
+        // 加算（洪洞固定加分）：底分=胡牌点数（自摸翻倍）+ 清一色/一条龙/七小对+20、豪七额外+40（叠加不翻倍）
         const addCalc = rules.calcAddPoints136(
           hand,
           { winType: info.winType, gangShang, qiangGang: !!info.qiangGang, melds: g.melds[winnerSeat] },
@@ -1517,7 +1427,7 @@ class GameServer {
         addNames = addCalc.names;
         baseScore = tilePoints * (info.winType === 'zimo' ? 2 : 1) + addPoints;
       } else {
-        // 乘算：点数 × 牌型倍数 × 自己扣点
+        // 乘算：点数 × 牌型倍数
         const multCalc = rules.calcMultiplier136(
           hand,
           { winType: info.winType, gangShang, qiangGang: !!info.qiangGang, melds: g.melds[winnerSeat] },
@@ -1526,8 +1436,7 @@ class GameServer {
         );
         mult = multCalc.mult;
         multNames = multCalc.names;
-        kp = g.kouPoints[winnerSeat] || 1; // 胡牌者自己的扣点（扣点关闭时恒为1）
-        baseScore = tilePoints * (info.winType === 'zimo' ? 2 : 1) * mult * kp;
+        baseScore = tilePoints * (info.winType === 'zimo' ? 2 : 1) * mult;
       }
       const discarderTing = info.winType !== 'zimo' && g.tingSeats.includes(info.discarder);
 
@@ -1613,12 +1522,9 @@ class GameServer {
         winType: info.winType,
         mode136: true,
         scoreModel,
-        enableKoupoint: room.settings.enableKoupoint === true,
         tilePoints,
         mult,
         multNames,
-        kouPoint: kp,
-        kouPoints: g.kouPoints.slice(), // 结算公开全部玩家扣点
         addPoints,
         addNames,
         zhuangBonus,
@@ -1639,7 +1545,7 @@ class GameServer {
             : '（放炮者未报听，独赔3份）';
       const calcLog = scoreModel === 'add'
         ? `${tilePoints}点${info.winType === 'zimo' ? '×2' : ''}${addPoints ? `+${addPoints}（${addNames.join('、')}）` : ''}${zhuangBonus ? `+庄底${zhuangBonus}` : ''}`
-        : `${tilePoints}点 × ${mult}倍 × 扣${kp}`;
+        : `${tilePoints}点 × ${mult}倍`;
       this._log(
         room,
         `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${calcLog}${payLabel} → ${score}分）`
@@ -1680,8 +1586,6 @@ class GameServer {
     const winners = {
       type: 'draw',
       mode136: true,
-      enableKoupoint: room.settings.enableKoupoint === true,
-      kouPoints: g.kouPoints.slice(), // 结算公开扣点
       gangLogs: g.gangLogs.slice(), // 杠分明细（杠分照常结算时已即时入账；贴金流局回滚不计）
       payments: isHz || isTj ? [] : this._buildGangPayments(room), // 流局无胡牌支付，普通仅杠分明细
       hands: this._revealHands(room),
@@ -2122,10 +2026,7 @@ class GameServer {
     this._log(room, `${p.name} 手动开启托管`);
     if (room.state === 'playing' && room.game) {
       const g = room.game;
-      if (g.stage === 'koupoint' && g.kouPoints[p.seat] == null) {
-        // 扣点阶段未选：自动补扣点，避免四座未填满卡开局
-        this._autoFillKoupoint(room, p.seat);
-      } else if (g.stage === 'response' && g.pending) {
+      if (g.stage === 'response' && g.pending) {
         const r = g.pending.responders.find((x) => x.seat === p.seat);
         if (r && r.choice === null) {
           r.choice = 'pass';
@@ -2350,8 +2251,7 @@ class GameServer {
       newTile: (g.newTiles && g.newTiles[viewerSeat]) || null,
       yourSeat: viewerSeat,
       isDrawTurn,
-      // 扣点选择后全公开；报听扣牌上架暗牌脱敏（所有人只见背面，不含牌面）与杠分明细全公开
-      kouPoints: g.kouPoints.slice(),
+      // 报听扣牌上架暗牌脱敏（所有人只见背面，不含牌面）与杠分明细全公开
       kouTiles: g.kouTiles.map((t) => (t ? 'back' : null)),
       gangLogs: g.gangLogs.slice(),
       players,
@@ -2635,7 +2535,6 @@ class GameServer {
       yiTiaoLongMult,
       shiSanYaoMult,
       dealerFlow: s.dealerFlow === 'keep' ? 'keep' : 'next', // 流局庄家：keep=连庄 / next=下家接庄（默认）
-      enableKoupoint: scoreModel === 'add' ? false : s.enableKoupoint === true, // 开局扣点开关（默认关闭；加算模型无扣点，强制无效）
       scoreModel,
       zhuangDi: s.zhuangDi !== false, // 庄底加分开关（默认开启：非自摸+5 / 自摸+10）
     };

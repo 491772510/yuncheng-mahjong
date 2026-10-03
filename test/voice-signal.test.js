@@ -64,7 +64,7 @@ function cleanupServer(srv) {
   }
 }
 
-const BASE_SETTINGS = { enableKoupoint: false, aiFill: false, totalRounds: 4 };
+const BASE_SETTINGS = { aiFill: false, totalRounds: 4 };
 
 // 构造：房主甲 + 真人乙同房间，房主再补一个 AI；丙在大厅（不在房间）
 function setupScenario() {

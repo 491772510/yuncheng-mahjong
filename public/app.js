@@ -165,12 +165,7 @@
         state.prompt = msg.prompt;
         state.tingPick = false;
         state.selectedIndex = null;
-        if (msg.prompt && msg.prompt.type === 'koupoint') {
-          showKoupointModal();
-        } else {
-          hideModal('koupoint-modal');
-          renderActions();
-        }
+        renderActions();
         break;
       case 'settlement':
         if (state.room && state.room.state === 'settled') break; // 总结算弹窗已含最后一局摘要
@@ -634,8 +629,6 @@
     const goldTile = game.goldTile || null;
     const meldHtml = renderMelds(p.melds, false, goldTile);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
-    const kouOn = state.room && state.room.settings && state.room.settings.enableKoupoint === true;
-    const kp = hz || !kouOn ? null : (game.kouPoints && game.kouPoints[seat]);
     const tj = game.goldTile != null;
     const shangjin = (tj && game.shangjinTiles && game.shangjinTiles[seat]) || null;
     const lockedBadge = tj && game.locked && game.locked[seat] ? '<span class="pc-lock">锁金</span>' : '';
@@ -647,7 +640,6 @@
         ${p.hosted ? '<span class="pc-host">托管</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
         ${p.handCount != null ? `<span class="pc-hand">手牌${p.handCount}</span>` : ''}
-        ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
         ${lockedBadge}
         <span class="pc-name">${esc(p.name)}</span>
         <span class="pc-score">${p.score}</span>
@@ -704,8 +696,6 @@
     const hand = renderSelfHand(p);
     const meldHtml = renderMelds(p.melds, true, goldTile);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
-    const kouOn = state.room && state.room.settings && state.room.settings.enableKoupoint === true;
-    const kp = hz || !kouOn ? null : (game.kouPoints && game.kouPoints[seat]);
     const tj = game.goldTile != null;
     const shangjin = (tj && game.shangjinTiles && game.shangjinTiles[seat]) || null;
     const lockedBadge = tj && game.locked && game.locked[seat] ? '<span class="pc-lock">锁金</span>' : '';
@@ -715,7 +705,6 @@
         ${p.isAI ? '<span class="pc-ai">AI</span>' : ''}
         ${p.hosted ? '<span class="pc-host">AI托管中</span>' : ''}
         ${p.ting ? '<span class="pc-ting">报听</span>' : ''}
-        ${kp != null ? `<span class="pc-koupoint">扣${kp}点</span>` : ''}
         ${lockedBadge}
         <span class="pc-name">${esc(p.name)}（我）</span>
         <span class="pc-score">${p.score}</span>
@@ -1047,39 +1036,6 @@
     }, 0);
   }
 
-  // ================= 136 扣点弹窗 =================
-  let koupointSelected = null;
-  function showKoupointModal() {
-    koupointSelected = null;
-    // 弹窗内同步展示自己的手牌，方便参考决定扣几点
-    const game = state.game;
-    const mySeat = game && game.yourSeat;
-    const myHand = game && game.players && game.players[mySeat] && game.players[mySeat].hand;
-    $('#koupoint-hand').innerHTML = myHand && myHand.length
-      ? myHand.map((t) => tileHtml(t)).join('')
-      : '<span class="hand-empty">手牌加载中…</span>';
-    const box = $('#koupoint-options');
-    box.innerHTML = [1, 2, 3, 4].map((n) => `
-      <button class="koupoint-opt" data-points="${n}">
-        <span class="kp-num">${n}</span>
-        <span class="kp-tip">×${n}</span>
-      </button>`).join('');
-    box.querySelectorAll('.koupoint-opt').forEach((b) => {
-      b.onclick = () => {
-        box.querySelectorAll('.koupoint-opt').forEach((x) => x.classList.remove('selected'));
-        b.classList.add('selected');
-        koupointSelected = Number(b.dataset.points);
-        $('#koupoint-confirm').classList.remove('hidden');
-      };
-    });
-    $('#koupoint-confirm').onclick = () => {
-      if (koupointSelected == null) return;
-      send({ type: 'koupoint', points: koupointSelected });
-      hideModal('koupoint-modal');
-    };
-    showModal('koupoint-modal');
-  }
-
   // ================= 侧栏 =================
   function renderSidePanel() {
     if (!state.room) return;
@@ -1225,7 +1181,7 @@
 
   // ================= 结算 =================
   // 统一支付明细表：胡牌支付（自摸三家各付1份 / 点炮已报听三家各出1份 / 点炮未报听独赔3份）
-  // + 杠分（明杠/补杠=该牌点数，暗杠=点数×2，字牌=10点；再乘杠主扣点，其余三家各付一份）
+  // + 杠分（明杠/补杠=该牌点数，暗杠=点数×2，字牌=10点；其余三家各付一份）
   // 数据来自后端 winners.payments（[{kind:'hu'|'gang', title, toSeat, toAmount, rows:[{seat,amount,role}]}]）
   function paymentTableHtml(result) {
     const pays = result && result.payments;
@@ -1402,12 +1358,12 @@
   /**
    * 结算详情公共渲染：单局结算（showSettlement）与房间结算"最后一局"（showSettleModal）共用，
    * 消除约 60+ 行重复模板。内部复用 paymentTableHtml / tileText / tileHtml / renderMelds / esc。
-   * @param {object} result 结算数据（type='hu'|'draw'，含 hands/kouPoints/winnerSeat/payments 等）
+   * @param {object} result 结算数据（type='hu'|'draw'，含 hands/winnerSeat/payments 等）
    * @param {object} [opts]
    * @param {string} [opts.prefix='']  头部前缀，房间结算用"最后一局："
    * @param {string} [opts.winnerLabel='（胡）'] 胜者手牌标记，单局结算"（胡）"、房间结算"（赢）"
    * @param {boolean} [opts.compact=false] 紧凑单行模式（房间结算），hu 分支分数并入首行、放炮者说明用全角括号；
-   *                                        draw 分支省略"牌墙剩 6 墩/听牌者/扣点/支付明细"细节行
+   *                                        draw 分支省略"牌墙剩 6 墩/听牌者/支付明细"细节行
    * @returns {string} settle-head + 支付明细 + settle-hands 的 HTML
    */
   function buildSettleHtml(result, opts = {}) {
@@ -1417,15 +1373,6 @@
     const winnerLabel = opts.winnerLabel || '（胡）';
     const compact = !!opts.compact;
     const isAdd = result.scoreModel === 'add';
-    const kouOn = result.enableKoupoint === true;
-    const kouText = isAdd
-      ? '加分制（固定加番，无扣点）'
-      : kouOn
-        ? (result.kouPoints || []).map((v, s) => {
-            const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
-            return `${esc(nm)} 扣${v}点`;
-          }).join(' · ')
-        : '';
     const handsHtml = (withScore) => (result.hands || []).map((h) => h ? `
         <div class="row">
           <b>${esc(h.name)}${h.seat === result.winnerSeat ? winnerLabel : ''}</b>
@@ -1443,8 +1390,7 @@
       return `
         <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，${flowLabel}）</div></div>
         <div class="settle-sub">${ting ? '听牌者：' + ting : '无人听牌'}</div>
-        ${kouText ? `<div class="settle-sub">扣点：${kouText}</div>` : ''}
-        ${paymentTableHtml(result)}
+          ${paymentTableHtml(result)}
         ${settleHands}`;
     }
     const winner = result.hands && result.hands[result.winnerSeat];
@@ -1452,12 +1398,11 @@
     const multText = isAdd
       ? ((result.addNames && result.addNames.length) ? result.addNames.join('、') : '平胡')
       : (result.multNames && result.multNames.length ? result.multNames.join('、') : '平胡');
-    const kouPart = kouOn ? ` × 扣${result.kouPoint}点` : '';
     const calcText = isAdd
       ? `${result.tilePoints}点${result.winType === 'zimo' ? ' × 2' : ''}${result.addPoints ? ' + ' + result.addPoints + '分' : ''}${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`
       : result.winType === 'zimo'
-        ? `${result.tilePoints}点 × 2 × ${result.mult}倍${kouPart}${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`
-        : `${result.tilePoints}点 × ${result.mult}倍${kouPart}${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`;
+        ? `${result.tilePoints}点 × 2 × ${result.mult}倍${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`
+        : `${result.tilePoints}点 × ${result.mult}倍${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`;
     const shooterNote = result.winType !== 'zimo'
       ? (result.discarderTing ? ' · 放炮者已报听，三家各出1份' : ' · 放炮者未报听，独赔3份')
       : '';
@@ -1467,16 +1412,14 @@
     if (compact) {
       return `<div class="settle-head">
         <div class="settle-sub">${prefix}${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)} · ${multText} · ${calcText}${shooterNoteParen} → ${result.score >= 0 ? '+' : ''}${result.score} 分</div>
-        ${kouText ? `<div class="settle-sub">扣点：${kouText}</div>` : ''}
-      </div>${paymentTableHtml(result)}` + settleHands;
+        </div>${paymentTableHtml(result)}` + settleHands;
     }
     return `
       <div class="settle-head">
         <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
         <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}${isAdd ? `（+${result.addPoints || 0}）` : `（×${result.mult}）`}</div>
         <div class="settle-sub">${calcText}${shooterNote}</div>
-        ${kouText ? `<div class="settle-sub">扣点：${kouText}</div>` : ''}
-      </div>
+        </div>
       ${paymentTableHtml(result)}
       ${settleHands}`;
   }
@@ -1485,9 +1428,9 @@
     if (!result) return;
     const title = $('#settle-title');
     const content = $('#settle-content');
-    // ===== 136 张玩法结算：点数 × 牌型倍数 × 扣点（详情统一由 buildSettleHtml 渲染）=====
+    // ===== 136 张玩法结算：点数 × 牌型倍数（详情统一由 buildSettleHtml 渲染）=====
     if (result.type === 'draw') {
-      // 流局：剩 6 墩无人胡，公开听牌者 / 扣点 / 杠分
+      // 流局：剩 6 墩无人胡，公开听牌者 / 杠分
       title.textContent = '流局';
     } else {
       const ws = result.winner != null ? result.winner : result.winnerSeat;
@@ -1574,7 +1517,7 @@
   function hideModal(id) { $('#' + id).classList.add('hidden'); }
 
   function initCreateModal() {
-    const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：计分模型可选乘算（点数×牌型倍数×扣点）或加算（底分+固定加番，清一色/一条龙/七小对+20、豪七额外+40）；庄底加分默认开启（非自摸+5/自摸+10，庄家胡三家各加、闲家胡庄家份加）；开局扣点默认关闭；报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
+    const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：计分模型可选乘算（点数×牌型倍数）或加算（底分+固定加番，清一色/一条龙/七小对+20、豪七额外+40）；庄底加分默认开启（非自摸+5/自摸+10，庄家胡三家各加、闲家胡庄家份加）；报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
     const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；只能自摸或抢杠胡，不能点炮；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
     const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），金牌亮出为「亮金」独立操作（摸牌后、出牌前亮出金牌摆面前、牌尾补一张、手牌数不变），金牌不可当普通牌打出；亮金一次才有点炮胡资格，亮金区独立展示，三金封顶；连续亮金两张自动锁金（锁定其他三家只能自摸，被锁者亮出最后金牌解锁）；可碰可杠不可吃，无报听；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
     buildSeg('seg-variant', ['koudian', 'hongzhong', 'tiejin'], (v) => (v === 'hongzhong' ? '红中麻将' : v === 'tiejin' ? '贴金麻将' : '扣点点'), (v) => {
@@ -1586,16 +1529,7 @@
       $('#create-tip').textContent = hz ? hongzhongTip : tj ? tiejinTip : koudianTip;
     });
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
-    buildSeg('seg-score-model', ['multiply', 'add'], (v) => (v === 'add' ? '加分（固定加番）' : '乘算（倍数）'), (v) => {
-      // 加算模型无扣点：联动禁用开局扣点开关
-      const kp = $('#opt-koupoint');
-      if (v === 'add') {
-        kp.checked = false;
-        kp.disabled = true;
-      } else {
-        kp.disabled = false;
-      }
-    });
+    buildSeg('seg-score-model', ['multiply', 'add'], (v) => (v === 'add' ? '加分（固定加番）' : '乘算（倍数）'));
     buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
     buildSeg('seg-zha-ma', [0, 1, 2, 4, 6], (v) => (v === 0 ? '关' : v + ' 张'));
     buildSeg('seg-draw-end', ['A', 'B'], (v) => (v === 'B' ? 'B 剩10墩流局' : 'A 摸完流局'));
@@ -1631,7 +1565,6 @@
           variant: 'koudian',
           dealerFlow,
           scoreModel,
-          enableKoupoint: $('#opt-koupoint').checked,
           zhuangDi: $('#opt-zhuangdi').checked,
           enableQingYiSe, qingYiSeMult: Number($('#opt-qingyise-mult').value) || 4,
           enableYiTiaoLong, yiTiaoLongMult: Number($('#opt-yitiaolong-mult').value) || 4,

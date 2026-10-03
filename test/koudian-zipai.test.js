@@ -63,7 +63,7 @@ test('扣点点：_hzTileTypes 返回全量 136 张（含字牌）', () => {
   const wa = makeWs();
   srv.handleConnection(wa);
   send(wa, { type: 'join_lobby', name: '房主' });
-  send(wa, { type: 'create_room', settings: { enableKoupoint: true, aiFill: true, totalRounds: 4, allowTing: true } });
+  send(wa, { type: 'create_room', settings: { aiFill: true, totalRounds: 4, allowTing: true } });
   const room = [...srv.rooms.values()][0];
   const all = srv._hzTileTypes(room);
   for (const h of HONOR_TILES) assert.ok(all.includes(h), `扣点点牌型应包含 ${h}`);
@@ -76,7 +76,7 @@ test('红中：_hzTileTypes 仍返回红中专用牌型（不含字牌）', () =
   const wa = makeWs();
   srv.handleConnection(wa);
   send(wa, { type: 'join_lobby', name: '红中房主' });
-  send(wa, { type: 'create_room', settings: { enableKoupoint: false, aiFill: true, totalRounds: 4, variant: 'hongzhong' } });
+  send(wa, { type: 'create_room', settings: { aiFill: true, totalRounds: 4, variant: 'hongzhong' } });
   const room = [...srv.rooms.values()][0];
   const hzTypes = srv._hzTileTypes(room);
   assert.ok(!hzTypes.includes('e'), '红中牌型不应包含字牌');
@@ -92,7 +92,7 @@ function makeKoudianGame() {
   srv.handleConnection(wb);
   send(wa, { type: 'join_lobby', name: '房主' });
   send(wb, { type: 'join_lobby', name: '玩家乙' });
-  send(wa, { type: 'create_room', settings: { enableKoupoint: true, aiFill: true, totalRounds: 4, allowTing: true } });
+  send(wa, { type: 'create_room', settings: { aiFill: true, totalRounds: 4, allowTing: true } });
   const room = [...srv.rooms.values()][0];
   send(wb, { type: 'join_room', roomId: room.id });
   send(wa, { type: 'start_game' });

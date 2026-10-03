@@ -112,13 +112,11 @@ test('红中开局：112张无风牌、庄14闲13、无报听、view不含废弃
   cleanupServer(srv);
 });
 
-test('红中禁吃与无报听：ting/koupoint 被拒', () => {
+test('红中禁吃与无报听：ting 被拒', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   send(wss[0], { type: 'ting', tile: g.hands[0][0] });
   assert.ok(lastOf(wss[0], 'error'), '红中应拒绝报听');
-  send(wss[0], { type: 'koupoint', tile: g.hands[0][0] });
-  assert.ok(lastOf(wss[0], 'error'), '红中应拒绝扣点');
   cleanupServer(srv);
 });
 

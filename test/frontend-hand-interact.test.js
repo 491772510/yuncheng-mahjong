@@ -77,8 +77,7 @@ function gameStateMsg(players, overrides = {}) {
       yourSeat: 0,
       turn: 1,
       wallCount: 60,
-      kouPoints: {},
-      players,
+          players,
     }, overrides),
   };
 }

@@ -62,7 +62,7 @@ function cleanupServer(srv) {
   }
 }
 
-const BASE_SETTINGS = { enableKoupoint: false, aiFill: true, totalRounds: 4, zhuangDi: false };
+const BASE_SETTINGS = { aiFill: true, totalRounds: 4, zhuangDi: false };
 
 // ============ 功能2：房间列表显示创建者名称 ============
 test('房间列表包含创建者名称 ownerName；房主离开转让后创建者名称保持原创建者', () => {
@@ -302,76 +302,6 @@ test('房主 60 秒内重连：取消离线超时解散，房间继续正常进�
   cleanupServer(srv);
 });
 
-// ============ 功能4：开局扣点阶段不卡局 ============
-test('开局扣点阶段：断线真人座位立即自动补扣点，四座填满正常开局', () => {
-  const srv = newServer();
-  const wa = makeWs();
-  const wb = makeWs();
-  srv.handleConnection(wa);
-  send(wa, { type: 'join_lobby', name: '房主' });
-  srv.handleConnection(wb);
-  send(wb, { type: 'join_lobby', name: '玩家乙' });
-  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS, enableKoupoint: true } });
-  const room = [...srv.rooms.values()][0];
-  send(wb, { type: 'join_room', roomId: room.id });
-  send(wa, { type: 'start_game' });
-  const g = room.game;
-  assert.equal(g.stage, 'koupoint');
-
-  // AI 座位开局即自动填 1-4 扣点
-  for (let s = 0; s < 4; s++) {
-    const pl = room.players[s];
-    if (pl && pl.isAI) {
-      assert.ok(g.kouPoints[s] >= 1 && g.kouPoints[s] <= 4, 'AI 座位自动随机补扣点');
-    }
-  }
-
-  // 玩家乙在扣点阶段断线 → 立即自动补扣点（不等 30s 超时）
-  wb.handlers.close();
-  const seatB = room.players.findIndex((p) => p && p.name === '玩家乙');
-  assert.ok(g.kouPoints[seatB] >= 1 && g.kouPoints[seatB] <= 4, '断线真人座位立即自动补扣点');
-
-  // 房主收到扣点选择提示，选择后四座填满正常开局
-  const promptA = lastOf(wa, 'action_prompt');
-  assert.ok(promptA && promptA.prompt.type === 'koupoint', '在线真人收到扣点选择提示');
-  send(wa, { type: 'koupoint', points: 3 });
-  assert.ok(g.kouPoints.every((x) => x != null), '四座扣点全部填满');
-  assert.equal(g.stage, 'draw', '扣点填满后正常开局，不卡 koupoint');
-  assert.equal(room.state, 'playing');
-  cleanupServer(srv);
-});
-
-test('开局扣点阶段：在线真人超时未选自动补扣点，不卡 koupoint 阶段', async () => {
-  const srv = newServer();
-  const wa = makeWs();
-  srv.handleConnection(wa);
-  send(wa, { type: 'join_lobby', name: '房主' });
-  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS, enableKoupoint: true } });
-  const room = [...srv.rooms.values()][0];
-  send(wa, { type: 'start_game' });
-  const g = room.game;
-  assert.equal(g.stage, 'koupoint');
-  const seatA = room.players.findIndex((p) => p && p.name === '房主');
-
-  // 在线未托管真人：设有超时自动补定时器（HUMAN_TIMEOUT_MS=30s）
-  assert.ok(room.timers.has('koupoint:' + seatA), '在线真人设有超时自动补扣点定时器');
-  assert.ok(g.kouPoints[seatA] == null, '真人尚未选择扣点');
-
-  // 模拟超时回调触发：自动补 1-4 扣点
-  srv._autoFillKoupoint(room, seatA);
-  assert.ok(g.kouPoints[seatA] >= 1 && g.kouPoints[seatA] <= 4, '超时后自动补扣点');
-  assert.equal(room.players[seatA].hosted, true, '在线真人超时未确认后进入 AI 托管');
-  assert.ok(g.kouPoints.every((x) => x != null), '四座扣点全部填满');
-  assert.equal(g.stage, 'draw', '扣点填满后正常开局，不卡 koupoint');
-
-  // 已填座位重复触发自动补应为 no-op（不重复改值）
-  const before = g.kouPoints[seatA];
-  srv._autoFillKoupoint(room, seatA);
-  assert.equal(g.kouPoints[seatA], before, '已选座位自动补为 no-op');
-  await sleep(400); // 等待开局后 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
-  cleanupServer(srv);
-});
-
 // ============ 功能5：点炮/抢杠胡算番型必须使用完整手牌（胡牌 tile 并入） ============
 // Bug 背景：_settleHu 曾用 g.hands[winnerSeat] 直接算番，点炮/抢杠时手牌少一张（13 张），
 // 导致七对/碰碰胡/一条龙/十三幺等 14 张番型被误判为平胡。
@@ -401,7 +331,6 @@ function setupHuState(room, winnerSeat, hand13, tile) {
   const g = room.game;
   g.hands[winnerSeat] = hand13.slice(); // 点炮/抢杠时手牌 13 张（不含打出的胡牌）
   g.melds[winnerSeat] = [];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = [];
   g.lastAction = null;
   return g;
@@ -491,7 +420,6 @@ test('自摸路径不受影响：完整 14 张手牌照常识别七对 4 倍', a
   const g = room.game;
   g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
   g.melds[winnerSeat] = [];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = [];
   g.lastAction = null;
 
@@ -557,7 +485,6 @@ test('自摸结算展示：手牌本就 14 张，不重复补牌', async () => {
   const g = room.game;
   g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
   g.melds[winnerSeat] = [];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = [];
   g.lastAction = null;
 
@@ -656,7 +583,6 @@ test('自摸不受影响：三家各付 1 份自摸分，胡牌者共收 3 份�
   const g = room.game;
   g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
   g.melds[winnerSeat] = [];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = [];
   g.lastAction = null;
 
@@ -726,7 +652,6 @@ test('支付明细-自摸：三家各付 1 份自摸分，角色均为闲家', a
   const g = room.game;
   g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
   g.melds[winnerSeat] = [];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = [];
   g.lastAction = null;
 
@@ -837,7 +762,6 @@ test('一炮一响：下家与下下家都能点炮胡时，仅最近下家胡�
   g.hands[2] = hand13.slice();
   g.hands[3] = ['w1', 'w2', 'w3', 't1', 't2', 't3', 'b1', 'b2', 'b3', 'e', 's', 'x', 'n'];
   g.melds = [[], [], [], []];
-  g.kouPoints = [1, 1, 1, 1];
   // 两家先报听才能胡（规则：仅报听玩家可胡牌）
   g.tingSeats = [1, 2];
   g.lastAction = null;
@@ -888,7 +812,6 @@ test('未报听玩家不能点炮胡：g.tingSeats 为空时点炮不产生胡�
   g.hands[2] = hand13.slice();
   g.hands[3] = ['w1', 'w2', 'w3', 't1', 't2', 't3', 'b1', 'b2', 'b3', 'e', 's', 'x', 'n'];
   g.melds = [[], [], [], []];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = []; // 未报听
   g.lastAction = null;
   g.lastDiscard = { tile: 'b7', seat: 0 };
@@ -913,7 +836,6 @@ test('未报听玩家摸到自摸牌不能胡：_buildDrawPrompt 不提供 hu �
   g.hands[seat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
   g.melds[seat] = [];
   g.drawnTile = 'b7';
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = []; // 未报听
   g.lastAction = null;
 
@@ -1141,7 +1063,6 @@ function makeMeldedState(room) {
   const g = room.game;
   g.discards = [['t1'], ['b1', 'b7'], ['w2'], []];
   g.melds = [[], [], [], []];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = []; // 无人报听，避免补杠触发抢杠胡分支
   g.lastAction = null;
   g.newTiles = [null, null, null, null];
@@ -1222,11 +1143,11 @@ test('补杠不触及弃牌区：g.discards[discarder] 原样保留', async () =
 
 // ============ 新计分模型与庄底（scoreModel / zhuangDi） ============
 
-test('扣点默认关闭：不传 enableKoupoint 时 settings 为 false，且开局不进入扣点阶段', async () => {
+test('已去除开局扣点玩法：settings 无 enableKoupoint 字段，开局不进入扣点阶段', async () => {
   const srv = newServer();
-  const { room } = makeHuRoom(srv, { enableKoupoint: undefined });
-  assert.equal(room.settings.enableKoupoint, false, '扣点默认关闭');
-  assert.notEqual(room.game.stage, 'koupoint', '扣点关闭时不进入暗扣阶段');
+  const { room } = makeHuRoom(srv, {});
+  assert.equal(room.settings.enableKoupoint, undefined, 'settings 不再含扣点开关');
+  assert.notEqual(room.game.stage, 'koupoint', '开局直接进入摸牌阶段');
   await sleep(400);
   cleanupServer(srv);
 });
@@ -1239,7 +1160,6 @@ test('乘算+庄底开启-庄家自摸：三家各付 基础分+10，胡牌者�
   g.dealer = 0; // 显式指定庄家为 seat0
   g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
   g.melds[winnerSeat] = [];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = [];
 
   srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
@@ -1283,7 +1203,6 @@ test('加算模型-平胡点炮已报听：底分=牌点，无加番无庄底', 
 
   srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 2, qiangGang: false });
   assert.equal(room.settings.scoreModel, 'add');
-  assert.equal(room.settings.enableKoupoint, false, '加算模型强制无扣点');
   assert.equal(g.winners.addPoints, 0, '平胡无加番');
   assert.equal(g.winners.score, 7, '单份 = 点数7');
   assert.equal(room.players[1].roundScore, 21, '已报听三家各付 3×7');
@@ -1299,7 +1218,6 @@ test('加算模型-庄家七对自摸杠红中（攻略示例）：每家 10×2+
   g.dealer = 0; // 显式指定庄家为 seat0
   g.hands[winnerSeat] = ['z', 'z', 'z', 'z', 't1', 't1', 't2', 't2', 'w3', 'w3', 'w4', 'w4', 'b5', 'b5'];
   g.melds[winnerSeat] = [];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = [];
 
   srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'z' });
@@ -1322,7 +1240,6 @@ test('加算模型-清一色开关开启叠加：底分+清一色20+七小对20'
   const g = room.game;
   g.hands[winnerSeat] = ['b1', 'b1', 'b2', 'b2', 'b3', 'b3', 'b4', 'b4', 'b5', 'b5', 'b6', 'b6', 'b7', 'b7'];
   g.melds[winnerSeat] = [];
-  g.kouPoints = [1, 1, 1, 1];
   g.tingSeats = [];
 
   srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
