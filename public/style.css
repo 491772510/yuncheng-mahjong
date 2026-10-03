@@ -23,6 +23,17 @@ body {
 .btn.primary:hover { background: #ffc234; }
 .btn.small { padding: 6px 12px; font-size: 13px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+/* 弹窗内非主按钮（取消等）：浅底深字 + 边框 + 阴影，在浅色弹窗背景上清晰可见，与金色主按钮形成对比 */
+.modal-actions .btn:not(.primary) {
+  background: #ffffff;
+  color: #444;
+  border: 1px solid #cfcfcf;
+  box-shadow: 0 1px 3px rgba(0,0,0,.15);
+}
+.modal-actions .btn:not(.primary):hover {
+  background: #f0f0ec;
+  border-color: #bdbdbd;
+}
 
 /* ---------- 大厅 ---------- */
 #lobby-view { display: flex; align-items: center; justify-content: center; overflow-y: auto; }
