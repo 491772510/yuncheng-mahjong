@@ -1161,6 +1161,27 @@ test('补杠不触及弃牌区：g.discards[discarder] 原样保留', async () =
 
 // ============ 新计分模型与庄底（scoreModel / zhuangDi） ============
 
+test('庄底默认关闭：settings.zhuangDi 为 false，庄家胡也无庄底加分', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, {});
+  assert.equal(room.settings.zhuangDi, false, '未显式开启时 zhuangDi 默认 false');
+  const winnerSeat = 0;
+  const g = room.game;
+  g.dealer = 0; // 显式指定庄家为 seat0
+  g.hands[winnerSeat] = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7', 'b7'];
+  g.melds[winnerSeat] = [];
+  g.tingSeats = [];
+
+  srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
+  assert.equal(g.winners.zhuangBonus, 0, '默认关闭时庄底为 0');
+  assert.equal(room.players[0].roundScore, 168, '庄家自摸仅收 3×56，无庄底');
+  assert.equal(room.players[1].roundScore, -56, '闲家1出 56');
+  assert.equal(room.players[2].roundScore, -56, '闲家2出 56');
+  assert.equal(room.players[3].roundScore, -56, '闲家3出 56');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
 test('已去除开局扣点玩法：settings 无 enableKoupoint 字段，开局不进入扣点阶段', async () => {
   const srv = newServer();
   const { room } = makeHuRoom(srv, {});
@@ -1170,7 +1191,7 @@ test('已去除开局扣点玩法：settings 无 enableKoupoint 字段，开局�
   cleanupServer(srv);
 });
 
-test('乘算+庄底开启-庄家自摸：三家各付 基础分+10，胡牌者共收 3 份', async () => {
+test('乘算+庄底开启-庄家自摸：三家各付 基础分，庄家单边 +10', async () => {
   const srv = newServer();
   const { room } = makeHuRoom(srv, { zhuangDi: true });
   const winnerSeat = 0;
@@ -1181,17 +1202,17 @@ test('乘算+庄底开启-庄家自摸：三家各付 基础分+10，胡牌者�
   g.tingSeats = [];
 
   srv._settleHu(room, winnerSeat, { winType: 'zimo', tile: 'b7' });
-  // 基础 56 = 7×2×4×1，庄家自摸每家 +10
+  // 基础 56 = 7×2×4×1；庄底开启仅庄家单边 +10，三家各付 56、庄家另得 10
   assert.equal(g.winners.zhuangBonus, 10, '庄底自摸 +10');
-  assert.equal(room.players[0].roundScore, 198, '胡牌者共收 3×66');
-  assert.equal(room.players[1].roundScore, -66, '闲家1出 56+10');
-  assert.equal(room.players[2].roundScore, -66, '闲家2出 56+10');
-  assert.equal(room.players[3].roundScore, -66, '闲家3出 56+10');
+  assert.equal(room.players[0].roundScore, 178, '庄家胡共收 3×56+10');
+  assert.equal(room.players[1].roundScore, -56, '闲家1出 56，不扣庄底');
+  assert.equal(room.players[2].roundScore, -56, '闲家2出 56，不扣庄底');
+  assert.equal(room.players[3].roundScore, -56, '闲家3出 56，不扣庄底');
   await sleep(400);
   cleanupServer(srv);
 });
 
-test('乘算+庄底开启-闲家点炮已报听：仅庄家那份 +5，另两家不加', async () => {
+test('乘算+庄底开启-闲家点炮已报听：无庄底项，三家各付基础分', async () => {
   const srv = newServer();
   const { room } = makeHuRoom(srv, { zhuangDi: true });
   const winnerSeat = 1; // 闲家胡
@@ -1201,12 +1222,32 @@ test('乘算+庄底开启-闲家点炮已报听：仅庄家那份 +5，另两家
   g.tingSeats = [2]; // 放炮者 seat2 已报听（非庄家）
 
   srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 2, qiangGang: false });
-  // 基础 28 = 7×4×1；庄家 seat0 份 +5
-  assert.equal(g.winners.zhuangBonus, 5, '庄底非自摸 +5');
-  assert.equal(room.players[1].roundScore, 89, '胡牌者共收 28+28+33');
-  assert.equal(room.players[0].roundScore, -33, '庄家出 28+5');
+  // 基础 28 = 7×4×1；闲家胡无庄底项，三家各付 28
+  assert.equal(g.winners.zhuangBonus, 0, '闲家胡无庄底加分');
+  assert.equal(room.players[1].roundScore, 84, '胡牌者共收 3×28');
+  assert.equal(room.players[0].roundScore, -28, '庄家出 28，无庄底扣分');
   assert.equal(room.players[2].roundScore, -28, '放炮者（已报听）出 28');
   assert.equal(room.players[3].roundScore, -28, '闲家出 28');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('乘算+庄底开启-庄家点炮胡（放炮者已报听）：三家各付 基础分，庄家单边 +5', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv, { zhuangDi: true });
+  const winnerSeat = 0; // 庄家胡
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.dealer = 0; // 显式指定庄家为 seat0
+  g.tingSeats = [1]; // 放炮者 seat1 已报听
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+  // 基础 28 = 7×4×1；庄底开启仅庄家单边 +5，三家各付 28、庄家另得 5
+  assert.equal(g.winners.zhuangBonus, 5, '庄底非自摸 +5');
+  assert.equal(room.players[0].roundScore, 89, '庄家胡共收 3×28+5');
+  assert.equal(room.players[1].roundScore, -28, '放炮者（已报听）出 28，不扣庄底');
+  assert.equal(room.players[2].roundScore, -28, '闲家出 28，不扣庄底');
+  assert.equal(room.players[3].roundScore, -28, '闲家出 28，不扣庄底');
   await sleep(400);
   cleanupServer(srv);
 });
@@ -1228,7 +1269,7 @@ test('加算模型-平胡点炮已报听：底分=牌点，无加番无庄底', 
   cleanupServer(srv);
 });
 
-test('加算模型-庄家七对自摸杠红中（攻略示例）：每家 10×2+20(七对)+40(豪七)+10(庄底) = 90', async () => {
+test('加算模型-庄家七对自摸杠红中（攻略示例）：每家 底分20+加番60=80，庄家单边+10', async () => {
   const srv = newServer();
   const { room } = makeHuRoom(srv, { scoreModel: 'add', zhuangDi: true });
   const winnerSeat = 0; // 庄家
@@ -1243,10 +1284,10 @@ test('加算模型-庄家七对自摸杠红中（攻略示例）：每家 10×2+
   assert.equal(g.winners.addPoints, 60, '七对 20 + 豪七 40');
   assert.deepEqual(g.winners.addNames, ['七小对', '豪七']);
   assert.equal(g.winners.zhuangBonus, 10, '庄底自摸 +10');
-  assert.equal(room.players[0].roundScore, 270, '庄家胡共收 3×90');
-  assert.equal(room.players[1].roundScore, -90, '闲家1出 底分20+加番60+庄底10');
-  assert.equal(room.players[2].roundScore, -90);
-  assert.equal(room.players[3].roundScore, -90);
+  assert.equal(room.players[0].roundScore, 250, '庄家胡共收 3×80+10');
+  assert.equal(room.players[1].roundScore, -80, '闲家1出 底分20+加番60，不扣庄底');
+  assert.equal(room.players[2].roundScore, -80);
+  assert.equal(room.players[3].roundScore, -80);
   await sleep(400);
   cleanupServer(srv);
 });

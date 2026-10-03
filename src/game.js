@@ -1417,12 +1417,11 @@ class GameServer {
         shisanyao: { enabled: room.settings.enableShiSanYao, mult: room.settings.shiSanYaoMult },
       };
       const scoreModel = room.settings.scoreModel === 'add' ? 'add' : 'multiply';
-      const zhuangDiOn = room.settings.zhuangDi !== false;
+      const zhuangDiOn = room.settings.zhuangDi === true;
       const zhuangSeat = g.dealer;
       const isZhuang = winnerSeat === zhuangSeat;
-      // 庄底：非自摸 +5 / 自摸 +10；庄家胡三家各加，闲家胡仅庄家那份加
-      const zhuangBonus = !zhuangDiOn ? 0 : info.winType === 'zimo' ? 10 : 5;
-      const zhuangExtra = (s) => (zhuangBonus && (isZhuang || s === zhuangSeat) ? zhuangBonus : 0);
+      // 庄底（默认关闭）：开启时仅庄家胡牌单边加分（非自摸+5 / 自摸+10），输家不扣分；闲家胡无庄底
+      const zhuangBonus = !zhuangDiOn || !isZhuang ? 0 : info.winType === 'zimo' ? 10 : 5;
 
       let mult = 1;
       let multNames = [];
@@ -1455,77 +1454,86 @@ class GameServer {
 
       let score;
       const huPayments = [];
-      const zhuangNote = zhuangBonus
-        ? isZhuang
-          ? `（庄底+${zhuangBonus}，三家各加）`
-          : `（庄家份+${zhuangBonus}）`
-        : '';
+      const zhuangNote = zhuangBonus ? `（庄底+${zhuangBonus}，庄家单边加分）` : '';
       if (info.winType === 'zimo') {
-        // 自摸：三家都给（每份=基础分+庄底加成）
-        score = baseScore + (isZhuang ? zhuangBonus : 0);
-        const perDesc = isZhuang
-          ? `三家各付 ${baseScore + zhuangBonus} 分`
-          : `闲家各付 ${baseScore} 分，庄家付 ${baseScore + zhuangBonus} 分`;
+        // 自摸：三家各付 基础分；庄家胡且庄底开启时，胡牌者单边另得庄底分（输家不扣）
+        score = baseScore;
+        const perDesc = zhuangBonus
+          ? `三家各付 ${baseScore} 分，庄家另得庄底+${zhuangBonus}`
+          : `三家各付 ${baseScore} 分`;
         for (let s = 0; s < 4; s++) {
           if (s === winnerSeat || !room.players[s]) continue;
-          const pay = baseScore + zhuangExtra(s);
+          const pay = baseScore;
           room.players[s].score -= pay;
           room.players[s].roundScore -= pay;
           room.players[winnerSeat].score += pay;
           room.players[winnerSeat].roundScore += pay;
+        }
+        if (zhuangBonus) {
+          room.players[winnerSeat].score += zhuangBonus;
+          room.players[winnerSeat].roundScore += zhuangBonus;
         }
         huPayments.push({
           kind: 'hu',
           title: `自摸 · ${perDesc}${zhuangNote}`,
           toSeat: winnerSeat,
-          toAmount: baseScore * 3 + (isZhuang ? zhuangBonus * 3 : zhuangBonus),
+          toAmount: baseScore * 3 + zhuangBonus,
           rows: [0, 1, 2, 3]
             .filter((s) => s !== winnerSeat)
-            .map((s) => ({ seat: s, amount: -(baseScore + zhuangExtra(s)), role: s === zhuangSeat ? '庄家' : '闲家' })),
+            .map((s) => ({ seat: s, amount: -baseScore, role: s === zhuangSeat ? '庄家' : '闲家' })),
         });
       } else if (discarderTing) {
-        // 点炮且放炮者已报听：三家各出 1 份（放炮者与另两家各付），胡牌者共收 3 份
-        score = baseScore + (isZhuang ? zhuangBonus : 0);
-        const perDesc = isZhuang
-          ? `三家各付 ${baseScore + zhuangBonus} 分`
-          : `闲家各付 ${baseScore} 分，庄家付 ${baseScore + zhuangBonus} 分`;
+        // 点炮且放炮者已报听：三家各出 1 份，胡牌者共收 3 份；庄家胡且庄底开启时，胡牌者单边另得庄底分（输家不扣）
+        score = baseScore;
+        const perDesc = zhuangBonus
+          ? `三家各付 ${baseScore} 分，庄家另得庄底+${zhuangBonus}`
+          : `三家各付 ${baseScore} 分`;
         for (let s = 0; s < 4; s++) {
           if (s === winnerSeat || !room.players[s]) continue;
-          const pay = baseScore + zhuangExtra(s);
+          const pay = baseScore;
           room.players[s].score -= pay;
           room.players[s].roundScore -= pay;
           room.players[winnerSeat].score += pay;
           room.players[winnerSeat].roundScore += pay;
         }
+        if (zhuangBonus) {
+          room.players[winnerSeat].score += zhuangBonus;
+          room.players[winnerSeat].roundScore += zhuangBonus;
+        }
         huPayments.push({
           kind: 'hu',
           title: `${winLabel}（放炮者已报听）· ${perDesc}${zhuangNote}`,
           toSeat: winnerSeat,
-          toAmount: baseScore * 3 + (isZhuang ? zhuangBonus * 3 : zhuangBonus),
+          toAmount: baseScore * 3 + zhuangBonus,
           rows: [0, 1, 2, 3]
             .filter((s) => s !== winnerSeat)
             .map((s) => ({
               seat: s,
-              amount: -(baseScore + zhuangExtra(s)),
+              amount: -baseScore,
               role: s === info.discarder ? '放炮者（已报听）' : s === zhuangSeat ? '庄家' : '闲家',
             })),
         });
       } else {
-        // 点炮且放炮者未报听：放炮者独赔 3 份（含原包胡情形），胡牌者共收 3 份
-        score = baseScore * 3 + (isZhuang ? zhuangBonus * 3 : zhuangBonus);
+        // 点炮且放炮者未报听：放炮者独赔 3 份基础分（含原包胡情形）；庄家胡且庄底开启时，胡牌者单边另得庄底分（输家不扣）
+        const basePay = baseScore * 3;
+        score = basePay;
         const loser = room.players[info.discarder];
         if (loser) {
-          loser.score -= score;
-          loser.roundScore -= score;
-          room.players[winnerSeat].score += score;
-          room.players[winnerSeat].roundScore += score;
+          loser.score -= basePay;
+          loser.roundScore -= basePay;
+          room.players[winnerSeat].score += basePay;
+          room.players[winnerSeat].roundScore += basePay;
+        }
+        if (zhuangBonus) {
+          room.players[winnerSeat].score += zhuangBonus;
+          room.players[winnerSeat].roundScore += zhuangBonus;
         }
         huPayments.push({
           kind: 'hu',
-          title: `${winLabel}（放炮者未报听）· 放炮者独赔 ${score} 分${zhuangNote}`,
+          title: `${winLabel}（放炮者未报听）· 放炮者独赔 ${basePay} 分${zhuangNote}`,
           toSeat: winnerSeat,
-          toAmount: score,
-          rows: [{ seat: info.discarder, amount: -score, role: '放炮者（未报听，独赔3份）' }],
+          toAmount: basePay + zhuangBonus,
+          rows: [{ seat: info.discarder, amount: -basePay, role: '放炮者（未报听，独赔3份）' }],
         });
       }
 
@@ -2566,7 +2574,7 @@ class GameServer {
       shiSanYaoMult,
       dealerFlow: s.dealerFlow === 'keep' ? 'keep' : 'next', // 流局庄家：keep=连庄 / next=下家接庄（默认）
       scoreModel,
-      zhuangDi: s.zhuangDi !== false, // 庄底加分开关（默认开启：非自摸+5 / 自摸+10）
+      zhuangDi: s.zhuangDi === true, // 庄底加分开关（默认关闭：开启时仅庄家胡牌单边加分，非自摸+5 / 自摸+10）
     };
   }
 
