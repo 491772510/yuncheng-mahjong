@@ -2105,7 +2105,7 @@ class GameServer {
           pl._auto = Math.max(0, (pl._auto || 0) - 1);
           return;
         }
-        const snap = { stage: g.stage, turn: g.turn, drawn: g.drawnTile, lastAction: g.lastAction && g.lastAction.type };
+        const snap = { stage: g.stage, turn: g.turn, drawn: g.drawnTile, lastAction: g.lastAction && g.lastAction.type, choices: g.pending ? g.pending.responders.map((r) => r.choice).join(',') : '' };
         if (g.stage === 'draw' && g.turn === seat) {
           // 报听兜底：报听玩家在摸牌后阶段只能胡或摸打，绝不落回 AI 出牌
           // （避免断线/托管等非 _drawCard 入口触发 decideDrawAction
