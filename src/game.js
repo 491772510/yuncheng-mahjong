@@ -1742,7 +1742,12 @@ class GameServer {
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
     // 贴金：金牌不能作为普通出牌打出，只能通过「亮金」独立操作处理（或保留在手中）
     if (this._isTieJin(room) && tile === g.goldTile) {
-      return this._err(p, '金牌不能作为普通出牌打出，请通过亮金操作处理');
+      // P2 修复：当手牌除金牌外已无其他可打牌时，放行金牌作为强制出牌（与红中"只剩红中则打出"行为对齐），
+      // 避免 AI/真人全金牌手牌且亮金走不通时整局永久卡死
+      const hasOther = hand.some((t) => t !== g.goldTile);
+      if (hasOther) {
+        return this._err(p, '金牌不能作为普通出牌打出，请通过亮金操作处理');
+      }
     }
 
     hand.splice(idx, 1);
@@ -2118,6 +2123,15 @@ class GameServer {
         const g = room.game;
         // 真人已接管（取消托管/重连）：跳过本次代打，避免与真人操作并发
         if (pl._auto <= 0 || !this._shouldAutoAct(room, seat)) {
+          pl._auto = Math.max(0, (pl._auto || 0) - 1);
+          return;
+        }
+        // P1 修复：回调触发时若该座位并不处于动作点（非当前回合 / 非待响应），
+        // 直接正常退出，不落入下方"动作未推进"快照比对 → 消除非当前回合调度的 AI stuck 100% 误报
+        const pend = g.pending ? g.pending.responders.find((r) => r.seat === seat) : null;
+        const isMyTurn = g.stage === 'draw' && g.turn === seat;
+        const isMyResponse = g.stage === 'response' && !!pend && pend.choice === null;
+        if (!isMyTurn && !isMyResponse) {
           pl._auto = Math.max(0, (pl._auto || 0) - 1);
           return;
         }

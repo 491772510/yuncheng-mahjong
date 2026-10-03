@@ -38,6 +38,10 @@ function lastOf(ws, type) {
   return list.length ? list[list.length - 1] : null;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function newServer() {
   return new GameServer();
 }
@@ -974,5 +978,172 @@ test('P0 贴金庄家起手即胡可胡（drawnTile 应放行为起手第 14 张
   assert.ok(w, '应产生胡牌结算');
   assert.equal(w.winType, 'zimo');
   assert.equal(w.winner, dealer);
+  cleanupServer(srv);
+});
+
+// ============ P1 修复：AI 代打回调增加"当前回合/响应归属"提前退出守卫 ============
+// 背景：非当前回合的重复调度会落入快照比对被判"动作未推进"，重试 3 次后误报
+// [game] AI stuck（100% 误报）。守卫通过后，AI stuck 恢复为真卡死专用信号。
+
+test('P1 守卫：非当前回合座位的代打回调直接退出，不产生 AI stuck 误报', async () => {
+  const { srv, room } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 静态构造：座位 0 当前出牌，座位 1 托管但并非动作点（非其回合、无待响应）
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
+  g.hands[1] = PLAIN13.slice();
+  g.melds = [[], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 't2';
+  g.lastAction = null;
+  g.pending = null;
+  const pl1 = room.players[1];
+  pl1.hosted = true; // 托管 → _shouldAutoAct 为 true（模拟非当前回合的冗余调度）
+  pl1._autoRetry = 0;
+
+  const errs = [];
+  const origErr = console.error;
+  console.error = (...a) => { errs.push(a.join(' ')); };
+  try {
+    srv._scheduleAutoAct(room, 1);
+    await sleep(150); // 回调 80ms + 余量
+  } finally {
+    console.error = origErr;
+  }
+
+  assert.equal(pl1._auto, 0, '非当前回合回调应递减 _auto 后正常退出');
+  assert.equal(pl1._autoRetry || 0, 0, '不应触发快照比对重试');
+  assert.ok(!errs.some((e) => e.includes('AI stuck')), '不应产生 AI stuck 误报');
+  cleanupServer(srv);
+});
+
+test('P1 守卫：当前回合动作被拒（状态未推进）仍触发重试与 AI stuck 真信号', async () => {
+  const { srv, room } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 座位 0 当前出牌且托管；stub _playTile 模拟"该动却被拒"（不推进任何状态）。
+  // 手牌避开金牌且不成胡/无杠，确保决策分支稳定走 play
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 'w9', 'b1', 'b2', 'b3', 't1', 't2', 't3'];
+  g.hands[1] = PLAIN13.slice();
+  g.hands[2] = PLAIN13.slice();
+  g.hands[3] = PLAIN13.slice();
+  g.melds = [[], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 't3';
+  g.lastAction = null;
+  g.pending = null;
+  const pl0 = room.players[0];
+  pl0.hosted = true;
+  pl0._autoRetry = 0;
+
+  const errs = [];
+  const origErr = console.error;
+  const origPlay = srv._playTile;
+  srv._playTile = function () { /* 模拟动作被拒：状态零变化 */ };
+  console.error = (...a) => { errs.push(a.join(' ')); };
+  try {
+    srv._scheduleAutoAct(room, 0);
+    await sleep(80 * 3 + 200); // 2 次重试 + 第 3 次告警
+  } finally {
+    srv._playTile = origPlay;
+    console.error = origErr;
+  }
+
+  assert.ok(errs.some((e) => e.includes('AI stuck')), '真卡死（该动却动作被拒）仍应产生 AI stuck 告警');
+  cleanupServer(srv);
+});
+
+// ============ P2 修复：_chooseTieJinDiscard 末级兜底在全金牌时返回金牌，_playTile 拒收导致整局卡死 ============
+// 修复方案：_playTile 在"手牌除金牌外已无牌"时放行金牌（与红中"只剩红中则打出"行为对齐）。
+
+test('P2 放行：手牌全金牌时 _playTile 放行打出金牌，不再拒收卡死', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 摸牌后 14 张全金牌：无任何非金牌可打，亮金走不通时必须能强制打出
+  g.hands[0] = new Array(14).fill('w5');
+  g.melds = [[], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w5';
+  g.lastAction = null;
+  g.pending = null;
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
+
+  send(wss[0], { type: 'play_tile', tile: 'w5' });
+  assert.equal(lastOf(wss[0], 'error'), null, '全金牌手牌打出金牌不应被拒（原缺陷：拒收后状态零变化→重试耗尽→整局卡死）');
+  assert.equal(g.hands[0].length, 13, '全金牌手牌时金牌被放行打出（手牌-1）');
+  assert.deepEqual(g.discards[0], ['w5'], '金牌进入弃牌堆');
+  assert.notEqual(g.turn, 0, '出牌后应轮转');
+  cleanupServer(srv);
+});
+
+test('P2 仍有替代时拒绝：手牌含非金牌时打金牌仍被拒（保留规则保护）', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 14 张含 2 张金牌 w5 + 12 张普通牌：有替代可打，金牌仍不得作为普通出牌
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w5', 't1', 't1', 't1', 't2', 't2'];
+  g.melds = [[], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 't2';
+  g.lastAction = null;
+  g.pending = null;
+  const before = g.hands[0].length;
+
+  send(wss[0], { type: 'play_tile', tile: 'w5' });
+  assert.equal(g.hands[0].length, before, '有非金牌可打时金牌仍被拒绝（手牌不变）');
+  assert.deepEqual(g.discards[0], [], '金牌未入弃牌堆');
+  assert.equal(g.turn, 0, '回合未轮转');
+  cleanupServer(srv);
+});
+
+test('P2 AI 全链路：AI 碰后手牌全金牌且亮金走不通（三金封顶）时自动出牌放行金牌，整局不再卡死', async () => {
+  const { srv, room } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  const seat = 1;
+  const pl1 = room.players[seat];
+  pl1.isAI = true; // AI 座位
+  pl1._autoRetry = 0;
+  // 贴金碰后出牌阶段：副露 3 张非金（b1），手里剩余全为金牌 w5（碰后阶段不查胡，且亮金走不通）
+  g.hands[seat] = ['w5', 'w5', 'w5', 'w5', 'w5', 'w5', 'w5', 'w5', 'w5', 'w5', 'w5'];
+  g.melds = [[], [{ type: 'peng', tile: 'b1', tiles: ['b1', 'b1', 'b1'] }], [], []];
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
+  g.hands[2] = PLAIN13.slice();
+  g.hands[3] = PLAIN13.slice();
+  g.turn = seat;
+  g.stage = 'draw';
+  g.drawnTile = null;
+  g.lastAction = { type: 'peng', tile: 'b1' };
+  g.pending = null;
+  g.shangjinCount = [0, 3, 0, 0]; // seat1 已亮 3 张（三金封顶），亮金零收益 → 走不出亮金
+  g.shangjinTiles = [[], ['w5', 'w5', 'w5'], [], []];
+  g.locked = [false, false, false, false];
+
+  const errs = [];
+  const origErr = console.error;
+  console.error = (...a) => { errs.push(a.join(' ')); };
+  try {
+    srv._scheduleAutoAct(room, seat);
+    await sleep(150); // 回调 80ms + 余量
+  } finally {
+    console.error = origErr;
+  }
+
+  assert.equal(g.hands[seat].length, 10, 'AI 碰后全金牌且亮金走不通时应自动打出金牌（手牌-1）');
+  assert.deepEqual(g.discards[seat], ['w5'], 'AI 打出的金牌进入弃牌堆');
+  assert.notEqual(g.turn, seat, '出牌后应轮转');
+  assert.equal(pl1._autoRetry || 0, 0, '不应触发卡死重试');
+  assert.ok(!errs.some((e) => e.includes('AI stuck')), '不应产生 AI stuck 告警');
   cleanupServer(srv);
 });
