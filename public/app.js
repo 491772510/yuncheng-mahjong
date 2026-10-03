@@ -400,7 +400,7 @@
   // ================= 大厅 =================
   function renderLobby() {
     showView('lobby');
-    applyVariantChrome('koudian'); // 大厅默认扣点点文案
+    applyVariantChrome('lobby'); // 大厅固定展示多玩法文案，不随玩法回退为扣点点
     const list = $('#room-list');
     const rooms = (state.lobby && state.lobby.rooms) || [];
     if (!rooms.length) {
@@ -437,6 +437,7 @@
   function variantLabel(settings) { return settings && settings.variant === 'hongzhong' ? '红中麻将' : settings && settings.variant === 'tiejin' ? '贴金麻将' : '扣点点'; }
   // 页面标题/Logo/Slogan 随玩法切换：koudian 默认，tiejin/hongzhong 各自文案
   function variantChrome(variant) {
+    if (variant === 'lobby') return { title: '麻将 · 扣点点 / 红中 / 贴金', logo: '🀄 麻将 · 扣点点 / 红中 / 贴金', slogan: '三种玩法，一局开打：扣点点 · 红中 · 贴金' };
     if (variant === 'tiejin') return { title: '运城贴金麻将', logo: '🀄 运城贴金麻将', slogan: '贴金 · 金牌万能 · 亮金锁金' };
     if (variant === 'hongzhong') return { title: '红中麻将', logo: '🀄 红中麻将', slogan: '红中癞子 · 自摸抢杠 · 扎码翻倍' };
     return { title: '运城扣点点麻将', logo: '🀄 运城扣点点麻将', slogan: '扣点点 · 只碰不吃 · 胡牌自摸' };
