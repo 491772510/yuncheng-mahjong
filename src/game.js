@@ -884,22 +884,35 @@ class GameServer {
     this._afterTurnStart(room, seat);
   }
 
-  /** 136 模式杠分：明杠/补杠=该牌点数（字牌 10 点）、暗杠=点数×2；其余三家各付一份给杠主；杠时即时结算；抢杠胡成立时不结算（调用方在抢杠分支直接返回，不会进入本方法） */
+  /** 136 模式杠分：明杠/补杠=该牌点数（字牌 10 点）、暗杠=点数×2；其余三家各付一份给杠主；杠时仅记录明细，整局结束（胡牌）统一结算、流局不计；抢杠胡成立时不记录（调用方在抢杠分支直接返回，不会进入本方法） */
   _settleGangScore(room, seat, tile, type) {
     const g = room.game;
     const points = rules.tilePoints(tile); // 数牌按面值、字牌 10 点
     const perSeat = type === 'angang' ? points * 2 : points;
-    const gain = perSeat * 3;
-    for (let s = 0; s < 4; s++) {
-      if (s === seat || !room.players[s]) continue;
-      room.players[s].score -= perSeat;
-      room.players[s].roundScore -= perSeat;
-    }
-    room.players[seat].score += gain;
-    room.players[seat].roundScore += gain;
     g.gangLogs.push({ seat, tile, type, perSeat, points, kou: 1 });
     const typeName = type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : '明杠';
-    this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点），每家 ${perSeat} 分`);
+    this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点），每家 ${perSeat} 分（整局结束统一结算）`);
+  }
+
+  /** 136 模式杠分统一入账：仅胡牌结算时调用；遍历 gangLogs，杠家收 perSeat×3，其余三家各付 perSeat；流局（黄庄）不调用即杠分不计 */
+  _applyGangScores(room) {
+    const g = room.game;
+    for (const lg of g.gangLogs) {
+      const gain = lg.perSeat * 3;
+      for (let s = 0; s < 4; s++) {
+        if (s === lg.seat || !room.players[s]) continue;
+        room.players[s].score -= lg.perSeat;
+        room.players[s].roundScore -= lg.perSeat;
+      }
+      room.players[lg.seat].score += gain;
+      room.players[lg.seat].roundScore += gain;
+    }
+    if (g.gangLogs.length > 0) {
+      const detail = g.gangLogs
+        .map((lg) => `${this._pName(room, lg.seat)} 收 ${lg.perSeat * 3} 分（${lg.type === 'angang' ? '暗杠' : lg.type === 'bugang' ? '补杠' : '明杠'} ${rules.tileName(lg.tile)}）`)
+        .join('、');
+      this._log(room, `杠分统一结算：${detail}`);
+    }
   }
 
   /** 杠分支付明细条目（统一支付明细表用）：
@@ -1516,6 +1529,9 @@ class GameServer {
         });
       }
 
+      // 杠分整局结束统一结算：杠时仅记录 gangLogs，胡牌时一并入账（流局黄庄不计杠分，见 _settleDraw）
+      this._applyGangScores(room);
+
       g.winners = {
         type: 'hu',
         winnerSeat,
@@ -1552,7 +1568,7 @@ class GameServer {
       );
   }
 
-  /** 流局结算（三玩法统一）：普通按听牌/未听统计并照常算杠分；红中无胡支付庄家连庄；贴金杠分回滚、有杠下家坐庄 */
+  /** 流局结算（三玩法统一）：普通黄庄杠分不计（杠分改为整局结束统一结算、流局不入账）；红中无胡支付庄家连庄；贴金杠分回滚、有杠下家坐庄 */
   _settleDraw(room) {
     const g = room.game;
     const isHz = this._isHongZhong(room);
@@ -1586,8 +1602,8 @@ class GameServer {
     const winners = {
       type: 'draw',
       mode136: true,
-      gangLogs: g.gangLogs.slice(), // 杠分明细（杠分照常结算时已即时入账；贴金流局回滚不计）
-      payments: isHz || isTj ? [] : this._buildGangPayments(room), // 流局无胡牌支付，普通仅杠分明细
+      gangLogs: g.gangLogs.slice(), // 杠分明细（仅记录展示；黄庄杠分不计，不入账）
+      payments: [], // 流局无胡牌支付，且黄庄杠分不计 → 无任何支付明细
       hands: this._revealHands(room),
     };
     if (isHz) winners.variant = 'hongzhong';

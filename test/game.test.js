@@ -665,7 +665,7 @@ test('支付明细-自摸：三家各付 1 份自摸分，角色均为闲家', a
   cleanupServer(srv);
 });
 
-test('支付明细-流局：payments 含杠分明细条目（三家各付一份给杠主）', async () => {
+test('支付明细-流局：黄庄杠分不计，payments 为空且分数不变', async () => {
   const srv = newServer();
   const { room } = makeHuRoom(srv);
   const g = room.game;
@@ -673,14 +673,32 @@ test('支付明细-流局：payments 含杠分明细条目（三家各付一份�
 
   srv._settleDraw(room);
   const pays = g.winners.payments;
-  assert.ok(Array.isArray(pays) && pays.length === 1, '流局仅杠分支付条目');
-  const gang = pays[0];
-  assert.equal(gang.kind, 'gang');
-  assert.equal(gang.toSeat, 1, '杠主为收款方');
-  assert.equal(gang.toAmount, 15, '杠主共收 5 × 3 = 15');
-  assert.equal(gang.rows.length, 3, '其余三家各付一份');
-  assert.ok(gang.rows.every((r) => r.amount === -5), '每家付 5 分');
-  assert.ok(gang.rows.every((r) => r.role === '杠分'), '角色为杠分');
+  assert.ok(Array.isArray(pays) && pays.length === 0, '黄庄杠分不计：流局无支付明细');
+  assert.equal(g.winners.gangLogs.length, 1, '杠分明细仍保留展示');
+  assert.equal(room.players[1].roundScore, 0, '杠主流局不计杠分');
+  assert.equal(room.players[0].roundScore, 0, '付家流局不计杠分');
+  await sleep(400);
+  cleanupServer(srv);
+});
+
+test('支付明细-胡牌：杠分整局结束统一结算（明杠 w5：杠主收 15，其余三家各付 5）', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const winnerSeat = 0;
+  const hand13 = ['t1', 't1', 't2', 't2', 't3', 't3', 'w4', 'w4', 'w5', 'w5', 'b6', 'b6', 'b7'];
+  const g = setupHuState(room, winnerSeat, hand13, 'b7');
+  g.tingSeats = [];
+  g.gangLogs.push({ seat: 1, tile: 'w5', type: 'ming', perSeat: 5, points: 5, kou: 1 });
+
+  srv._settleHu(room, winnerSeat, { winType: 'dianpao', tile: 'b7', discarder: 1, qiangGang: false });
+  // 胡牌：放炮者未报听独赔 3 份 = 84（seat1 -84）；杠分统一结算：seat1 收 15，其余三家各 -5
+  assert.equal(room.players[0].roundScore, 84 - 5, '胡牌者收 84，另付杠分 5 → 79');
+  assert.equal(room.players[1].roundScore, -84 + 15, '放炮者独赔 84，杠分收 15 → -69');
+  assert.equal(room.players[2].roundScore, -5, '闲家2 仅付杠分 5');
+  assert.equal(room.players[3].roundScore, -5, '闲家3 仅付杠分 5');
+  const gangPay = g.winners.payments.find((p) => p.kind === 'gang');
+  assert.ok(gangPay, 'payments 含杠分明细');
+  assert.equal(gangPay.toAmount, 15, '杠主共收 5 × 3 = 15');
   await sleep(400);
   cleanupServer(srv);
 });
