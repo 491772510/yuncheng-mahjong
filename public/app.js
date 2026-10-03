@@ -1529,7 +1529,8 @@
       $('#create-tip').textContent = hz ? hongzhongTip : tj ? tiejinTip : koudianTip;
     });
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
-    buildSeg('seg-score-model', ['multiply', 'add'], (v) => (v === 'add' ? '加分（固定加番）' : '乘算（倍数）'));
+    buildSeg('seg-score-model', ['multiply', 'add'], (v) => (v === 'add' ? '加分（固定加番）' : '乘算（倍数）'), applyScoreModelPanel);
+    applyScoreModelPanel();
     buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
     buildSeg('seg-zha-ma', [0, 1, 2, 4, 6], (v) => (v === 0 ? '关' : v + ' 张'));
     buildSeg('seg-draw-end', ['A', 'B'], (v) => (v === 'B' ? 'B 剩10墩流局' : 'A 摸完流局'));
@@ -1575,6 +1576,13 @@
     };
   }
 
+  // 计分模型联动：add=加分（固定加番）时隐藏牌型倍数开关及倍数输入框；multiply=乘算时恢复显示
+  function applyScoreModelPanel() {
+    const panel = $('#panel-mult-switches');
+    if (!panel) return;
+    const add = segValue('seg-score-model') === 'add';
+    panel.classList.toggle('hidden', add);
+  }
   function buildSeg(containerId, values, labelFn, onChange) {
     const c = $('#' + containerId);
     c.innerHTML = values.map((v, i) =>
@@ -1879,7 +1887,7 @@
     $('#join-room-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#join-room-btn').click(); });
     $('#chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
     $('#chat-send-btn').onclick = sendChat;
-    $('#create-room-btn').onclick = () => showModal('create-modal');
+    $('#create-room-btn').onclick = () => { applyScoreModelPanel(); showModal('create-modal'); };
 
     document.addEventListener('click', (e) => {
       const joinBtn = e.target.closest('[data-join]');
