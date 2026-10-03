@@ -634,7 +634,8 @@
     const goldTile = game.goldTile || null;
     const meldHtml = renderMelds(p.melds, false, goldTile);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
-    const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
+    const kouOn = state.room && state.room.settings && state.room.settings.enableKoupoint === true;
+    const kp = hz || !kouOn ? null : (game.kouPoints && game.kouPoints[seat]);
     const tj = game.goldTile != null;
     const shangjin = (tj && game.shangjinTiles && game.shangjinTiles[seat]) || null;
     const lockedBadge = tj && game.locked && game.locked[seat] ? '<span class="pc-lock">锁金</span>' : '';
@@ -703,7 +704,8 @@
     const hand = renderSelfHand(p);
     const meldHtml = renderMelds(p.melds, true, goldTile);
     const discards = (p.discards || []).map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
-    const kp = hz ? null : (game.kouPoints && game.kouPoints[seat]);
+    const kouOn = state.room && state.room.settings && state.room.settings.enableKoupoint === true;
+    const kp = hz || !kouOn ? null : (game.kouPoints && game.kouPoints[seat]);
     const tj = game.goldTile != null;
     const shangjin = (tj && game.shangjinTiles && game.shangjinTiles[seat]) || null;
     const lockedBadge = tj && game.locked && game.locked[seat] ? '<span class="pc-lock">锁金</span>' : '';
@@ -1415,12 +1417,15 @@
     const winnerLabel = opts.winnerLabel || '（胡）';
     const compact = !!opts.compact;
     const isAdd = result.scoreModel === 'add';
+    const kouOn = result.enableKoupoint === true;
     const kouText = isAdd
       ? '加分制（固定加番，无扣点）'
-      : (result.kouPoints || []).map((v, s) => {
-          const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
-          return `${esc(nm)} 扣${v}点`;
-        }).join(' · ');
+      : kouOn
+        ? (result.kouPoints || []).map((v, s) => {
+            const nm = result.hands && result.hands[s] ? result.hands[s].name : '座位' + s;
+            return `${esc(nm)} 扣${v}点`;
+          }).join(' · ')
+        : '';
     const handsHtml = (withScore) => (result.hands || []).map((h) => h ? `
         <div class="row">
           <b>${esc(h.name)}${h.seat === result.winnerSeat ? winnerLabel : ''}</b>
@@ -1438,7 +1443,7 @@
       return `
         <div class="settle-head"><div class="settle-sub">牌墙剩 6 墩，流局（无分差，${flowLabel}）</div></div>
         <div class="settle-sub">${ting ? '听牌者：' + ting : '无人听牌'}</div>
-        <div class="settle-sub">扣点：${kouText}</div>
+        ${kouText ? `<div class="settle-sub">扣点：${kouText}</div>` : ''}
         ${paymentTableHtml(result)}
         ${settleHands}`;
     }
@@ -1447,11 +1452,12 @@
     const multText = isAdd
       ? ((result.addNames && result.addNames.length) ? result.addNames.join('、') : '平胡')
       : (result.multNames && result.multNames.length ? result.multNames.join('、') : '平胡');
+    const kouPart = kouOn ? ` × 扣${result.kouPoint}点` : '';
     const calcText = isAdd
       ? `${result.tilePoints}点${result.winType === 'zimo' ? ' × 2' : ''}${result.addPoints ? ' + ' + result.addPoints + '分' : ''}${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`
       : result.winType === 'zimo'
-        ? `${result.tilePoints}点 × 2 × ${result.mult}倍 × 扣${result.kouPoint}点${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`
-        : `${result.tilePoints}点 × ${result.mult}倍 × 扣${result.kouPoint}点${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`;
+        ? `${result.tilePoints}点 × 2 × ${result.mult}倍${kouPart}${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`
+        : `${result.tilePoints}点 × ${result.mult}倍${kouPart}${result.zhuangBonus ? ' + 庄底' + result.zhuangBonus : ''}`;
     const shooterNote = result.winType !== 'zimo'
       ? (result.discarderTing ? ' · 放炮者已报听，三家各出1份' : ' · 放炮者未报听，独赔3份')
       : '';
@@ -1461,7 +1467,7 @@
     if (compact) {
       return `<div class="settle-head">
         <div class="settle-sub">${prefix}${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)} · ${multText} · ${calcText}${shooterNoteParen} → ${result.score >= 0 ? '+' : ''}${result.score} 分</div>
-        <div class="settle-sub">扣点：${kouText}</div>
+        ${kouText ? `<div class="settle-sub">扣点：${kouText}</div>` : ''}
       </div>${paymentTableHtml(result)}` + settleHands;
     }
     return `
@@ -1469,7 +1475,7 @@
         <div class="settle-big">${result.score >= 0 ? '+' : ''}${result.score}</div>
         <div class="settle-sub">胡 ${tileText(result.tile)} · ${multText}${isAdd ? `（+${result.addPoints || 0}）` : `（×${result.mult}）`}</div>
         <div class="settle-sub">${calcText}${shooterNote}</div>
-        <div class="settle-sub">扣点：${kouText}</div>
+        ${kouText ? `<div class="settle-sub">扣点：${kouText}</div>` : ''}
       </div>
       ${paymentTableHtml(result)}
       ${settleHands}`;

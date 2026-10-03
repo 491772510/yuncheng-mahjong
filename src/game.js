@@ -1613,6 +1613,7 @@ class GameServer {
         winType: info.winType,
         mode136: true,
         scoreModel,
+        enableKoupoint: room.settings.enableKoupoint === true,
         tilePoints,
         mult,
         multNames,
@@ -1679,6 +1680,7 @@ class GameServer {
     const winners = {
       type: 'draw',
       mode136: true,
+      enableKoupoint: room.settings.enableKoupoint === true,
       kouPoints: g.kouPoints.slice(), // 结算公开扣点
       gangLogs: g.gangLogs.slice(), // 杠分明细（杠分照常结算时已即时入账；贴金流局回滚不计）
       payments: isHz || isTj ? [] : this._buildGangPayments(room), // 流局无胡牌支付，普通仅杠分明细
