@@ -2161,6 +2161,14 @@ class GameServer {
     }
     for (const m of g.melds[seat]) {
       if (m.type === 'peng' && (cnt.get(m.tile) || 0) >= 1 && !ting.includes(m.tile) && rules.canBuGang(hand, g.melds[seat], m.tile)) {
+        // D2 修复：补杠前检查报听对手是否等这张牌，命中则跳过——避免抢杠送炮（仅报听对手可抢，≥6 点）
+        const robbed = (g.tingSeats || []).some(
+          (s) =>
+            s !== seat &&
+            rules.canHuWith(g.hands[s], m.tile, g.melds[s]) &&
+            rules.canHuByPoints(rules.tilePoints(m.tile), 'qianggang')
+        );
+        if (robbed) continue;
         return { tile: m.tile, gangType: 'bugang' };
       }
     }

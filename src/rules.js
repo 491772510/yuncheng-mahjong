@@ -7,9 +7,9 @@
  *  - 136 张牌：万(w)/条(t)/筒(b) 1-9 各 4 张 + 东南西北中发白 各 4 张
  *  - 只能碰、杠，不能吃；可点炮可自摸（受胡牌点数限制）
  *  - 胡牌 = 4 面子 + 1 将（任意对子），或七对（含豪华七对）、十三幺
- *  - 开局每人暗扣 1-4 点（本局胡牌倍数，结算公开）；报听需听口含 ≥6 点牌
+ *  - 报听需听口含 ≥6 点牌；报听扣牌（kouTiles）暗扣进废牌堆，不参与响应判定
  *  - 胡牌点数限制：1/2 点不能胡；3/4/5 点只能自摸；6/7/8/9/字牌(10 点)可点炮可自摸
- *  - 计分：点数 × 牌型倍数 × 自己扣点；杠分即时结算（明杠每家 1、暗杠每家 2）
+ *  - 计分：点数 × 牌型倍数（乘算，默认）/ 底分 + 固定加番（加算，洪洞）；杠分整局结束统一结算（流局不计）
  */
 
 const SUITS = ['w', 't', 'b']; // 万、条、筒
@@ -341,6 +341,31 @@ function canDeclareTing136(hand, melds) {
     if (ting.some((x) => tilePoints(x) >= 6)) return true;
   }
   return false;
+}
+
+/**
+ * 剩余可及张数：4 − 自己手牌持有 − 桌面已见（弃牌；'back' 暗扣不可见不统计）− 全部明牌区（含暗杠第 4 张）。
+ * 用于 AI 报听选牌/听口质量评估（机会张统计，D1 修复依赖）。
+ * @param {object} game 游戏状态（需含 hands / discards / melds）
+ * @param {number} seat 本座位
+ * @param {string} tile 目标牌
+ * @returns {number} 0-4
+ */
+function remainingCount(game, seat, tile) {
+  let used = (game.hands && game.hands[seat] ? countTiles(game.hands[seat]).get(tile) || 0 : 0);
+  for (const d of game.discards || []) {
+    for (const t of d) {
+      if (t !== 'back' && t === tile) used++;
+    }
+  }
+  for (const ms of game.melds || []) {
+    for (const m of ms) {
+      for (const t of m.tiles || []) {
+        if (t === tile) used++;
+      }
+    }
+  }
+  return Math.max(0, 4 - used);
 }
 
 /** 是否一条龙：手牌+明牌区中同一花色 1-9 齐全（不必构成单一顺子） */
@@ -1086,6 +1111,7 @@ module.exports = {
   tilePoints,
   canHuByPoints,
   canDeclareTing136,
+  remainingCount,
   isYiTiaoLong,
   isShiSanYao,
   calcMultiplier136,

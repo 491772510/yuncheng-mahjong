@@ -34,25 +34,58 @@ function decideDrawAction(game, room, seat) {
     (game.drawnTile !== null || justPeng)
   ) {
     if (rules.canDeclareTing136(hand, game.melds[seat])) {
+      // D1/D3 修复：枚举全部合法弃牌，排除死听口后按"期望 = 剩余张数 × 点数 × 可达牌型倍数"择优。
+      // 扣点点得分与胡牌点数线性相关，选错听口 = 本局报废（报听不可逆）。
+      const multOpts = {
+        qingyise: { enabled: !!room.settings.enableQingYiSe, mult: room.settings.qingYiSeMult || 4 },
+        yitiaolong: { enabled: !!room.settings.enableYiTiaoLong, mult: room.settings.yiTiaoLongMult || 4 },
+        shisanyao: { enabled: !!room.settings.enableShiSanYao, mult: room.settings.shiSanYaoMult || 8 },
+      };
+      let best = null;
       for (const t of [...new Set(hand)]) {
         const rest = hand.slice();
         rest.splice(rest.indexOf(t), 1);
-        if (rules.isTing(rest, game.melds[seat]).some((x) => rules.tilePoints(x) >= 6)) {
-          return { type: 'ting', tile: t };
-        }
+        const ting = rules.isTing(rest, game.melds[seat]);
+        const live6 = ting.filter((x) => rules.tilePoints(x) >= 6); // 能点炮/自摸
+        if (!live6.length) continue; // 报听硬条件：听口须含 ≥6 点牌
+        const live3 = ting.filter((x) => rules.tilePoints(x) >= 3); // 能胡到（含自摸）
+        const remain = (x) => rules.remainingCount(game, seat, x); // 精确机会张（含桌面已见、明牌区、暗杠第 4 张）
+        const outs = live3.reduce((a, x) => a + remain(x), 0);
+        if (outs === 0) continue; // ① 排除死听口：一张都胡不到
+        const ev = live3.reduce(
+          (a, x) => a + remain(x) * rules.tilePoints(x) * rules.calcMultiplier136([...rest, x], { melds: game.melds[seat] }, multOpts),
+          0
+        ); // ② 按期望择优（③ 乘可达牌型倍数上界：清一色/一条龙/碰碰胡等）
+        if (!best || ev > best.ev) best = { tile: t, ev };
       }
+      if (best) return { type: 'ting', tile: best.tile };
     }
   }
 
   // 2) 暗杠 / 3) 补杠：仅摸牌后可杠（碰牌后 drawnTile 为 null，服务端 _gang 会拒绝“当前不能杠”，
   // 若此处仍返回 gang，AI 动作被拒后无后续出牌，牌局将死锁）
   if (game.drawnTile !== null) {
-  const cnt = rules.countTiles(hand);
+    const cnt = rules.countTiles(hand);
+    // D4 修复：手牌对子单位 ≥6 且未报听时不优先暗杠——七小对(×4)/豪华七小对(×8)在射程内，
+    // 暗杠会破坏对子结构并放弃高倍数牌型（暗杠收益 = 点数×2×3，七对/豪七是乘在胡牌点数上的高倍数）。
+    const pairUnits = [...cnt.values()].reduce((a, c) => a + Math.floor(c / 2), 0);
     for (const [t, c] of cnt) {
-      if (c === 4) return { type: 'gang', gangType: 'angang', tile: t };
+      if (c === 4) {
+        if (!game.tingSeats.includes(seat) && pairUnits >= 6) continue;
+        return { type: 'gang', gangType: 'angang', tile: t };
+      }
     }
     for (const m of game.melds[seat]) {
       if (m.type === 'peng' && cnt.get(m.tile) >= 1) {
+        // D2 修复：补杠前检查报听对手是否等这张牌——命中则跳过补杠，避免把炮送进对手听口
+        // （补杠触发抢杠判定，仅报听对手可抢（≥6 点），被抢者按点炮赔付，未报听者独赔 3 份）。
+        const robbed = (game.tingSeats || []).some(
+          (s) =>
+            s !== seat &&
+            rules.canHuWith(game.hands[s], m.tile, game.melds[s]) &&
+            rules.canHuByPoints(rules.tilePoints(m.tile), 'qianggang')
+        );
+        if (robbed) continue;
         return { type: 'gang', gangType: 'bugang', tile: m.tile };
       }
     }
