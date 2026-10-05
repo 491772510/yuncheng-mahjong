@@ -518,7 +518,7 @@ class GameServer {
       score: 0,
       roundScore: 0,
       disconnectTimer: null,
-      _auto: 0,
+      _autoToken: 0, _autoGen: 0, _autoActing: false,
     };
     room.players[seat] = p;
     this.players.set(p.id, p);
@@ -1702,10 +1702,11 @@ class GameServer {
     const ownerOfflineTimer = room.timers.get('owner:offline');
     for (const [k, t] of room.timers) if (k !== 'owner:offline') clearTimeout(t);
     room.timers.clear();
-    // 清理 AI 代打计数：本局结束所有挂起的自动代打定时器已清除，计数复位防泄漏
+    // 清理 AI 代打：本局结束所有挂起的自动代打定时器已清除，令牌作废防泄漏
     for (const pl of room.players) {
       if (pl) {
-        pl._auto = 0;
+        pl._autoGen = pl._autoToken; // 作废所有未触发令牌
+        pl._autoActing = false;
         pl._autoRetry = 0;
       }
     }
@@ -1787,7 +1788,7 @@ class GameServer {
   // ============ 玩家操作（全部服务端校验） ============
 
   _playTile(p, msg) {
-    if (p._auto > 0) this._markAutoActing(p);
+    if (p._autoActing) this._markAutoActing(p);
     else this._restoreControl(p);
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
@@ -1824,7 +1825,7 @@ class GameServer {
 
   /** 报听（听口）：摸牌后（或碰后立即听牌）存在可打的听牌牌型时，打出指定牌并锁定手牌 */
   _ting(p, msg) {
-    if (p._auto > 0) this._markAutoActing(p);
+    if (p._autoActing) this._markAutoActing(p);
     else this._restoreControl(p);
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
@@ -1869,7 +1870,7 @@ class GameServer {
   }
 
   _peng(p) {
-    if (p._auto > 0) this._markAutoActing(p);
+    if (p._autoActing) this._markAutoActing(p);
     else this._restoreControl(p);
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
@@ -1887,7 +1888,7 @@ class GameServer {
   }
 
   _gang(p, msg) {
-    if (p._auto > 0) this._markAutoActing(p);
+    if (p._autoActing) this._markAutoActing(p);
     else this._restoreControl(p);
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
@@ -1962,7 +1963,7 @@ class GameServer {
   }
 
   _hu(p) {
-    if (p._auto > 0) this._markAutoActing(p);
+    if (p._autoActing) this._markAutoActing(p);
     else this._restoreControl(p);
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
@@ -2019,7 +2020,7 @@ class GameServer {
   }
 
   _pass(p) {
-    if (p._auto > 0) this._markAutoActing(p);
+    if (p._autoActing) this._markAutoActing(p);
     else this._restoreControl(p);
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
@@ -2137,9 +2138,9 @@ class GameServer {
     if (!p.connected) return this._err(p, '您当前不在线，无法取消托管');
     if (!p.hosted) return this._err(p, '您当前未被托管');
     p.hosted = false;
-    // 若正好轮到该玩家且有 AI 待执行动作：清计数，后续不再调度新 AI 动作
+    // 若正好轮到该玩家且有 AI 待执行动作：作废未触发令牌，后续不再调度新 AI 动作
     if (room.state === 'playing' && room.game && room.game.turn === p.seat) {
-      p._auto = 0;
+      p._autoGen = p._autoToken;
     }
     this._log(room, `${p.name} 已取消托管`);
     this._broadcastRoomState(room);
@@ -2178,7 +2179,10 @@ class GameServer {
   _scheduleAutoAct(room, seat) {
     const pl = room.players[seat];
     if (!pl) return;
-    pl._auto = (pl._auto || 0) + 1;
+    // 令牌制：每条调度持有唯一令牌；真人接管/本局清理时推进 _autoGen 作废旧令牌。
+    // 修复：旧共享计数器 _auto 会被回调收尾无条件递减，终局动作（如胡）同步开启
+    // 下一局并为同座位创建新调度后，新调度令牌被旧回调抵消 → 庄家开局干等 30s 超时。
+    const myToken = ++pl._autoToken;
     // 纳入 room.timers 统一跟踪：唯一 key（seat + 递增序号）支持同一座位并发多定时器，
     // 不使用 _setTimer（会 clear 旧 key），回调触发后自行删除本 key。
     const autoKey = 'auto:' + seat + ':' + (++room.autoSeq);
@@ -2188,23 +2192,16 @@ class GameServer {
         room.timers.delete(autoKey);
         try {
         if (!room.players[seat]) return;
-        if (room.state !== 'playing' || !room.game) {
-          pl._auto = Math.max(0, (pl._auto || 0) - 1);
-          return;
-        }
+        if (room.state !== 'playing' || !room.game) return;
         const g = room.game;
-        // 真人已接管（取消托管/重连）：跳过本次代打，避免与真人操作并发
-        if (pl._auto <= 0 || !this._shouldAutoAct(room, seat)) {
-          pl._auto = Math.max(0, (pl._auto || 0) - 1);
-          return;
-        }
+        // 令牌已被取消（真人接管/本局结束清理）：直接退出，不代打
+        if (myToken <= (pl._autoGen || 0) || !this._shouldAutoAct(room, seat)) return;
         // P1 修复：回调触发时若该座位并不处于动作点（非当前回合 / 非待响应），
         // 直接正常退出，不落入下方"动作未推进"快照比对 → 消除非当前回合调度的 AI stuck 100% 误报
         const pend = g.pending ? g.pending.responders.find((r) => r.seat === seat) : null;
         const isMyTurn = g.stage === 'draw' && g.turn === seat;
         const isMyResponse = g.stage === 'response' && !!pend && pend.choice === null;
         if (!isMyTurn && !isMyResponse) {
-          pl._auto = Math.max(0, (pl._auto || 0) - 1);
           return;
         }
         const snap = { stage: g.stage, turn: g.turn, drawn: g.drawnTile, lastAction: g.lastAction && g.lastAction.type, choices: g.pending ? g.pending.responders.map((r) => r.choice).join(',') : '' };
@@ -2214,6 +2211,8 @@ class GameServer {
           //   返回 play，被 _playTile 以"听口状态由系统自动摸打"拒绝后 stuck）
           if (g.tingSeats.includes(seat)) {
             if (g.drawnTile !== null) {
+              pl._autoActing = true;
+              try {
               if (rules.checkHu(g.hands[seat], g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo')) {
                 const decision = this._isHongZhong(room)
                   ? this._decideHongZhongDrawAction(g, room, seat)
@@ -2226,6 +2225,7 @@ class GameServer {
                 if (gangTile) this._gang(pl, { tile: gangTile.tile, gangType: gangTile.gangType });
                 else this._autoTingDiscard(room, seat, g.drawnTile);
               }
+              } finally { pl._autoActing = false; }
               return;
             }
             return; // 报听玩家尚未摸牌：等待系统摸打，不代打
@@ -2235,11 +2235,14 @@ class GameServer {
             : (this._isHongZhong(room)
               ? this._decideHongZhongDrawAction(g, room, seat)
               : ai.decideDrawAction(g, room, seat));
-          if (decision.type === 'hu') this._hu(pl, {});
-          else if (decision.type === 'ting') this._ting(pl, { tile: decision.tile });
-          else if (decision.type === 'gang') this._gang(pl, { tile: decision.tile, gangType: decision.gangType });
-          else if (decision.type === 'liangjin') this._liangjin(pl, {});
-          else this._playTile(pl, { tile: decision.tile });
+          pl._autoActing = true; // 动作执行期维持托管标记（动作可能同步开启下一局）
+          try {
+            if (decision.type === 'hu') this._hu(pl, {});
+            else if (decision.type === 'ting') this._ting(pl, { tile: decision.tile });
+            else if (decision.type === 'gang') this._gang(pl, { tile: decision.tile, gangType: decision.gangType });
+            else if (decision.type === 'liangjin') this._liangjin(pl, {});
+            else this._playTile(pl, { tile: decision.tile });
+          } finally { pl._autoActing = false; }
         } else if (g.stage === 'response' && g.pending) {
           const r = g.pending.responders.find((x) => x.seat === seat);
           if (r && r.choice === null) {
@@ -2248,10 +2251,13 @@ class GameServer {
               : (this._isHongZhong(room)
                 ? this._decideHongZhongResponse(g, room, seat, r)
                 : ai.decideResponse(g, room, seat, r));
-            if (choice === 'hu') this._hu(pl, {});
-            else if (choice === 'gang') this._gang(pl, {});
-            else if (choice === 'peng') this._peng(pl);
-            else this._pass(pl);
+            pl._autoActing = true;
+            try {
+              if (choice === 'hu') this._hu(pl, {});
+              else if (choice === 'gang') this._gang(pl, {});
+              else if (choice === 'peng') this._peng(pl);
+              else this._pass(pl);
+            } finally { pl._autoActing = false; }
           }
         }
         // 兜底：动作未推进牌局（被校验拒绝/异常，快照未变）时有限重试，防 AI 永久卡死
@@ -2267,19 +2273,14 @@ class GameServer {
         ) {
           pl._autoRetry = (pl._autoRetry || 0) + 1;
           if (pl._autoRetry <= 2) {
-            pl._auto = Math.max(0, (pl._auto || 0) - 1);
             this._scheduleAutoAct(room, seat);
             return;
           }
           console.error('[game] AI stuck at seat', seat, 'after', pl._autoRetry, 'retries');
           pl._autoRetry = 0;
         }
-        // 动作执行完毕（动作期间 _auto>0 不会恢复真人控制），再递减
-        pl._auto = Math.max(0, (pl._auto || 0) - 1);
       } catch (e) {
         console.error('[game] AI action error:', e);
-        // 异常也要递减计数，避免 _auto 泄漏导致后续不再代打
-        pl._auto = Math.max(0, (pl._auto || 0) - 1);
       }
       }, 80)
     );
@@ -2578,7 +2579,7 @@ class GameServer {
       score: 0,
       roundScore: 0,
       disconnectTimer: null,
-      _auto: 0,
+      _autoToken: 0, _autoGen: 0, _autoActing: false,
     };
     this.players.set(id, p);
     this.wsPlayers.set(ws, id);
@@ -2651,7 +2652,7 @@ class GameServer {
     p.score = 0;
     p.roundScore = 0;
     p.hosted = false;
-    p._auto = 0;
+    p._autoToken = 0; p._autoGen = 0; p._autoActing = false;
     return true;
   }
 
@@ -2673,7 +2674,7 @@ class GameServer {
         pl.roomId = null;
         pl.seat = null;
         pl.hosted = false;
-        pl._auto = 0;
+        pl._autoToken = 0; pl._autoGen = 0; pl._autoActing = false;
         pl._autoRetry = 0;
         if (pl.disconnectTimer) {
           clearTimeout(pl.disconnectTimer);
@@ -2994,7 +2995,7 @@ class GameServer {
    *  免疫锁金唯一条件：本局个人累计上金达到 2 张即免疫，不受锁金限制；
    *  连续亮金达到 2 张自动触发锁金（规则），锁金只锁累计上金不足 2 张的玩家。 */
   _liangjin(p, msg) {
-    if (p._auto > 0) this._markAutoActing(p);
+    if (p._autoActing) this._markAutoActing(p);
     else this._restoreControl(p);
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');

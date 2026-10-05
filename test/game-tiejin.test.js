@@ -1013,7 +1013,7 @@ test('P1 守卫：非当前回合座位的代打回调直接退出，不产生 A
     console.error = origErr;
   }
 
-  assert.equal(pl1._auto, 0, '非当前回合回调应递减 _auto 后正常退出');
+  assert.equal(pl1._autoActing || false, false, '非当前回合回调应直接退出，不处于代打执行态');
   assert.equal(pl1._autoRetry || 0, 0, '不应触发快照比对重试');
   assert.ok(!errs.some((e) => e.includes('AI stuck')), '不应产生 AI stuck 误报');
   cleanupServer(srv);
