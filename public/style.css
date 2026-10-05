@@ -455,10 +455,13 @@ body {
 @media (max-width: 760px) {
   .room-body { flex-direction: column; height: calc(100vh - 52px); height: calc(100dvh - 52px); }
   .table-wrap { flex: 1.15; min-height: 300px; }
-  .side-panel { width: 100%; height: 34vh; height: 34dvh; border-left: none; border-top: 1px solid rgba(255,255,255,.1); }
+  .side-panel { width: 100%; height: 26vh; height: 26dvh; border-left: none; border-top: 1px solid rgba(255,255,255,.1); }
+  .tab { padding: 7px 0; font-size: 13px; }
+  .tab-content { padding: 8px 10px; }
   /* P0 修复：限制左右家宽度 + 中央提示框收窄，避免三者在中线物理重叠 */
   .seat-left, .seat-right { width: 100px; }
-  .seat-left .pc-name, .seat-right .pc-name { max-width: 40px; }
+  /* 侧位名字允许换行占满卡片宽度，超长昵称也完整显示，不再截断 */
+  .seat-left .pc-name, .seat-right .pc-name { max-width: none; white-space: normal; word-break: break-all; text-align: left; }
   .seat-left .pc-top, .seat-right .pc-top { flex-wrap: wrap; row-gap: 2px; }
   .table-center { max-width: 160px; }
   /* P0 修复：大厅创建/加入按钮放不下时换行，不再被压成竖排文字 */
@@ -491,7 +494,7 @@ body {
   .seat-top { top: 2px; }
   .player-card { padding: 5px 8px; }
   .pc-top { font-size: 12px; gap: 5px; margin-bottom: 3px; }
-  .pc-name { max-width: 60px; }
+  .pc-name { max-width: none; }
   .melds { margin-bottom: 3px; }
   .discard-area { max-width: 200px; }
   .seat-left .discard-area, .seat-right .discard-area { max-width: 88px; }
