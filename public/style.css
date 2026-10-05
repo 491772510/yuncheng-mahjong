@@ -472,14 +472,14 @@ body {
   .table-center .wall-count b { font-size: 16px; }
   .table-center .turn-info { font-size: 12px; margin-top: 2px; min-height: 15px; }
   .table-center .action-bar { margin-top: 6px; }
-  /* 手牌：单行展示 + 等比缩小，保证 13-14 张一行完整可见可点 */
-  .hand { flex-wrap: nowrap; }
-  .hand-tiles { flex-wrap: nowrap; justify-content: center; gap: 2px; }
+  /* 手牌：单行 + 整手等比收缩（min-width:0），任何视口/缩放下都不裁边不换行 */
+  .hand-tiles { flex-wrap: nowrap; justify-content: center; gap: 2px; max-width: 100%; }
+  .hand-tiles .tile { flex: 0 1 auto; min-width: 0; }
   .tile { width: 24px; height: 36px; font-size: 11px; }
   .tile .n { font-size: 11px; }
   .tile .s { font-size: 7px; }
   /* 半格占位随牌宽等比缩小（基准：桌面 40px 牌 = 20px 占位） */
-  .hand-tiles .tile.hand-gap { width: 12px; }
+  .hand-tiles .tile.hand-gap { width: 12px; flex: 0 1 12px; min-width: 0; }
   .tile.small { width: 15px; height: 22px; font-size: 8px; }
   .tile.small .n { font-size: 9px; }
   .tile.small .s { font-size: 5px; }
@@ -532,10 +532,10 @@ body {
   .table-center .wall-count b { font-size: 15px; }
   .table-center .turn-info { font-size: 12px; margin-top: 2px; min-height: 15px; }
   .table-center .action-bar { margin-top: 5px; }
-  /* 手牌：单行展示 + 等比牌面（横屏横向空间足，略大于竖屏） */
-  .hand { flex-wrap: nowrap; }
-  .hand-tiles { flex-wrap: nowrap; justify-content: center; }
-  .hand-tiles .tile.hand-gap { width: 12px; }
+  /* 手牌：单行 + 整手等比收缩（与竖屏同策略） */
+  .hand-tiles { flex-wrap: nowrap; justify-content: center; max-width: 100%; }
+  .hand-tiles .tile { flex: 0 1 auto; min-width: 0; }
+  .hand-tiles .tile.hand-gap { width: 12px; flex: 0 1 12px; min-width: 0; }
   .tile { width: 24px; height: 34px; font-size: 11px; }
   .tile .n { font-size: 11px; }
   .tile .s { font-size: 7px; }
