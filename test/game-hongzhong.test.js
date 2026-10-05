@@ -35,7 +35,7 @@ function lastOf(ws, type) {
 }
 
 function newServer() {
-  return new GameServer();
+  return new GameServer({ gameLog: false });
 }
 
 function cleanupServer(srv) {

@@ -13,6 +13,7 @@
 
 const rules = require('./rules');
 const ai = require('./ai');
+const gameLogger = require('./game-logger');
 
 const RECONNECT_MS = 60000; // 断线重连窗口
 const HEARTBEAT_INTERVAL_MS = 30000; // 心跳 ping 间隔
@@ -31,10 +32,15 @@ function nowTime() {
 }
 
 class GameServer {
-  constructor() {
+  constructor(opts = {}) {
     this.rooms = new Map(); // roomId -> room
     this.players = new Map(); // playerId -> player
     this.wsPlayers = new Map(); // ws -> playerId
+    // 游戏日志：默认按环境启用（NODE_ENV=test 或 MARVIS_GAME_LOG=0 时禁用）；
+    // opts.gameLog === false 强制关闭（测试场景用）；opts.gameLog === true 强制开启（集成测试用）
+    const gameLogOpt = opts.gameLog !== undefined ? { enabled: !!opts.gameLog } : {};
+    this.gameLogger = gameLogger.createGameLogger({ ...gameLogOpt, dir: opts.gameLogDir });
+    if (this.gameLogger.enabled) this.gameLogger.cleanup();
   }
 
   // ============ 网络层 ============
@@ -594,6 +600,22 @@ class GameServer {
     for (let i = 0; i < 13; i++) {
       for (let s = 0; s < 4; s++) g.hands[s].push(g.wall[g.wallPos++]);
     }
+    // 游戏日志：本局开局快照（房间信息 + 底牌：完整牌墙 / 各家手牌 / 金牌信息）
+    this._logGame(room, 'round_start', {
+      variant: isHz ? 'hongzhong' : isTj ? 'tiejin' : 'koudian',
+      settings: room.settings,
+      dealer: g.dealer,
+      players: this._logPlayers(room),
+      wall: g.wall.slice(), // 完整牌墙（含已发部分与剩余牌，wallPos 标识摸牌进度）
+      wallPos: g.wallPos,
+      hands: g.hands.map((h) => h.slice()),
+      melds: g.melds.map((m) => m.slice()),
+      discards: g.discards.map((d) => d.slice()),
+      goldMother: goldMother,
+      goldTile: goldTile,
+      kouTiles: g.kouTiles.map((k) => k.slice()),
+      shangjinCount: g.shangjinCount ? g.shangjinCount.slice() : null,
+    });
     // 红中/贴金：庄家补第 14 张直接开局（起手即终态，不再摸牌）
     if (isHz || isTj) {
       g.hands[g.dealer].push(g.wall[g.wallPos++]);
@@ -642,6 +664,7 @@ class GameServer {
     g.newTiles[seat] = (this._isHongZhong(room) || this._isTieJin(room) || !g.tingSeats.includes(seat)) ? tile : null;
     if (this._isTieJin(room)) g.huPassed[seat] = false; // 贴金：获得抓牌权，过胡限制解除
     this._log(room, `${this._pName(room, seat)} ${afterGang ? '杠后补到' : '摸到'} ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} ${afterGang ? '杠后补牌' : '摸牌'}`);
+    this._logGame(room, 'action', { action: 'draw', seat, tile, afterGang: !!afterGang, wallPos: g.wallPos });
     const cur = room.players[seat];
     if (cur && cur.ws) this._send(cur, { type: 'draw_notice', tile });
     // 普通报听玩家：摸牌即打（不能换牌、不能碰杠），系统自动打出刚摸的牌
@@ -670,6 +693,7 @@ class GameServer {
     g.newTiles[seat] = null; // 摸牌即打：新牌标志随出牌清除
     this._clearTimer(room, 'draw:' + seat);
     this._log(room, `${this._pName(room, seat)} 摸牌即打 ${rules.tileName(tile)}（听口）`);
+    this._logGame(room, 'action', { action: 'discard', seat, tile, auto: true, ting: true });
     this._afterDiscard(room, seat);
   }
 
@@ -881,6 +905,7 @@ class GameServer {
     g.drawnTile = null; // 碰后只能出牌/报听（碰完即听可立即报听），不能胡/杠
     g.newTiles[seat] = null; // 碰后手牌变动，新牌标志清除
     this._log(room, `${this._pName(room, seat)} 碰了 ${rules.tileName(tile)}`);
+    this._logGame(room, 'action', { action: 'peng', seat, tile, fromSeat: discarder });
     this._afterTurnStart(room, seat);
   }
 
@@ -1003,6 +1028,7 @@ class GameServer {
       }
       g.gangLogs.push({ seat, tile, type: 'gang', perSeat: 2, points: 2, kou: 1, payer: discarder, hz: true });
       this._log(room, `${this._pName(room, seat)} 放杠 ${rules.tileName(tile)}（${this._pName(room, discarder)} 付 2 手）`);
+      this._logGame(room, 'action', { action: 'gang', gangType: 'ming', seat, tile, fromSeat: discarder, perSeat: 2, hz: true });
       this._drawCard(room, seat, true);
       return;
     }
@@ -1017,11 +1043,13 @@ class GameServer {
       room.players[seat].roundScore += 3;
       g.gangLogs.push({ seat, tile, type: 'gang', perSeat: 1, points: 3, payer: discarder, kou: 1 });
       this._log(room, `${this._pName(room, seat)} 放杠 ${rules.tileName(tile)}（每家付 1 分）`);
+      this._logGame(room, 'action', { action: 'gang', gangType: 'ming', seat, tile, fromSeat: discarder, perSeat: 1 });
       this._drawCard(room, seat, true);
       return;
     }
     // 普通玩法：杠分统一延迟结算
     this._log(room, `${this._pName(room, seat)} 明杠了 ${rules.tileName(tile)}`);
+    this._logGame(room, 'action', { action: 'gang', gangType: 'ming', seat, tile, fromSeat: discarder });
     this._settleGangScore(room, seat, tile, 'ming');
     this._drawCard(room, seat, true);
   }
@@ -1054,6 +1082,7 @@ class GameServer {
       room.players[seat].roundScore += 6;
       g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 2, points: 2, kou: 1, hz: true });
       this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 手）`, seat, `${this._pName(room, seat)} 暗杠（每家付 2 手）`);
+      this._logGame(room, 'action', { action: 'gang', gangType: 'angang', seat, tile, perSeat: 2, hz: true });
       this._drawCard(room, seat, true);
       return;
     }
@@ -1068,11 +1097,13 @@ class GameServer {
       room.players[seat].roundScore += 6;
       g.gangLogs.push({ seat, tile, type: 'angang', perSeat: 2, points: 6, kou: 1 });
       this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}（每家付 2 分）`, seat, `${this._pName(room, seat)} 暗杠（每家付 2 分）`);
+      this._logGame(room, 'action', { action: 'gang', gangType: 'angang', seat, tile, perSeat: 2 });
       this._drawCard(room, seat, true);
       return;
     }
     // 普通玩法：杠分统一延迟结算
     this._log(room, `${this._pName(room, seat)} 暗杠了 ${rules.tileName(tile)}`, seat, `${this._pName(room, seat)} 暗杠`);
+    this._logGame(room, 'action', { action: 'gang', gangType: 'angang', seat, tile });
     this._settleGangScore(room, seat, tile, 'angang');
     this._drawCard(room, seat, true);
   }
@@ -1169,6 +1200,7 @@ class GameServer {
       room.players[seat].roundScore += 3;
       g.gangLogs.push({ seat, tile, type: 'bugang', perSeat: 1, points: 1, kou: 1, hz: true });
       this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}（每家付 1 手）`);
+      this._logGame(room, 'action', { action: 'gang', gangType: 'bugang', seat, tile, perSeat: 1, hz: true });
       this._drawCard(room, seat, true);
       return;
     }
@@ -1183,11 +1215,13 @@ class GameServer {
       room.players[seat].roundScore += 3;
       g.gangLogs.push({ seat, tile, type: 'bugang', perSeat: 1, points: 3, kou: 1 });
       this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}（每家付 1 分）`);
+      this._logGame(room, 'action', { action: 'gang', gangType: 'bugang', seat, tile, perSeat: 1 });
       this._drawCard(room, seat, true);
       return;
     }
     // 普通玩法：杠分统一延迟结算
     this._log(room, `${this._pName(room, seat)} 补杠了 ${rules.tileName(tile)}`);
+    this._logGame(room, 'action', { action: 'gang', gangType: 'bugang', seat, tile });
     this._settleGangScore(room, seat, tile, 'bugang');
     this._drawCard(room, seat, true);
   }
@@ -1195,6 +1229,14 @@ class GameServer {
 
   _settleHu(room, winnerSeat, info) {
     const g = room.game;
+    // 游戏日志：胡牌动作（自摸/点炮/抢杠），每个赢家恰好记录一次（红中一炮多响循环内亦逐家记录）
+    this._logGame(room, 'action', {
+      action: 'hu',
+      seat: winnerSeat,
+      winType: info.winType,
+      tile: info.tile,
+      discarder: info.discarder,
+    });
     // ===== 贴金玩法：金分体系（A/B 计分，三金封顶）；杠分已当场结清仅随结算展示 =====
     if (this._isTieJin(room)) {
       const goldCount = Math.min(g.shangjinCount[winnerSeat] || 0, 3); // 三金封顶
@@ -1636,6 +1678,7 @@ class GameServer {
     } else {
       this._log(room, '牌墙剩 6 墩，流局' + (tingSeats.length ? `，听牌者：${tingSeats.map((s) => this._pName(room, s)).join('、')}` : ''));
     }
+    this._logGame(room, 'action', { action: 'draw_round', reason: isTj ? (g.gangLogs.length ? 'wall_end_with_gang' : 'wall_end') : isHz ? 'wall_end' : 'wall_6_dui', tingSeats });
     this._broadcastGameState(room);
     this._sendSettlement(room);
     this._broadcastRoomState(room);
@@ -1645,6 +1688,16 @@ class GameServer {
   _endRound(room) {
     const g = room.game;
     if (g) g.stage = 'over';
+    // 游戏日志：本局结束（完整结算：winners 含支付明细/杠分/金分/庄底/各家手牌，players 含各家最终得分）
+    this._logGame(room, 'round_end', {
+      result: g && g.winners ? g.winners.type : 'aborted',
+      winners: g && g.winners ? g.winners : null,
+      players: this._logPlayers(room),
+      gangLogs: g && g.gangLogs ? g.gangLogs.slice() : [],
+      settings: room.settings,
+      dealer: g ? g.dealer : null,
+      variant: room.settings ? room.settings.variant : null,
+    });
     // 保留房主离线超时定时器：本局结束时不能误清，否则房主超时后本局结束自动解散将失效
     const ownerOfflineTimer = room.timers.get('owner:offline');
     for (const [k, t] of room.timers) if (k !== 'owner:offline') clearTimeout(t);
@@ -1765,6 +1818,7 @@ class GameServer {
     g.newTiles[p.seat] = null; // 新牌已打出，标志清除
     this._clearTimer(room, 'draw:' + p.seat);
     this._log(room, `${this._pName(room, p.seat)} 打出 ${rules.tileName(tile)}`);
+    this._logGame(room, 'action', { action: 'discard', seat: p.seat, tile, auto: false });
     this._afterDiscard(room, p.seat);
   }
 
@@ -1809,6 +1863,7 @@ class GameServer {
     g.newTiles[p.seat] = null; // 报听后手牌锁定，新牌标志清除
     this._clearTimer(room, 'draw:' + p.seat);
     this._log(room, `${this._pName(room, p.seat)} 报听，扣牌暗扣进废牌堆`);
+    this._logGame(room, 'action', { action: 'ting', seat: p.seat, tile, tingList: tingList.slice() });
     this._broadcastGameState(room);
     this._nextTurn(room, p.seat);
   }
@@ -1985,6 +2040,7 @@ class GameServer {
     r.choice = 'pass';
     this._clearTimer(room, 'resp:' + p.seat);
     this._log(room, `${p.name} 选择过`);
+    this._logGame(room, 'action', { action: 'pass', seat: p.seat });
     this._tryResolvePending(room, g, g.pending);
   }
 
@@ -2662,6 +2718,19 @@ class GameServer {
     if (room.logs.length > MAX_LOGS) room.logs.shift();
   }
 
+  /** 游戏日志落盘：结构化记录本局事件（round_start / action / round_end），与 UI 日志 _log 互不影响 */
+  _logGame(room, type, data) {
+    if (!this.gameLogger) return;
+    this.gameLogger.append(room, type, data);
+  }
+
+  /** 玩家列表快照（seat / name / isAI / 累计积分 / 本局积分） */
+  _logPlayers(room) {
+    return (room.players || [])
+      .filter(Boolean)
+      .map((pl) => ({ seat: pl.seat, name: pl.name, isAI: !!pl.isAI, score: pl.score || 0, roundScore: pl.roundScore || 0 }));
+  }
+
   /** 按查看者视角脱敏日志：私有日志（privateFor）仅本人见完整文本，他人见 maskedText */
   _maskLogsForViewer(logs, viewerSeat) {
     return (logs || []).map((e) => {
@@ -2947,6 +3016,7 @@ class GameServer {
     }
     this._log(room, `${this._pName(room, p.seat)} 亮金 ${rules.tileName(gold)}（亮金区）`);
     this._log(room, `${this._pName(room, p.seat)} 牌尾补入 ${rules.tileName(bonus)}`, p.seat, `${this._pName(room, p.seat)} 亮金补牌`);
+    this._logGame(room, 'action', { action: 'liang_jin', seat: p.seat, tile: gold, bonusTile: bonus, goldCount: g.shangjinCount[p.seat], locked: g.locked.slice() });
     // 规则锁金：连续亮金达到 2 张后自动锁金（仅触发一次）；累计上金已满 2 张的玩家免疫，不受锁
     if (g.shangjinCount[p.seat] >= 2 && g.lockSeat === -1) {
       for (let s = 0; s < 4; s++) if (s !== p.seat && g.shangjinCount[s] < 2) g.locked[s] = true;

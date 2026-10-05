@@ -43,7 +43,7 @@ function sleep(ms) {
 }
 
 function newServer() {
-  return new GameServer();
+  return new GameServer({ gameLog: false });
 }
 
 function cleanupServer(srv) {

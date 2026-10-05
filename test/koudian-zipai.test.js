@@ -59,7 +59,7 @@ function cleanupServer(srv) {
 const HONOR_TILES = ['e', 's', 'x', 'n', 'z', 'f', 'p'];
 
 test('扣点点：_hzTileTypes 返回全量 136 张（含字牌）', () => {
-  const srv = new GameServer();
+  const srv = new GameServer({ gameLog: false });
   const wa = makeWs();
   srv.handleConnection(wa);
   send(wa, { type: 'join_lobby', name: '房主' });
@@ -72,7 +72,7 @@ test('扣点点：_hzTileTypes 返回全量 136 张（含字牌）', () => {
 });
 
 test('红中：_hzTileTypes 仍返回红中专用牌型（不含字牌）', () => {
-  const srv = new GameServer();
+  const srv = new GameServer({ gameLog: false });
   const wa = makeWs();
   srv.handleConnection(wa);
   send(wa, { type: 'join_lobby', name: '红中房主' });
@@ -85,7 +85,7 @@ test('红中：_hzTileTypes 仍返回红中专用牌型（不含字牌）', () =
 });
 
 function makeKoudianGame() {
-  const srv = new GameServer();
+  const srv = new GameServer({ gameLog: false });
   const wa = makeWs();
   const wb = makeWs();
   srv.handleConnection(wa);

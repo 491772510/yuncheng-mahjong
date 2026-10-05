@@ -41,7 +41,7 @@ function helloId(ws) {
 }
 
 function newServer() {
-  return new GameServer();
+  return new GameServer({ gameLog: false });
 }
 
 // 清理服务端所有定时器，避免 node --test 因 pending timer 拖慢退出
