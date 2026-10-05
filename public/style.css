@@ -16,6 +16,7 @@ body {
   border: none; border-radius: 8px; padding: 10px 18px; font-size: 15px;
   cursor: pointer; background: rgba(255,255,255,.16); color: #fff;
   transition: background .15s, transform .1s;
+  white-space: nowrap; touch-action: manipulation;
 }
 .btn:hover { background: rgba(255,255,255,.26); }
 .btn:active { transform: scale(.97); }
@@ -46,7 +47,7 @@ body {
 .voice-row .seg { flex: 0 0 auto; }
 .voice-seg .seg-item { flex: 0 0 auto; min-width: 76px; }
 .entry-box input, .join-box input, #nick-input {
-  flex: 1; border: none; border-radius: 8px; padding: 12px 14px; font-size: 15px;
+  flex: 1; border: none; border-radius: 8px; padding: 12px 14px; font-size: 16px;
   background: rgba(255,255,255,.95); color: #222; outline: none;
 }
 .lobby-bar { display: flex; gap: 10px; margin-bottom: 18px; }
@@ -65,7 +66,8 @@ body {
 .empty { text-align: center; opacity: .7; padding: 24px 0; }
 
 /* ---------- 房间头部 ---------- */
-.room-view { display: flex; flex-direction: column; }
+/* 修复：HTML 中是 id="room-view"（无 room-view class），原 .room-view 选择器永不匹配 */
+#room-view { display: flex; flex-direction: column; }
 .room-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 16px; background: rgba(0,0,0,.25); flex-wrap: wrap; gap: 8px;
@@ -112,7 +114,7 @@ body {
 .chat-msg .txt { word-break: break-all; }
 .chat-input-row { display: flex; gap: 8px; padding-top: 8px; }
 .chat-input-row input {
-  flex: 1; border: none; border-radius: 8px; padding: 9px 10px; font-size: 13px; outline: none;
+  flex: 1; border: none; border-radius: 8px; padding: 8px 10px; font-size: 16px; outline: none;
   background: rgba(255,255,255,.9); color: #222;
 }
 
@@ -130,7 +132,7 @@ body {
 .action-bar { margin-top: 10px; display: flex; gap: 8px; justify-content: center; pointer-events: auto; flex-wrap: wrap; }
 .act {
   min-width: 58px; padding: 9px 14px; border: none; border-radius: 10px; font-size: 16px;
-  font-weight: 700; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3);
+  font-weight: 700; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); touch-action: manipulation;
 }
 .act-hu { background: #ff4757; color: #fff; }
 .act-gang { background: #6c5ce7; color: #fff; }
@@ -307,22 +309,29 @@ body {
 .tile.tiny .n { font-size: 9px; }
 .tile.tiny .s { font-size: 6px; }
 .tile.back { background: linear-gradient(135deg, #1e9e63, #0a5c3c); color: transparent; }
-.tile.discardable { cursor: pointer; transition: transform .1s; }
-.tile.discardable:hover { transform: translateY(-8px); }
+.tile.discardable { cursor: pointer; transition: transform .1s; touch-action: manipulation; }
+/* hover 仅限真实悬停设备：避免触屏点击后浮起态残留 */
+@media (hover: hover) {
+  .tile.discardable:hover { transform: translateY(-8px); }
+}
 /* 手牌选中（默认交互，单击直接出牌开关关闭时）：上浮幅度略大于 hover，金色高亮框 */
 .tile.selected {
   transform: translateY(-12px);
   box-shadow: 0 0 0 2px #ffd75e, 0 4px 12px rgba(255, 215, 94, .85);
   z-index: 3;
 }
-.tile.discardable.selected:hover { transform: translateY(-12px); }
+@media (hover: hover) {
+  .tile.discardable.selected:hover { transform: translateY(-12px); }
+}
 /* 弃牌区与明牌区（碰/明杠/暗杠真牌/补杠）同种牌弱高亮：弱光晕提示该牌场上可见张数（不浮起） */
 .tile.weak-highlight {
   box-shadow: 0 0 0 2px rgba(255, 215, 94, .55), 0 0 8px rgba(255, 215, 94, .45);
 }
 /* 报听选牌阶段：不可报听（听口无 ≥6 点牌）的选项置灰 */
 .hand-tiles.ting-pick .tile:not(.discardable) { opacity: .45; filter: grayscale(.6); cursor: not-allowed; }
-.hand-tiles.ting-pick .tile.discardable:hover { transform: translateY(-8px); }
+@media (hover: hover) {
+  .hand-tiles.ting-pick .tile.discardable:hover { transform: translateY(-8px); }
+}
 .tile.discardable.ting-mark {
   overflow: visible; /* 允许右上角听口角标完整溢出显示，不被牌面裁剪 */
   box-shadow: 0 0 0 2px #ffd75e, 0 0 10px rgba(255, 215, 94, .85);
@@ -388,7 +397,7 @@ body {
 .seg { display: flex; gap: 6px; flex: 1; }
 .seg-item {
   flex: 1; padding: 8px 0; border: 1px solid #ccc; border-radius: 8px; background: #fff;
-  color: #555; cursor: pointer; font-size: 14px;
+  color: #555; cursor: pointer; font-size: 14px; touch-action: manipulation;
 }
 .seg-item.active { background: #1e9e63; border-color: #1e9e63; color: #fff; font-weight: 700; }
 .switch { position: relative; display: inline-block; width: 52px; height: 28px; cursor: pointer; }
@@ -447,6 +456,13 @@ body {
   .room-body { flex-direction: column; height: calc(100vh - 52px); height: calc(100dvh - 52px); }
   .table-wrap { flex: 1.15; min-height: 300px; }
   .side-panel { width: 100%; height: 34vh; height: 34dvh; border-left: none; border-top: 1px solid rgba(255,255,255,.1); }
+  /* P0 修复：限制左右家宽度 + 中央提示框收窄，避免三者在中线物理重叠 */
+  .seat-left, .seat-right { width: 100px; }
+  .seat-left .pc-name, .seat-right .pc-name { max-width: 40px; }
+  .seat-left .pc-top, .seat-right .pc-top { flex-wrap: wrap; row-gap: 2px; }
+  .table-center { max-width: 160px; }
+  /* P0 修复：大厅创建/加入按钮放不下时换行，不再被压成竖排文字 */
+  .lobby-bar { flex-wrap: wrap; }
   /* 中央提示区：紧凑底衬，避免与弃牌堆/牌面叠在一起看不清 */
   .table-center { padding: 6px 10px; border-radius: 10px; }
   .table-center .wall-count { font-size: 12px; }
@@ -455,10 +471,12 @@ body {
   .table-center .action-bar { margin-top: 6px; }
   /* 手牌：单行展示 + 等比缩小，保证 13-14 张一行完整可见可点 */
   .hand { flex-wrap: nowrap; }
-  .hand-tiles { flex-wrap: nowrap; justify-content: center; }
-  .tile { width: 20px; height: 30px; font-size: 10px; }
-  .tile .n { font-size: 10px; }
+  .hand-tiles { flex-wrap: nowrap; justify-content: center; gap: 2px; }
+  .tile { width: 24px; height: 36px; font-size: 11px; }
+  .tile .n { font-size: 11px; }
   .tile .s { font-size: 7px; }
+  /* 半格占位随牌宽等比缩小（基准：桌面 40px 牌 = 20px 占位） */
+  .hand-tiles .tile.hand-gap { width: 12px; }
   .tile.small { width: 15px; height: 22px; font-size: 8px; }
   .tile.small .n { font-size: 9px; }
   .tile.small .s { font-size: 5px; }
@@ -476,12 +494,12 @@ body {
   .pc-name { max-width: 60px; }
   .melds { margin-bottom: 3px; }
   .discard-area { max-width: 200px; }
-  .seat-left .discard-area, .seat-right .discard-area { max-width: 100px; }
+  .seat-left .discard-area, .seat-right .discard-area { max-width: 88px; }
   .logo { font-size: 28px; }
   /* 语音播报选择：竖屏紧凑适配 */
   .voice-row { margin: -2px 0 14px; font-size: 13px; }
   .voice-seg .seg-item { min-width: 64px; padding: 7px 12px; font-size: 13px; }
-  .act { min-width: 44px; padding: 8px 10px; font-size: 13px; flex: 0 1 auto; }
+  .act { min-width: 44px; min-height: 40px; padding: 8px 12px; font-size: 14px; flex: 0 1 auto; }
   .action-bar { gap: 6px; }
   /* 结算弹窗与积分榜手机端防溢出 */
   .modal-box { padding: 16px; width: min(94vw, 430px); }
@@ -514,6 +532,7 @@ body {
   /* 手牌：单行展示 + 等比牌面（横屏横向空间足，略大于竖屏） */
   .hand { flex-wrap: nowrap; }
   .hand-tiles { flex-wrap: nowrap; justify-content: center; }
+  .hand-tiles .tile.hand-gap { width: 12px; }
   .tile { width: 24px; height: 34px; font-size: 11px; }
   .tile .n { font-size: 11px; }
   .tile .s { font-size: 7px; }
@@ -556,7 +575,7 @@ body {
 /* ================= 136 模式：报听扣牌 / 设置开关 / 杠分明细 ================= */
 .settings-136 { margin-top: 6px; padding: 8px 10px; background: rgba(0,0,0,.05); border-radius: 8px; }
 .setting-divider { font-size: 12px; color: #888; margin: 4px 0 8px; font-weight: 700; }
-.mult-input { width: 56px; margin-left: auto; text-align: center; font-size: 14px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 6px; }
+.mult-input { width: 60px; margin-left: auto; text-align: center; font-size: 16px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 6px; }
 
 .pc-hand { background: rgba(46,134,172,.18); color: #2e86c1; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
 .pc-lock { background: #b7950b; color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 8px; }
@@ -630,4 +649,13 @@ body {
   font-size: 11px;
   font-weight: 600;
   margin-left: 4px;
+}
+
+/* ---------- 无障碍：用户偏好减弱动效时，停用所有装饰性动画/过渡 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
 }
