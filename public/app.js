@@ -600,17 +600,19 @@
   }
 
   /**
-   * 托管按钮点击：改为事件委托到静态容器 #table-wrap。
+   * 托管按钮点击：事件委托到静态容器 #table-wrap，监听 pointerdown 而非 click。
    * 原因：renderTable() 每次 game_state 都会整桌 innerHTML 重建（AI 连续行动时每 ~80ms 一次），
-   *      直接绑在按钮上的 onclick 会随节点销毁丢失——尤其在别人回合（AI 高频行动、广播密集）
-   *      touchstart 与 touchend 落在不同节点上，click 不再派发，表现为"按钮点不了"。
-   *      委托到不被替换的父容器可跨重绘稳定命中。
+   *      桌面端鼠标 click 依赖 mousedown 与 mouseup 在同一节点——按下时按钮还在旧节点、
+   *      抬起时已被重建替换成新节点，click 完全不合成，委托收不到；移动端 touch 则
+   *      在 touchend 时向共同祖先合成 click，故旧版委托只对移动端有效。
+   *      改用 pointerdown：按下瞬间立即响应，不依赖合成，桌面/移动均稳定命中。
    */
   function bindCancelHosted() {
     const wrap = $('#table-wrap');
     if (!wrap || wrap.dataset.hostedBound === '1') return;
     wrap.dataset.hostedBound = '1';
-    wrap.addEventListener('click', (e) => {
+    wrap.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return; // 仅左键/触摸/笔
       const t = e.target.closest('.btn-cancel-hosted, .btn-hosted');
       if (!t) return;
       e.preventDefault();
