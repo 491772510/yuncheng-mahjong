@@ -599,11 +599,23 @@
     syncSpeaking();
   }
 
+  /**
+   * 托管按钮点击：改为事件委托到静态容器 #table-wrap。
+   * 原因：renderTable() 每次 game_state 都会整桌 innerHTML 重建（AI 连续行动时每 ~80ms 一次），
+   *      直接绑在按钮上的 onclick 会随节点销毁丢失——尤其在别人回合（AI 高频行动、广播密集）
+   *      touchstart 与 touchend 落在不同节点上，click 不再派发，表现为"按钮点不了"。
+   *      委托到不被替换的父容器可跨重绘稳定命中。
+   */
   function bindCancelHosted() {
-    const btn = document.querySelector('#table-wrap .btn-cancel-hosted');
-    if (btn) btn.onclick = () => send({ type: 'cancel_hosted' });
-    const hostedBtn = document.querySelector('#table-wrap .btn-hosted');
-    if (hostedBtn) hostedBtn.onclick = () => send({ type: 'set_hosted' });
+    const wrap = $('#table-wrap');
+    if (!wrap || wrap.dataset.hostedBound === '1') return;
+    wrap.dataset.hostedBound = '1';
+    wrap.addEventListener('click', (e) => {
+      const t = e.target.closest('.btn-cancel-hosted, .btn-hosted');
+      if (!t) return;
+      e.preventDefault();
+      send({ type: t.classList.contains('btn-cancel-hosted') ? 'cancel_hosted' : 'set_hosted' });
+    });
   }
 
   function turnText() {
