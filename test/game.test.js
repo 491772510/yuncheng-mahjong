@@ -1447,3 +1447,120 @@ test('观战：旁观者进入进行中房间，收到 game_state 但看不到�
     cleanupServer(srv);
   }
 });
+
+// ============ 整局结算（settled）后人员变动 ============
+
+test('整局结算后：新玩家可加入、玩家可退出、房主可踢人补 AI，再来一轮重置开局', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  const wb = makeWs();
+  const wc = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+  send(wb, { type: 'join_room', roomId: room.id });
+  send(wa, { type: 'start_game' }); // aiFill 补 2 AI 开局
+  assert.equal(room.state, 'playing');
+
+  // 模拟整局打完 → settled（终局）
+  room.state = 'settled';
+  room.settleConfirms = null;
+
+  // 1. 玩家乙可主动退出（settled 状态允许）
+  send(wb, { type: 'leave_room' });
+  const rsB = lastOf(wb, 'room_state');
+  assert.equal(rsB.room, null, '玩家乙在结算后可退出');
+  assert.ok(!room.players.some((pl) => pl && pl.name === '玩家乙'), '玩家乙已离座');
+
+  // 2. 新玩家丙可加入（settled 状态允许加入空位）
+  srv.handleConnection(wc);
+  send(wc, { type: 'join_lobby', name: '玩家丙' });
+  send(wc, { type: 'join_room', roomId: room.id });
+  const rsC = lastOf(wc, 'room_state');
+  assert.ok(rsC && rsC.room && rsC.room.state === 'settled', '新玩家丙加入后收到 settled 状态');
+  assert.ok(room.players.some((pl) => pl && pl.name === '玩家丙'), '玩家丙已落座');
+
+  // 3. 房主可踢出玩家丙（settled 状态允许踢人）
+  const cId = room.players.find((pl) => pl && pl.name === '玩家丙').id;
+  send(wa, { type: 'kick_player', targetId: cId });
+  const rsC2 = lastOf(wc, 'room_state');
+  assert.equal(rsC2.room, null, '被踢玩家丙回到大厅');
+  assert.ok(!room.players.some((pl) => pl && pl.name === '玩家丙'), '玩家丙已被踢出');
+
+  // 4. 房主再来一轮：重置积分并开局（settled → waiting → playing）
+  // 记录当前落座玩家 score 置零验证
+  for (const pl of room.players) if (pl) pl.score = 123; // 制造脏数据
+  send(wa, { type: 'start_game' });
+  assert.equal(room.state, 'playing', '再来一轮后重新开局');
+  assert.ok(room.players.filter(Boolean).every((pl) => pl.score === 0), '新一轮积分已重置');
+  assert.equal(room.roundNo, 1, '局数重新从 1 开始');
+
+  await sleep(300);
+  cleanupServer(srv);
+});
+
+test('整局结算后：房主踢出 AI，再来一轮 AI 补位补足 4 人', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+  send(wa, { type: 'start_game' }); // aiFill 补 3 AI 开局
+  assert.equal(room.state, 'playing');
+
+  room.state = 'settled';
+  room.settleConfirms = null;
+
+  // 找出一个 AI 座位并踢出
+  const ai = room.players.find((pl) => pl && pl.isAI);
+  assert.ok(ai, '存在 AI 玩家');
+  const aiSeat = ai.seat;
+  send(wa, { type: 'kick_player', targetId: ai.id });
+  assert.equal(room.players[aiSeat], null, 'AI 已被踢出座位');
+  assert.ok(!srv.players.has(ai.id), 'AI 已从全局 players 移除');
+
+  // 再来一轮：aiFill 补位应补足 4 人后开局
+  send(wa, { type: 'start_game' });
+  assert.equal(room.state, 'playing', '再来一轮后开局');
+  assert.equal(room.players.filter(Boolean).length, 4, 'AI 补位补足 4 人');
+
+  await sleep(300);
+  cleanupServer(srv);
+});
+
+test('牌局进行中（playing）：仍禁止加入/踢人/补AI（仅 settled/waiting 放开）', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  const wc = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  srv.handleConnection(wc);
+  send(wc, { type: 'join_lobby', name: '玩家丙' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+  send(wa, { type: 'start_game' }); // aiFill 补 3 AI 开局
+  assert.equal(room.state, 'playing');
+
+  // 进行中加入被拒（不可加入）
+  send(wc, { type: 'join_room', roomId: room.id });
+  const errJoin = lastOf(wc, 'error');
+  assert.ok(errJoin && /不可加入|已满/.test(errJoin.message), '进行中不可加入');
+
+  // 进行中踢人（AI）被拒
+  const ai = room.players.find((pl) => pl && pl.isAI);
+  send(wa, { type: 'kick_player', targetId: ai.id });
+  const errKick = lastOf(wa, 'error');
+  assert.ok(errKick && /无法踢出/.test(errKick.message), '进行中无法踢人');
+
+  // 进行中补 AI 被拒（已满）
+  send(wa, { type: 'add_ai' });
+  const errAdd = lastOf(wa, 'error');
+  assert.ok(errAdd && /已满|不能添加/.test(errAdd.message), '进行中不能补 AI');
+
+  await sleep(300);
+  cleanupServer(srv);
+});

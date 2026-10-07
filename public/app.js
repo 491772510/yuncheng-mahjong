@@ -111,6 +111,7 @@
           return;
         }
         syncHostedNoticeFromRoom(msg.room);
+        const prevState = state.room && state.room.state;
         state.room = msg.room;
         renderRoomView();
         // 不在确认阶段时清理结算确认区，避免跨局/跨房间残留
@@ -119,7 +120,8 @@
           $('#settle-confirm-btn').classList.add('hidden');
           $('#settle-close').classList.remove('hidden');
         }
-        if (state.room.state === 'settled') {
+        // 仅在「从进行中打到 settled 那一刻」弹一次总结算弹窗；新加入/人员变动广播 room_state 不重复弹
+        if (state.room.state === 'settled' && prevState === 'playing') {
           showSettleModal();
         }
         break;
@@ -607,14 +609,9 @@
       return;
     }
     let html = '';
-    if (isOwner && room.state === 'waiting') {
+    if (isOwner && (room.state === 'waiting' || room.state === 'settled')) {
       if (!full) html += `<button class="btn small" id="btn-add-ai">＋ AI 补位</button>`;
-      html += full
-        ? `<button class="btn small primary" id="btn-start">开始游戏</button>`
-        : `<button class="btn small" id="btn-start">开始游戏</button>`;
-    }
-    if (isOwner && room.state === 'settled') {
-      html += `<button class="btn small primary" id="btn-restart">再来一轮</button>`;
+      html += `<button class="btn small primary" id="btn-start">${room.state === 'settled' ? '再来一轮' : '开始游戏'}</button>`;
     }
     if (isOwner) {
       html += `<button class="btn small" id="btn-dissolve">解散房间</button>`;
@@ -628,7 +625,6 @@
     const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
     on('btn-add-ai', () => send({ type: 'add_ai' }));
     on('btn-start', () => send({ type: 'start_game' }));
-    on('btn-restart', () => send({ type: 'start_game' }));
     on('btn-dissolve', () => {
       if (confirm('确定解散房间吗？所有玩家都会被移出。')) send({ type: 'dissolve' });
     });
@@ -678,6 +674,8 @@
   function renderSettledRoom() {
     const room = state.room;
     const wrap = $('#table-wrap');
+    const isOwner = room.ownerId === state.playerId;
+    const full = room.players.filter(Boolean).length === 4;
     const sorted = [...room.players].filter(Boolean).sort((a, b) => b.score - a.score);
     wrap.innerHTML = `
       <div class="settle-final">
@@ -688,8 +686,40 @@
             <span class="nm">${esc(p.name)}${p.id === state.playerId ? '（我）' : ''}</span>
             <span class="delta ${p.score >= 0 ? 'up' : 'down'}">${p.score >= 0 ? '+' : ''}${p.score}</span>
           </div>`).join('')}
-        <div class="wait-hint">房主可点击「再来一轮」重置积分重新开战，或解散房间。</div>
+        <div class="wait-hint">本局已结束，可自由换人后再开新一轮：</div>
+        <div class="settle-actions">${settleActionBtns(room, isOwner, full)}</div>
       </div>`;
+    bindSettleActions(room, isOwner);
+  }
+
+  // 结算界面人员变动按钮：房主可补 AI / 踢人，所有非旁观者可退出
+  function settleActionBtns(room, isOwner, full) {
+    const btns = [];
+    if (isOwner) {
+      if (!full) btns.push(`<button class="btn small" id="btn-settle-add-ai">＋ AI 补位</button>`);
+      for (const pl of room.players) {
+        if (pl && pl.id !== state.playerId) {
+          btns.push(`<button class="btn small kick-btn" data-kick="${pl.id}">踢出 ${esc(pl.name)}</button>`);
+        }
+      }
+      btns.push(`<button class="btn small primary" id="btn-settle-restart">再来一轮</button>`);
+    }
+    btns.push(`<button class="btn small" id="btn-settle-leave">退出房间</button>`);
+    return btns.join('');
+  }
+
+  function bindSettleActions(room, isOwner) {
+    const wrap = $('#table-wrap');
+    if (!wrap) return;
+    const addAi = wrap.querySelector('#btn-settle-add-ai');
+    if (addAi) addAi.onclick = () => send({ type: 'add_ai' });
+    wrap.querySelectorAll('.kick-btn').forEach((b) => {
+      b.onclick = () => send({ type: 'kick_player', targetId: b.dataset.kick });
+    });
+    const restart = wrap.querySelector('#btn-settle-restart');
+    if (restart) restart.onclick = () => send({ type: 'start_game' });
+    const leave = wrap.querySelector('#btn-settle-leave');
+    if (leave) leave.onclick = () => send({ type: 'leave_room' });
   }
 
   // ================= 牌桌 =================

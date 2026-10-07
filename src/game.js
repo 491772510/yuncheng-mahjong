@@ -653,10 +653,12 @@ class GameServer {
 
     // 观战路径：房间进行中 / 已满 / 已结算时，允许以旁观者身份进入（不可操作，仅观看）
     const wantSpectate = !!(msg && msg.spectate);
-    if (room.state !== 'waiting' || !room.players.some((x) => x === null)) {
+    // 可加入状态：waiting（等待中）或 settled（整局结束，可自由换人后再开新一轮）
+    const joinable = room.state === 'waiting' || room.state === 'settled';
+    if (!joinable || !room.players.some((x) => x === null)) {
       if (wantSpectate && room.state === 'playing') return this._spectateRoom(p, room);
       if (wantSpectate) return this._failJoin(p, '该房间暂不可观战（未开始）');
-      if (room.state !== 'waiting') return this._failJoin(p, '房间当前不可加入（游戏中或已结算）');
+      if (room.state !== 'waiting' && room.state !== 'settled') return this._failJoin(p, '房间当前不可加入（游戏中）');
       return this._failJoin(p, '房间已满');
     }
 
@@ -750,7 +752,7 @@ class GameServer {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
     if (p.id !== room.ownerId) return this._err(p, '只有房主可以添加 AI');
-    if (room.state !== 'waiting') return this._err(p, '当前状态不能添加 AI');
+    if (room.state !== 'waiting' && room.state !== 'settled') return this._err(p, '当前状态不能添加 AI');
     if (room.players.filter(Boolean).length >= 4) return this._err(p, '房间已满');
     this._addAI(room);
     this._broadcastRoomState(room);
@@ -762,7 +764,7 @@ class GameServer {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
     if (p.id !== room.ownerId) return this._err(p, '只有房主可以踢出玩家');
-    if (room.state !== 'waiting') return this._err(p, '牌局进行中，无法踢出玩家');
+    if (room.state !== 'waiting' && room.state !== 'settled') return this._err(p, '牌局进行中，无法踢出玩家');
     const targetId = String((msg && msg.targetId) || '').trim();
     // 房间视图里他人 id 是座位代称（s0-s3）；兼容旧客户端直传的真实 playerId
     const target = this._resolveRoomPlayer(room, targetId);

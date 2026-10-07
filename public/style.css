@@ -500,6 +500,8 @@ body {
 .wait-card.empty-card { border: 2px dashed rgba(255,255,255,.25); color: rgba(255,255,255,.5); }
 .wait-hint { text-align: center; padding: 12px; opacity: .8; font-size: 14px; }
 .settle-final { max-width: 420px; margin: 10px auto; }
+.settle-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 12px; }
+.settle-actions .kick-btn { background: #f0e6e6; color: #c0392b; border-color: #e0c4c4; }
 
 /* ---------- 弹窗 ---------- */
 .modal {
