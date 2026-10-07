@@ -564,8 +564,16 @@ body {
   .voice-seg .seg-item { min-width: 64px; padding: 7px 12px; font-size: 13px; }
   .act { min-width: 44px; min-height: 40px; padding: 8px 12px; font-size: 14px; flex: 0 1 auto; }
   .action-bar { gap: 6px; }
-  /* 结算弹窗与积分榜手机端防溢出 */
-  .modal-box { padding: 16px; width: min(94vw, 430px); }
+  /* 房间头部按钮在窄屏换行，避免被挤出视口 */
+  .header-right { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  /* 大厅输入框窄屏占满整行，按钮跟在下方 */
+  .entry-box { flex-direction: column; }
+  .entry-box input { width: 100%; }
+  .lobby-bar { flex-direction: column; align-items: stretch; }
+  .join-box { width: 100%; }
+  .join-box input { flex: 1; }
+  /* 结算弹窗与积分榜手机端防溢出 + 可滚动 */
+  .modal-box { padding: 16px; width: min(94vw, 430px); max-height: 88dvh; overflow-y: auto; }
   .settle-hands .row { font-size: 12px; gap: 4px; }
   .settle-hands .tile.tiny { width: 12px; height: 18px; }
   .score-row .rs { width: 58px; font-size: 11px; }
@@ -574,6 +582,25 @@ body {
   /* 聊天气泡：手机竖屏更紧凑，避免遮挡手牌与操作按钮 */
   .bubble-layer { max-width: 60%; }
   .bubble { font-size: 11px; padding: 4px 7px; max-width: 140px; }
+}
+
+/* ---------- 超小屏手机（≤420px）进一步压缩 ---------- */
+@media (max-width: 420px) {
+  .seat-left, .seat-right { width: 84px; }
+  .table-center { max-width: 132px; }
+  .tile { width: 20px; height: 30px; font-size: 10px; }
+  .tile .n { font-size: 10px; }
+  .tile .s { font-size: 6px; }
+  .hand-tiles .tile.hand-gap { width: 10px; flex: 0 1 10px; }
+  .tile.small { width: 13px; height: 19px; font-size: 7px; }
+  .tile.tiny { width: 10px; height: 15px; }
+  .discard-area { max-width: 168px; }
+  .seat-left .discard-area, .seat-right .discard-area { max-width: 70px; }
+  .player-card { padding: 4px 6px; }
+  .pc-top { font-size: 11px; gap: 3px; }
+  .act { min-width: 40px; min-height: 38px; padding: 7px 10px; font-size: 13px; }
+  .logo { font-size: 24px; }
+  .emoji-btn { width: 30px; font-size: 17px; }
 }
 
 /* ---------- 手机横屏适配 ---------- */
