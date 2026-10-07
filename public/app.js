@@ -1003,6 +1003,15 @@
     }).join('');
   }
 
+  // 结算公开展示明牌区：牌局已结束、手牌已亮，暗杠牌面完整公开（4 张全亮用于查杠）
+  function renderMeldsRevealed(melds, goldTile) {
+    if (!melds || !melds.length) return '';
+    return melds.map((m) => {
+      const tiles = m.tiles.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
+      return `<div class="meld">${tiles}</div>`;
+    }).join('');
+  }
+
   const HONOR_NAMES = { e: '東', s: '南', x: '西', n: '北', z: '中', f: '發', p: '白', z0: '中' };
 
   function tileHtml(tile, size, ting, discardable, isNew, idx, selected, goldTile) {
@@ -1897,7 +1906,7 @@
         <div class="row">
           <b>${esc(h.name)}${h.seat === result.winnerSeat ? winnerLabel : ''}</b>
           ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
-          ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
+          ${h.melds && h.melds.length ? '<span>|</span>' + renderMeldsRevealed(h.melds) : ''}
           ${withScore ? `<span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>` : ''}
         </div>` : '').join('');
     const settleHands = `<div class="settle-hands">${handsHtml(result.type === 'hu')}</div>`;
@@ -1962,7 +1971,7 @@
         <div class="row">
           <b>${esc(h.name)}${h.seat === winSeat ? winnerLabel : ''}</b>
           ${h.hand.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, result.goldTile)).join('')}
-          ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds, false, result.goldTile) : ''}
+          ${h.melds && h.melds.length ? '<span>|</span>' + renderMeldsRevealed(h.melds, result.goldTile) : ''}
           ${withScore ? `<span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>` : ''}
         </div>` : '').join('');
     const settleHands = `<div class="settle-hands">${handsHtml(result.type === 'hu')}</div>`;
@@ -2045,7 +2054,7 @@
         <div class="row">
           <b>${esc(h.name)}${h.seat === result.winnerSeat ? winnerLabel : ''}</b>
           ${h.hand.map((t) => tileHtml(t, 'tiny')).join('')}
-          ${h.melds && h.melds.length ? '<span>|</span>' + renderMelds(h.melds) : ''}
+          ${h.melds && h.melds.length ? '<span>|</span>' + renderMeldsRevealed(h.melds) : ''}
           ${withScore ? `<span style="opacity:.7">${h.roundScore >= 0 ? '+' : ''}${h.roundScore}</span>` : ''}
         </div>` : '').join('');
     const settleHands = `<div class="settle-hands">${handsHtml(result.type === 'hu')}</div>`;

@@ -105,8 +105,13 @@ test('append：按天命名 game-YYYY-MM-DD.jsonl，每行一个 JSON 事件', a
 test('cleanup：删除超过 7 天的旧日志，保留最近 7 天', () => {
   const dir = makeTmpDir();
   try {
-    const oldName = 'game-2020-01-01.jsonl';
-    const recentName = 'game-2026-10-01.jsonl';
+    // 动态生成日期，避免测试因日期推进而过期：旧日志 = 8 天前，最近日志 = 今天
+    const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const today = new Date();
+    const recent = new Date(today.getTime()); // 今天（最近 7 天内）
+    const old = new Date(today.getTime() - 8 * 24 * 60 * 60 * 1000); // 8 天前（超过保留期）
+    const oldName = `game-${fmt(old)}.jsonl`;
+    const recentName = `game-${fmt(recent)}.jsonl`;
     fs.writeFileSync(path.join(dir, oldName), '{}');
     fs.writeFileSync(path.join(dir, recentName), '{}');
     fs.writeFileSync(path.join(dir, 'not-log.txt'), 'x');
