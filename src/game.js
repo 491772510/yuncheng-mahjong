@@ -22,6 +22,7 @@ const crypto = require('crypto');
 const accountMixin = require('./game/account');
 const utilsMixin = require('./game/utils');
 const ioMixin = require('./game/io');
+const variants = require('./game/variants');
 
 users.initUsers(); // 启动即加载账号与历史存储（文件在 data/，gitignore）
 
@@ -2508,9 +2509,7 @@ class GameServer {
               pl._autoActing = true;
               try {
               if (rules.checkHu(g.hands[seat], g.melds[seat]) && rules.canHuByPoints(rules.tilePoints(g.drawnTile), 'zimo')) {
-                const decision = this._isHongZhong(room)
-                  ? this._decideHongZhongDrawAction(g, room, seat)
-                  : ai.decideDrawAction(g, room, seat);
+                const decision = this._variantCall(room, this._variantHandlers(room).decideDrawAction, g, room, seat);
                 if (decision.type === 'hu') this._hu(pl, {});
                 else this._pass(pl);
               } else {
@@ -2524,11 +2523,7 @@ class GameServer {
             }
             return; // 报听玩家尚未摸牌：等待系统摸打，不代打
           }
-          const decision = this._isTieJin(room)
-            ? this._decideTieJinDrawAction(g, room, seat)
-            : (this._isHongZhong(room)
-              ? this._decideHongZhongDrawAction(g, room, seat)
-              : ai.decideDrawAction(g, room, seat));
+          const decision = this._variantCall(room, this._variantHandlers(room).decideDrawAction, g, room, seat);
           pl._autoActing = true; // 动作执行期维持托管标记（动作可能同步开启下一局）
           try {
             if (decision.type === 'hu') this._hu(pl, {});
@@ -2540,11 +2535,7 @@ class GameServer {
         } else if (g.stage === 'response' && g.pending) {
           const r = g.pending.responders.find((x) => x.seat === seat);
           if (r && r.choice === null) {
-            const choice = this._isTieJin(room)
-              ? this._decideTieJinResponse(g, room, seat, r)
-              : (this._isHongZhong(room)
-                ? this._decideHongZhongResponse(g, room, seat, r)
-                : ai.decideResponse(g, room, seat, r));
+            const choice = this._variantCall(room, this._variantHandlers(room).decideResponse, g, room, seat, r);
             pl._autoActing = true;
             try {
               if (choice === 'hu') this._hu(pl, {});
@@ -2758,8 +2749,9 @@ class GameServer {
   _buildDrawPrompt(room, seat) {
     const g = room.game;
     const hand = g.hands[seat];
-    if (this._isHongZhong(room)) return this._buildDrawPromptHongZhong(room, seat);
-    if (this._isTieJin(room)) return this._buildDrawPromptTieJin(room, seat);
+    // 策略表分发：红中/贴金走专用提示构建，扣点点用下方默认实现
+    const promptBuilder = this._variantHandlers(room).buildDrawPrompt;
+    if (promptBuilder !== '_buildDrawPrompt') return this[promptBuilder](room, seat);
     const actions = ['play'];
     const gangOptions = [];
     // 碰后（未摸牌）也可报听：碰完即听立即识别，不待下一轮摸牌；碰后手牌结构不允许胡/杠，只给 play/ting
@@ -3041,6 +3033,25 @@ class GameServer {
 
   _isHongZhong(room) {
     return !!(room && room.settings && room.settings.variant === 'hongzhong');
+  }
+
+  /** 归一化玩法名（策略表方案：读表前先归一，供 _variantHandlers 等复用） */
+  _variantOf(room) {
+    return variants.normalizeVariant(room && room.settings ? room.settings.variant : 'koudian');
+  }
+
+  /** 取房间对应玩法的 handler 表（AI 决策 / 出牌提示的方法名），供数据驱动分发 */
+  _variantHandlers(room) {
+    return variants.handlersOf(room);
+  }
+
+  /** 数据驱动调用：handler 名可能是 'ai.xxx'（模块函数）或 '_xxx'（this 方法） */
+  _variantCall(room, handlerName, ...args) {
+    if (handlerName && handlerName.startsWith('ai.')) {
+      const fn = handlerName.slice(3);
+      return ai[fn](...args);
+    }
+    return this[handlerName](...args);
   }
 
   _hzTileTypes(room) {
