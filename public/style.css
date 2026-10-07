@@ -50,6 +50,12 @@ body {
   flex: 1; border: none; border-radius: 8px; padding: 12px 14px; font-size: 16px;
   background: rgba(255,255,255,.95); color: #222; outline: none;
 }
+/* 登录后昵称框锁定：取账号昵称，不可手改（服务端也只认 displayName） */
+#nick-input.from-account {
+  background: rgba(255,215,94,.14); color: #d9b24a; cursor: not-allowed;
+  border: 1px solid rgba(255,215,94,.55);
+}
+.nick-hint { font-size: 12px; color: #e6c25a; margin: -6px 2px 12px; text-align: center; }
 .lobby-bar { display: flex; gap: 10px; margin-bottom: 18px; }
 .join-box { flex: 1; display: flex; gap: 10px; }
 .join-box input { flex: 0 0 110px; }

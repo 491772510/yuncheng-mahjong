@@ -253,6 +253,7 @@
         localStorage.setItem('kd.name', msg.user.displayName);
         hideModal('auth-modal');
         renderAuthBar();
+        syncNickInput();
         toast('已登录：' + msg.user.displayName);
         break;
       case 'logged_out':
@@ -263,6 +264,7 @@
         localStorage.removeItem('kd.username');
         localStorage.removeItem('kd.displayName');
         renderAuthBar();
+        syncNickInput();
         break;
       case 'history':
         renderHistory(msg.records || [], !!msg.guest);
@@ -2400,8 +2402,28 @@
     window.visualViewport.addEventListener('resize', fitViewportHeight);
   }
 
+  // 登录后用账号昵称回填大厅昵称框并锁定（服务端 join_lobby 只认 displayName，手填无效）
+  // 退出登录后恢复可编辑，游客仍需自行输入昵称
+  function syncNickInput() {
+    const input = document.getElementById('nick-input');
+    if (!input) return;
+    const hint = document.getElementById('nick-hint');
+    if (state.token) {
+      input.value = state.displayName || state.username || '';
+      input.disabled = true;
+      input.classList.add('from-account');
+      input.placeholder = '已使用账号昵称';
+      if (hint) { hint.textContent = '昵称取自账号，无需再填'; hint.classList.remove('hidden'); }
+    } else {
+      input.disabled = false;
+      input.classList.remove('from-account');
+      input.placeholder = '输入昵称（1-12 个字）';
+      if (hint) hint.classList.add('hidden');
+    }
+  }
+
   function init() {
-    $('#nick-input').value = state.name;
+    syncNickInput();
     initCreateModal();
     initVoice();
     initTapToDiscard();
