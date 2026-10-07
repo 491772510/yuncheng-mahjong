@@ -1308,3 +1308,47 @@ test('加算模型-清一色开关开启叠加：底分+清一色20+七小对20'
 
 
 
+
+// ============ 功能：对局表情互动 ============
+test('emoji 表情广播给房间内所有人；非白名单 emoji 被忽略；迟到者可补看', () => {
+  const srv = newServer();
+  try {
+    const wa = makeWs();
+    const wb = makeWs();
+    srv.handleConnection(wa);
+    send(wa, { type: 'join_lobby', name: '甲' });
+    srv.handleConnection(wb);
+    send(wb, { type: 'join_lobby', name: '乙' });
+    send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+    const room = [...srv.rooms.values()][0];
+    send(wb, { type: 'join_room', roomId: room.id });
+
+    // 甲发送合法 emoji
+    send(wa, { type: 'emoji', emoji: '👍' });
+    const ea = lastOf(wa, 'emoji');
+    const eb = lastOf(wb, 'emoji');
+    assert.ok(ea && eb, '双方都收到 emoji 广播');
+    assert.equal(ea.emoji.emoji, '👍');
+    assert.equal(ea.emoji.from, '甲');
+    assert.equal(eb.emoji.emoji, '👍');
+    assert.equal(eb.emoji.from, '甲');
+
+    // 非白名单 emoji 应被忽略：不广播（双方 received 计数不增）
+    const beforeA = wa.sent.filter((m) => m.type === 'emoji').length;
+    const beforeB = wb.sent.filter((m) => m.type === 'emoji').length;
+    send(wb, { type: 'emoji', emoji: '<script>alert(1)</script>' });
+    assert.equal(wa.sent.filter((m) => m.type === 'emoji').length, beforeA, '非法 emoji 不下发');
+    assert.equal(wb.sent.filter((m) => m.type === 'emoji').length, beforeB, '非法 emoji 不下发');
+
+    // 迟到者（丙）加入后，room_state 携带最近 emoji 供其补看
+    const wc = makeWs();
+    srv.handleConnection(wc);
+    send(wc, { type: 'join_lobby', name: '丙' });
+    send(wc, { type: 'join_room', roomId: room.id });
+    const rs = lastOf(wc, 'room_state');
+    assert.ok(rs && Array.isArray(rs.room.emoji) && rs.room.emoji.length >= 1, '迟到者 room_state 含最近 emoji');
+    assert.equal(rs.room.emoji[rs.room.emoji.length - 1].emoji, '👍');
+  } finally {
+    cleanupServer(srv);
+  }
+});

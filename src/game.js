@@ -29,6 +29,9 @@ const SETTLE_TIMEOUT_MS = 60000; // 结算确认超时：在线真人 60 秒未�
 const MAX_ROOMS = 100;
 const MAX_LOGS = 200;
 const MAX_CHAT = 50;
+const MAX_EMOJI = 30; // 房间内保留的最近表情条数（供迟到/重连者补看）
+// 对局表情互动白名单（仅这些 emoji 可被广播，防滥用/注入任意内容）
+const EMOJI_WHITELIST = ['👍', '😂', '😅', '😭', '😡', '🤔', '👏', '🎉', '💪', '🀄', '🔥', '💰'];
 
 // ---- 安全护栏（P0）----
 const MAX_RAW_MSG = 16 * 1024; // 单条消息最大字符数（与 server.js WebSocketServer maxPayload 一致），超限直接丢弃
@@ -288,6 +291,7 @@ class GameServer {
         case 'cancel_hosted': return this._cancelHosted(p);
         case 'settle_confirm': return this._settleConfirm(p);
         case 'chat': return this._chat(p, msg);
+        case 'emoji': return this._emoji(p, msg);
         case 'voice_signal': return this._voiceSignal(p, msg);
         default:
           // 未知消息类型：静默丢弃并计数（不回显，避免成为探测通道）
@@ -2383,6 +2387,20 @@ class GameServer {
     this._broadcast(room, { type: 'chat', chat: room.chat.slice(-MAX_CHAT) });
   }
 
+  // 对局表情互动：点击表情后向房间广播，轻量、无持久化的桌上氛围反馈
+  // 仅允许白名单内的 emoji，防滥用；保留最近若干条供迟到/重连者补看
+  _emoji(p, msg) {
+    const room = p.roomId ? this.rooms.get(p.roomId) : null;
+    if (!room) return this._err(p, '您不在房间中');
+    const emoji = String((msg && msg.emoji) || '').trim();
+    if (!EMOJI_WHITELIST.includes(emoji)) return; // 非白名单直接忽略，不广播
+    const entry = { from: p.name, seat: p.seat, emoji, time: nowTime() };
+    if (!room.emoji) room.emoji = [];
+    room.emoji.push(entry);
+    if (room.emoji.length > MAX_EMOJI) room.emoji.shift();
+    this._broadcast(room, { type: 'emoji', emoji: entry });
+  }
+
   // 实时语音对讲信令转发（WebRTC mesh：信令走 WS，媒体走 P2P）
   // 校验：发起者在房间内；目标为同房间真人玩家（非 AI、有可用 ws）；sig 序列化 ≤ VOICE_SIG_MAX
   _voiceSignal(p, msg) {
@@ -2672,6 +2690,7 @@ class GameServer {
       settleConfirms: room.settleConfirms ? room.settleConfirms.slice() : null,
       logs: this._maskLogsForViewer(room.logs.slice(-MAX_LOGS), viewerSeat),
       chat: room.chat.slice(-MAX_CHAT),
+      emoji: room.emoji ? room.emoji.slice(-MAX_EMOJI) : [],
     };
   }
 

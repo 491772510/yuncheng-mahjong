@@ -221,6 +221,10 @@
           if (cm) showChatBubble(cm.from, cm.text);
         }
         break;
+      case 'emoji':
+        // 对局表情互动：收到他人表情后桌面浮动展示
+        if (msg.emoji && msg.emoji.emoji) showEmojiFloat(msg.emoji.emoji, msg.emoji.from);
+        break;
       case 'error':
         // 服务端结构化错误码：凭据失效（老用户本地无 secret / secret 不匹配）→ 走自愈，不重复弹普通错误
         if (msg.code === 'AUTH_FAILED') { _handleAuthFailed(); break; }
@@ -1322,6 +1326,45 @@
     });
   }
 
+  // 对局表情互动：底部表情条，点击即广播一个白名单 emoji
+  const QUICK_EMOJIS = ['👍', '😂', '😅', '😭', '😡', '🤔', '👏', '🎉', '💪', '🀄', '🔥', '💰'];
+
+  function renderEmojiBar() {
+    const box = $('#emoji-bar');
+    if (!box || box.dataset.ready) return;
+    box.dataset.ready = '1';
+    box.innerHTML = QUICK_EMOJIS.map((e) =>
+      `<button class="emoji-btn" data-emoji="${e}">${e}</button>`).join('');
+    box.addEventListener('click', (e) => {
+      const btn = e.target.closest('.emoji-btn');
+      if (btn) send({ type: 'emoji', emoji: btn.dataset.emoji });
+    });
+  }
+
+  // 收到他人表情后，在桌面（发送者座位附近，未知则居中）浮动展示
+  function showEmojiFloat(emoji, from) {
+    const wrap = $('#table-wrap');
+    if (!wrap) return;
+    const el = document.createElement('div');
+    el.className = 'emoji-float';
+    el.textContent = emoji;
+    const seat = seatOfName(from);
+    let left = '50%', top = '50%';
+    if (seat >= 0) {
+      const seatEl = wrap.querySelector(`.seat[data-seat="${seat}"]`);
+      if (seatEl) {
+        const sr = seatEl.getBoundingClientRect();
+        const wr = wrap.getBoundingClientRect();
+        left = (sr.left - wr.left + sr.width / 2) + 'px';
+        top = (sr.top - wr.top + sr.height / 2) + 'px';
+      }
+    }
+    el.style.left = left;
+    el.style.top = top;
+    wrap.appendChild(el);
+    setTimeout(() => el.remove(), 1600);
+  }
+
   // ================= 聊天消息气泡 =================
   // 服务端 chat 只带 from 昵称，按昵称反查座位号挂气泡；
   // 气泡层挂在 table-wrap 顶层，renderTable 重绘时由调用方保留再同步定位
@@ -2138,6 +2181,7 @@
     $('#chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
     $('#chat-send-btn').onclick = sendChat;
     renderQuickChat();
+    renderEmojiBar();
 
     // 账号体系 UI 绑定
     $('#auth-btn').onclick = () => { setAuthMode('login'); showModal('auth-modal'); };
