@@ -601,6 +601,7 @@
       html += `<button class="btn small" id="btn-leave">退出房间</button>`;
     }
     html += `<button class="btn small${voiceEnabled ? ' voice-on' : ''}" id="btn-voice">${voiceEnabled ? '语音开' : '语音'}</button>`;
+    html += `<button class="btn small${sfxOn ? ' sfx-on' : ''}" id="btn-sfx">${sfxOn ? '音效开' : '音效'}</button>`;
     html += `<button class="btn small" id="btn-invite">邀请</button>`;
     box.innerHTML = html;
     const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
@@ -615,6 +616,7 @@
       if (voiceEnabled) voiceDisable();
       else voiceEnable();
     });
+    on('btn-sfx', () => setSfxOn(!sfxOn));
     on('btn-invite', () => openInvite());
   }
 
@@ -1439,8 +1441,8 @@
     }
   }
 
-  // 常用聊天语：点击即发，避免每局都打字；短语在此集中维护
-  const QUICK_CHATS = [
+  // 常用聊天语：点击即发，避免每局都打字；支持自定义增删，本地保存
+  const DEFAULT_QUICK_CHATS = [
     '快点出牌~',
     '该你啦',
     '稍等，卡了',
@@ -1452,17 +1454,78 @@
     '不好意思',
     '哈哈',
   ];
+  const QUICK_CHATS_KEY = 'kd.quickChats';
+
+  function loadQuickChats() {
+    try {
+      const raw = localStorage.getItem(QUICK_CHATS_KEY);
+      if (!raw) return DEFAULT_QUICK_CHATS.slice();
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return DEFAULT_QUICK_CHATS.slice();
+      // 过滤非法项 + 去重 + 限长，保留最多 20 条
+      const clean = arr.map((t) => String(t).trim().slice(0, 12)).filter(Boolean);
+      const uniq = [...new Set(clean)].slice(0, 20);
+      return uniq.length ? uniq : DEFAULT_QUICK_CHATS.slice();
+    } catch (e) {
+      return DEFAULT_QUICK_CHATS.slice();
+    }
+  }
+  let QUICK_CHATS = loadQuickChats();
+  let quickChatEditing = false;
+
+  function saveQuickChats() {
+    localStorage.setItem(QUICK_CHATS_KEY, JSON.stringify(QUICK_CHATS));
+  }
 
   function renderQuickChat() {
     const box = $('#chat-quick');
-    if (!box || box.dataset.ready) return;
-    box.dataset.ready = '1';
+    if (!box) return;
+    if (quickChatEditing) {
+      // 编辑模式：胶囊带删除×，末尾给一个添加输入框
+      const edit = $('#chat-quick-edit');
+      if (edit) edit.textContent = '完成';
+      box.innerHTML = QUICK_CHATS.map((t, i) =>
+        `<button class="chat-quick-btn editing" data-idx="${i}" title="点击删除">${esc(t)} ✕</button>`).join('') +
+        `<input class="chat-quick-add" maxlength="12" placeholder="＋ 新短语，回车添加" autocomplete="off">`;
+      box.querySelectorAll('.chat-quick-btn.editing').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          QUICK_CHATS.splice(Number(btn.dataset.idx), 1);
+          saveQuickChats();
+          renderQuickChat();
+        });
+      });
+      const addInput = box.querySelector('.chat-quick-add');
+      if (addInput) {
+        const commit = () => {
+          const v = addInput.value.trim().slice(0, 12);
+          if (!v) return;
+          if (QUICK_CHATS.length >= 20) { toast('最多 20 条常用语', true); addInput.value = ''; return; }
+          if (QUICK_CHATS.includes(v)) { toast('该短语已存在', true); addInput.value = ''; return; }
+          QUICK_CHATS.push(v);
+          saveQuickChats();
+          renderQuickChat();
+        };
+        addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); });
+        addInput.addEventListener('blur', commit);
+      }
+      return;
+    }
+    // 正常模式：点击即发
+    const edit = $('#chat-quick-edit');
+    if (edit) edit.textContent = '⚙';
     box.innerHTML = QUICK_CHATS.map((t) =>
       `<button class="chat-quick-btn" data-text="${esc(t)}">${esc(t)}</button>`).join('');
-    box.addEventListener('click', (e) => {
-      const btn = e.target.closest('.chat-quick-btn');
-      if (btn) sendChatText(btn.dataset.text);
+    box.querySelectorAll('.chat-quick-btn').forEach((btn) => {
+      btn.addEventListener('click', () => sendChatText(btn.dataset.text));
     });
+  }
+
+  function bindQuickChatEdit() {
+    const btn = $('#chat-quick-edit');
+    if (btn) btn.onclick = () => {
+      quickChatEditing = !quickChatEditing;
+      renderQuickChat();
+    };
   }
 
   // 对局表情互动：底部表情条，点击即广播一个白名单 emoji
@@ -2247,15 +2310,18 @@
       voiceState.baselineReady = true;
       return;
     }
-    // 出牌：废牌堆新增非牌背牌（'back' 为报听暗扣，不播报）；AI 动作不播报
+    // 出牌：废牌堆新增非牌背牌（'back' 为报听暗扣，不播报）；AI 动作不播报（音效对所有玩家播）
     for (let seat = 0; seat < game.players.length; seat++) {
       const p = game.players[seat];
       if (!p) continue;
       const discs = p.discards || [];
       const prev = voiceState.prevDiscardCounts[seat] || 0;
-      if (discs.length > prev && !p.isAI) {
+      if (discs.length > prev) {
         const last = discs[discs.length - 1];
-        if (last && last !== 'back') speakText(tileSpeech(last), 'discard:' + seat + ':' + last);
+        if (last && last !== 'back') {
+          if (!p.isAI) speakText(tileSpeech(last), 'discard:' + seat + ':' + last);
+          playSfx('discard');
+        }
       }
       voiceState.prevDiscardCounts[seat] = discs.length;
     }
@@ -2264,40 +2330,111 @@
       const p = game.players[seat];
       if (!p) continue;
       const nowTing = !!p.ting;
-      if (nowTing && !voiceState.prevTing[seat] && !p.isAI) {
-        speakText('报听', 'ting:' + seat);
+      if (nowTing && !voiceState.prevTing[seat]) {
+        if (!p.isAI) speakText('报听', 'ting:' + seat);
+        playSfx('ting');
       }
       voiceState.prevTing[seat] = nowTing;
     }
-    // 碰/杠/暗杠/补杠/吃：明面新增（补杠表现为同一明面由 peng 转为 bugang）；AI 动作不播报
+    // 碰/杠/暗杠/补杠/吃：明面新增（补杠表现为同一明面由 peng 转为 bugang）；AI 动作不播报（音效对所有玩家播）
     for (let seat = 0; seat < game.players.length; seat++) {
       const p = game.players[seat];
       if (!p) continue;
       const cur = (p.melds || []).map(meldSig);
       const prev = voiceState.prevMelds[seat] || [];
-      if (!p.isAI) {
-        for (const cs of cur) {
-          if (!prev.includes(cs)) {
-            const type = cs.split(':')[0];
-            const word = type === 'peng' ? '碰' : type === 'gang' ? '杠' : type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : type === 'chi' ? '吃' : '';
-            if (word) speakText(word, 'meld:' + seat + ':' + cs);
+      for (const cs of cur) {
+        if (!prev.includes(cs)) {
+          const type = cs.split(':')[0];
+          const word = type === 'peng' ? '碰' : type === 'gang' ? '杠' : type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : type === 'chi' ? '吃' : '';
+          if (word) {
+            if (!p.isAI) speakText(word, 'meld:' + seat + ':' + cs);
+            playSfx(type === 'peng' ? 'peng' : type === 'gang' || type === 'angang' || type === 'bugang' ? 'gang' : 'click');
           }
         }
       }
       voiceState.prevMelds[seat] = cur;
     }
-    // 胡：winners 由无到有（点炮/自摸/抢杠胡）；AI 胡牌不播报
+    // 胡：winners 由无到有（点炮/自摸/抢杠胡）；AI 胡牌不播报（音效对所有玩家播）
     if (game.winners && !voiceState.hadWinners) {
       if (game.winners.type === 'hu') {
         const ws = game.winners.winner != null ? game.winners.winner : game.winners.winnerSeat;
         const winner = game.players[ws];
+        const wt = game.winners.winType;
         if (!winner || !winner.isAI) {
-          const wt = game.winners.winType;
           speakText(wt === 'zimo' ? '自摸' : wt === 'qianggang' ? '抢杠胡' : '胡了', 'hu:' + game.roundNo);
         }
+        playSfx(wt === 'zimo' ? 'zimo' : 'hu');
       }
     }
     voiceState.hadWinners = !!game.winners;
+  }
+
+  // ================= 对局音效（Web Audio 合成，无音频文件） =================
+  // 出牌/碰/杠/胡等动作播放短促合成音，增强手感；AI 动作不播报（与语音播报一致）
+  // 声音开关独立存 localStorage('kd.sfx')：on 开 / off 关，默认开
+  const SFX_KEY = 'kd.sfx';
+  let sfxCtx = null; // 懒初始化 AudioContext（首次用户交互后才可发声）
+  function readSfxOn() {
+    const v = localStorage.getItem(SFX_KEY);
+    return v !== 'off'; // 未设置或非 off 一律视为开
+  }
+  let sfxOn = readSfxOn();
+  function sfxEnsureCtx() {
+    if (sfxCtx) return sfxCtx;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      sfxCtx = new AC();
+    } catch (e) { sfxCtx = null; }
+    return sfxCtx;
+  }
+  // 合成一个短音：freq 起始频率 / endFreq 结束频率（滑音）/ dur 时长 / type 波形 / gain 音量
+  function sfxTone(freq, endFreq, dur, type, gain) {
+    const ctx = sfxEnsureCtx();
+    if (!ctx) return;
+    try {
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = type || 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+      if (endFreq && endFreq !== freq) osc.frequency.exponentialRampToValueAtTime(Math.max(1, endFreq), t + dur);
+      g.gain.setValueAtTime(gain || 0.2, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.connect(g).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + dur + 0.02);
+    } catch (e) { /* 合成失败静默 */ }
+  }
+  // 各动作音效：出牌=短促中音、碰=双音上行、杠=三音下行、胡=上行琶音、自摸=长上行
+  function playSfx(kind) {
+    if (!sfxOn) return;
+    if (document.hidden || document.visibilityState === 'hidden') return;
+    switch (kind) {
+      case 'discard': sfxTone(660, 520, 0.08, 'triangle', 0.12); break;
+      case 'peng': sfxTone(520, 520, 0.06, 'square', 0.14); setTimeout(() => sfxTone(780, 780, 0.08, 'square', 0.14), 60); break;
+      case 'gang': sfxTone(392, 392, 0.06, 'square', 0.16); setTimeout(() => sfxTone(494, 494, 0.06, 'square', 0.16), 70); setTimeout(() => sfxTone(587, 587, 0.09, 'square', 0.16), 140); break;
+      case 'ting': sfxTone(880, 880, 0.1, 'sine', 0.15); break;
+      case 'hu': sfxTone(523, 784, 0.16, 'triangle', 0.2); setTimeout(() => sfxTone(659, 988, 0.2, 'triangle', 0.2), 120); break;
+      case 'zimo': sfxTone(440, 880, 0.28, 'triangle', 0.22); setTimeout(() => sfxTone(554, 1109, 0.3, 'triangle', 0.22), 140); break;
+      case 'click': sfxTone(400, 400, 0.04, 'square', 0.08); break;
+      default: break;
+    }
+  }
+  // 音效开关：仅切换标记，AudioContext 懒创建（避免自动播放策略拦截）
+  function setSfxOn(on) {
+    sfxOn = !!on;
+    localStorage.setItem(SFX_KEY, sfxOn ? 'on' : 'off');
+    updateSfxBtn();
+  }
+  function updateSfxBtn() {
+    const btn = $('#btn-sfx');
+    if (btn) btn.classList.toggle('sfx-on', sfxOn);
+  }
+  function initSfx() {
+    updateSfxBtn();
+    const btn = $('#btn-sfx');
+    if (btn) btn.onclick = () => setSfxOn(!sfxOn);
   }
 
   // ================= 事件绑定 =================
@@ -2320,6 +2457,7 @@
     $('#chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
     $('#chat-send-btn').onclick = sendChat;
     renderQuickChat();
+    bindQuickChatEdit();
     renderEmojiBar();
 
     // 账号体系 UI 绑定
@@ -2426,6 +2564,7 @@
     syncNickInput();
     initCreateModal();
     initVoice();
+    initSfx();
     initTapToDiscard();
     bindEvents();
     connect();

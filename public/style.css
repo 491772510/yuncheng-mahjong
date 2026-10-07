@@ -119,6 +119,21 @@ body {
 .chat-msg .who { font-weight: 600; color: #ffd75e; margin-right: 6px; font-size: 12.5px; }
 .chat-msg .txt { word-break: break-all; }
 .chat-quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0; max-height: 76px; overflow-y: auto; }
+.chat-quick-wrap { display: flex; align-items: flex-start; gap: 4px; }
+.chat-quick-wrap .chat-quick { flex: 1; min-width: 0; }
+.chat-quick-edit {
+  flex: 0 0 auto; border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.06); color: #ccc;
+  border-radius: 14px; padding: 5px 9px; font-size: 13px; cursor: pointer; line-height: 1; margin-top: 6px;
+  transition: background .15s;
+}
+.chat-quick-edit:hover { background: rgba(255,255,255,.16); color: #fff; }
+.chat-quick-btn.editing { border-color: rgba(255,107,129,.6); color: #ff9dab; }
+.chat-quick-btn.editing:hover { background: rgba(255,107,129,.25); }
+.chat-quick-add {
+  flex: 1 1 100%; border: 1px dashed rgba(255,255,255,.25); background: rgba(255,255,255,.04);
+  border-radius: 10px; padding: 6px 10px; font-size: 13px; color: #fff; outline: none; margin-top: 2px;
+}
+.chat-quick-add::placeholder { color: #8a8a8a; }
 .chat-quick-btn {
   border: 1px solid rgba(255,215,94,.5); background: rgba(255,215,94,.12); color: #ffe9a8;
   border-radius: 14px; padding: 5px 10px; font-size: 13px; cursor: pointer; white-space: nowrap;
@@ -773,6 +788,12 @@ body {
   font-weight: 600;
 }
 .btn.voice-on:hover { background: #27ae60; }
+.btn.sfx-on {
+  background: #2ecc71;
+  color: #fff;
+  font-weight: 600;
+}
+.btn.sfx-on:hover { background: #27ae60; }
 .pc-speaking {
   border-color: #2ecc71 !important;
   box-shadow: 0 0 12px rgba(46,204,113,.55);

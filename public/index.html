@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>运城麻将 · 扣点点 / 红中 / 贴金</title>
-  <link rel="stylesheet" href="style.css?v=21">
+  <link rel="stylesheet" href="style.css?v=23">
 </head>
 <body>
 <div id="app">
@@ -71,7 +71,10 @@
         <div id="tab-log" class="tab-content"></div>
         <div id="tab-chat" class="tab-content">
           <div id="chat-messages" class="chat-messages"></div>
-          <div id="chat-quick" class="chat-quick"></div>
+          <div class="chat-quick-wrap">
+            <div id="chat-quick" class="chat-quick"></div>
+            <button id="chat-quick-edit" class="chat-quick-edit" title="自定义常用语">⚙</button>
+          </div>
           <div id="emoji-bar" class="emoji-bar"></div>
           <div class="chat-input-row">
             <input id="chat-input" maxlength="200" placeholder="说点什么..." autocomplete="off">
@@ -285,6 +288,6 @@
     </div>
   </div>
 </div>
-<script src="app.js?v=23"></script>
+<script src="app.js?v=25"></script>
 </body>
 </html>
