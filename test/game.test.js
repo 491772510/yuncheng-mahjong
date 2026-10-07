@@ -1398,3 +1398,52 @@ test('get_stats/get_leaderboard/friend 流程经服务端 dispatch 可用', () =
     cleanupServer(srv);
   }
 });
+
+// ============ 功能：观战（旁观者进入 playing 房间，看不到任何手牌） ============
+test('观战：旁观者进入进行中房间，收到 game_state 但看不到任何手牌，可退出', async () => {
+  const srv = newServer();
+  try {
+    const wa = makeWs();
+    const wb = makeWs();
+    const wv = makeWs(); // 旁观者
+    srv.handleConnection(wa);
+    send(wa, { type: 'join_lobby', name: '房主' });
+    srv.handleConnection(wb);
+    send(wb, { type: 'join_lobby', name: '玩家乙' });
+    send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+    const room = [...srv.rooms.values()][0];
+    send(wb, { type: 'join_room', roomId: room.id });
+    send(wa, { type: 'start_game' }); // aiFill 补 2 AI 开局
+    assert.equal(room.state, 'playing');
+
+    // 旁观者加入：不带 spectate 应被拒（房间进行中），带 spectate 应成功进入观战
+    srv.handleConnection(wv);
+    send(wv, { type: 'join_lobby', name: '旁观丙' });
+    send(wv, { type: 'join_room', roomId: room.id });
+    const err = lastOf(wv, 'error');
+    assert.ok(err && /不可加入|已满/.test(err.message), '无 spectate 加入进行中房间被拒');
+
+    send(wv, { type: 'join_room', roomId: room.id, spectate: true });
+    const rs = lastOf(wv, 'room_state');
+    assert.ok(rs && rs.room && rs.room.isViewer === true, '观战者 room_state 标记 isViewer');
+    assert.equal(room.viewers.length, 1, '房间记录 1 名旁观者');
+    assert.equal(room.viewers[0].seat, -1, '旁观者 seat=-1');
+
+    // 观战者收到 game_state：yourSeat=-1，所有玩家 hand=null（看不到手牌）
+    const gv = lastOf(wv, 'game_state');
+    assert.ok(gv && gv.game, '观战者收到 game_state');
+    assert.equal(gv.game.yourSeat, -1);
+    assert.ok(gv.game.players.every((p) => !p || p.hand === null), '旁观者看不到任何玩家手牌');
+    assert.ok(gv.game.players.some((p) => p && p.melds !== undefined), '旁观者能看到明牌结构');
+
+    // 旁观者退出：随时可退
+    send(wv, { type: 'leave_room' });
+    const rs2 = lastOf(wv, 'room_state');
+    assert.ok(rs2 && rs2.room === null, '旁观者退出后 room_state 为 null');
+    assert.equal(room.viewers.length, 0, '退出后观战列表清空');
+
+    await sleep(300);
+  } finally {
+    cleanupServer(srv);
+  }
+});

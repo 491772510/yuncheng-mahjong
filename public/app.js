@@ -127,6 +127,11 @@
         syncHostedNotice(msg.game && msg.game.players && msg.game.players[msg.game.yourSeat]);
         state.game = msg.game;
         state.tingPick = false;
+        // 旁观者：固定 0 号座位视角，隐藏手牌与操作（后端下发 yourSeat=-1）
+        if (state.room && state.room.isViewer && state.game) {
+          state.game.yourSeat = 0;
+          state.game.isDrawTurn = false;
+        }
         // 手牌选中态：轮次变化 / 自己不可出牌 / 本局结束任一条件满足即清除，避免残留
         if (state.selectedIndex != null) {
           const stillMine = !!msg.game.isDrawTurn && msg.game.turn === msg.game.yourSeat && !msg.game.winners;
@@ -516,6 +521,8 @@
     list.innerHTML = rooms.map((r) => {
       const hz = isHongZhongOf(r);
       const tj = !!(r.settings && r.settings.variant === 'tiejin');
+      const playing = r.state === 'playing';
+      const joinable = r.state === 'waiting' && r.playerCount < 4;
       return `
       <div class="room-card">
         <div class="rc-id">房间 ${r.id}</div>
@@ -528,8 +535,9 @@
           <span>${hz ? '癞子红中' : tj ? '金牌万能' : '报听必开'}</span>
           <span>${roundsText(r.settings.totalRounds)}</span>
         </div>
-        <button class="btn small primary" data-join="${r.id}"
-          ${r.state !== 'waiting' || r.playerCount >= 4 ? 'disabled' : ''}>加入</button>
+        ${playing
+          ? `<button class="btn small" data-spectate="${r.id}">观战</button>`
+          : `<button class="btn small primary" data-join="${r.id}" ${joinable ? '' : 'disabled'}>加入</button>`}
       </div>`;
     }).join('');
   }
@@ -585,6 +593,19 @@
     const isOwner = room.ownerId === state.playerId;
     const full = room.players.filter(Boolean).length === 4;
     const box = $('#header-btns');
+    // 旁观者：仅显示「退出观战」+ 声音控制，无任何房间操作
+    if (room.isViewer) {
+      let html = `<span class="viewer-badge">👁 观战中</span>`;
+      html += `<button class="btn small" id="btn-leave">退出观战</button>`;
+      html += `<button class="btn small${voiceEnabled ? ' voice-on' : ''}" id="btn-voice">${voiceEnabled ? '语音开' : '语音'}</button>`;
+      html += `<button class="btn small${sfxOn ? ' sfx-on' : ''}" id="btn-sfx">${sfxOn ? '音效开' : '音效'}</button>`;
+      box.innerHTML = html;
+      const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
+      on('btn-leave', () => send({ type: 'leave_room' }));
+      on('btn-voice', () => { if (voiceEnabled) voiceDisable(); else voiceEnable(); });
+      on('btn-sfx', () => setSfxOn(!sfxOn));
+      return;
+    }
     let html = '';
     if (isOwner && room.state === 'waiting') {
       if (!full) html += `<button class="btn small" id="btn-add-ai">＋ AI 补位</button>`;
@@ -693,7 +714,9 @@
       if (!p) continue;
       const pos = POS[d(seat)];
       html += `<div class="seat seat-${pos}" data-seat="${seat}">`;
-      html += pos === 'bottom' ? renderSelfCard(p, seat) : renderOtherCard(p, seat, pos);
+      // 旁观者：无自己的手牌，所有座位统一按明牌（对手）视角渲染
+      const isViewer = state.room && state.room.isViewer;
+      html += (pos === 'bottom' && !isViewer) ? renderSelfCard(p, seat) : renderOtherCard(p, seat, pos);
       html += '</div>';
     }
     html += '</div>';
@@ -1101,6 +1124,8 @@
   function renderActions() {
     const bar = $('#action-bar');
     if (!bar) return;
+    // 旁观者：无操作区
+    if (state.room && state.room.isViewer) { bar.innerHTML = ''; return; }
     const p = state.prompt;
     if (!p) { bar.innerHTML = ''; return; }
     let btns = '';
@@ -2010,6 +2035,69 @@
   function showModal(id) { $('#' + id).classList.remove('hidden'); }
   function hideModal(id) { $('#' + id).classList.add('hidden'); }
 
+  // ================= 复盘回放（本局操作日志逐条播放） =================
+  const replayState = { steps: [], idx: 0, timer: null };
+  function openReplay() {
+    const room = state.room;
+    const logs = (room && room.logs) || [];
+    replayState.steps = logs.slice(); // 正序（服务端已是时间正序追加）
+    replayState.idx = 0;
+    replayStop();
+    renderReplay();
+    showModal('replay-modal');
+  }
+  function replayStop() {
+    if (replayState.timer) { clearInterval(replayState.timer); replayState.timer = null; }
+  }
+  function renderReplay() {
+    const steps = replayState.steps;
+    const idx = replayState.idx;
+    const list = $('#replay-list');
+    const prog = $('#replay-progress');
+    const playBtn = $('#replay-play');
+    if (!steps.length) {
+      list.innerHTML = '<div class="empty">本局暂无操作记录</div>';
+      if (prog) prog.textContent = '0 / 0';
+      if (playBtn) { playBtn.textContent = '播放'; playBtn.disabled = true; }
+      return;
+    }
+    // 高亮当前步，之前步骤已播放、之后步骤待播放
+    list.innerHTML = steps.map((l, i) => {
+      const cls = i < idx ? 'played' : i === idx ? 'current' : 'pending';
+      return `<div class="replay-step ${cls}"><span class="t">${l.time}</span>${esc(l.text)}</div>`;
+    }).join('');
+    if (prog) prog.textContent = `${idx + 1} / ${steps.length}`;
+    if (playBtn) { playBtn.textContent = replayState.timer ? '暂停' : '播放'; playBtn.disabled = false; }
+    // 当前步滚动到可见
+    const cur = list.querySelector('.replay-step.current');
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
+  }
+  function replayStep(delta) {
+    const n = replayState.steps.length;
+    if (!n) return;
+    replayState.idx = Math.max(0, Math.min(n - 1, replayState.idx + delta));
+    renderReplay();
+  }
+  function replayToggle() {
+    if (replayState.timer) { replayStop(); renderReplay(); return; }
+    // 已到末尾则从头开始
+    if (replayState.idx >= replayState.steps.length - 1) replayState.idx = -1;
+    replayState.timer = setInterval(() => {
+      if (replayState.idx >= replayState.steps.length - 1) { replayStop(); renderReplay(); return; }
+      replayState.idx += 1;
+      renderReplay();
+    }, 900);
+    renderReplay();
+  }
+  function bindReplay() {
+    const rb = $('#settle-replay');
+    if (rb) rb.onclick = openReplay;
+    const prev = $('#replay-prev'); if (prev) prev.onclick = () => replayStep(-1);
+    const next = $('#replay-next'); if (next) next.onclick = () => replayStep(1);
+    const play = $('#replay-play'); if (play) play.onclick = replayToggle;
+    const close = $('#replay-close'); if (close) close.onclick = () => { replayStop(); hideModal('replay-modal'); };
+  }
+
   function initCreateModal() {
     const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：计分模型可选乘算（点数×牌型倍数）或加算（底分+固定加番，清一色/一条龙/七小对+20、豪七额外+40）；庄底默认关闭（开启后仅庄家胡牌单边加分：非自摸+5/自摸+10，输家不额外扣分；闲家胡无庄底）；报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
     const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；只能自摸或抢杠胡，不能点炮；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
@@ -2031,6 +2119,7 @@
     buildSeg('seg-score-mode', ['A', 'B'], (v) => (v === 'B' ? 'B 125体系' : 'A 边趣计分'));
     $('#create-cancel').onclick = () => hideModal('create-modal');
     $('#settle-close').onclick = () => hideModal('settle-modal');
+    bindReplay();
     $('#create-confirm').onclick = () => {
       const variant = segValue('seg-variant');
       const totalRounds = segValue('seg-rounds');
@@ -2494,6 +2583,10 @@
       const joinBtn = e.target.closest('[data-join]');
       if (joinBtn && !joinBtn.disabled) {
         send({ type: 'join_room', roomId: joinBtn.dataset.join });
+      }
+      const specBtn = e.target.closest('[data-spectate]');
+      if (specBtn) {
+        send({ type: 'join_room', roomId: specBtn.dataset.spectate, spectate: true });
       }
       const tab = e.target.closest('.tab');
       if (tab) {

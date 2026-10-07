@@ -2,6 +2,14 @@
 // 战绩统计与排行榜：聚合 history jsonl
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+// 隔离持久化目录：避免污染真实 data/，也避免历史测试账号占满排行榜前 20 名
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kd-stats-'));
+process.env.KD_DATA_DIR = tmpDir;
+
 const users = require('../src/users');
 
 function uniq() { return 's' + Math.random().toString(36).slice(2, 10); }

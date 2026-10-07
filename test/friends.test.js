@@ -2,6 +2,14 @@
 // 好友系统：请求 / 互加 / 接受 / 删除
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+// 隔离持久化目录：避免污染真实 data/
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kd-friends-'));
+process.env.KD_DATA_DIR = tmpDir;
+
 const users = require('../src/users');
 
 function uniq() { return 'f' + Math.random().toString(36).slice(2, 10); }

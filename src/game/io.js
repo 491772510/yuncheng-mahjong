@@ -37,6 +37,10 @@ const ioMixin = {
     for (const pl of room.players) {
       if (pl && pl.ws) this._send(pl, obj);
     }
+    // 旁观者也接收广播（聊天/表情/结算等），但不含任何手牌信息
+    for (const v of room.viewers || []) {
+      if (v && v.ws) this._send(v, obj);
+    }
   },
 
   _prompt(room, seat, prompt) {
@@ -52,11 +56,18 @@ const ioMixin = {
         this._send(pl, { type: 'game_state', game: this._buildGameView(room, s) });
       }
     }
+    // 旁观者：viewerSeat=-1，看不到任何手牌，仅明牌与流程
+    for (const v of room.viewers || []) {
+      if (v && v.ws) this._send(v, { type: 'game_state', game: this._buildGameView(room, -1) });
+    }
   },
 
   _broadcastRoomState(room) {
     for (const pl of room.players) {
       if (pl && pl.ws) this._send(pl, { type: 'room_state', room: this._buildRoomView(room, pl.seat) });
+    }
+    for (const v of room.viewers || []) {
+      if (v && v.ws) this._send(v, { type: 'room_state', room: this._buildRoomView(room, -1) });
     }
   },
 

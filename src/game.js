@@ -445,6 +445,17 @@ class GameServer {
 
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (room) {
+      // 旁观者断线：直接移除（无需重连窗口、无需托管），房间继续
+      if (p.isViewer) {
+        room.viewers = (room.viewers || []).filter((v) => v !== p);
+        p.roomId = null;
+        p.seat = null;
+        p.isViewer = false;
+        this.players.delete(p.id);
+        this._log(room, `${p.name} 退出观战`);
+        this._broadcastRoomState(room);
+        return;
+      }
       this._log(room, `${p.name} 断线（60 秒内可重连）`);
       if (room.state === 'playing' && room.game) {
         p.hosted = true;
@@ -608,6 +619,7 @@ class GameServer {
       state: 'waiting',
       roundNo: 0,
       players: [null, null, null, null],
+      viewers: [], // 旁观者列表（非座位玩家，seat=-1，可观看牌局但不可操作）
       game: null,
       dealer: null,
       lastWinner: null,
@@ -638,8 +650,15 @@ class GameServer {
     if (!/^\d{4}$/.test(id)) return this._failJoin(p, '房间号必须是 4 位数字');
     const room = this.rooms.get(id);
     if (!room) return this._failJoin(p, '房间不存在');
-    if (room.state !== 'waiting') return this._failJoin(p, '房间当前不可加入（游戏中或已结算）');
-    if (!room.players.some((x) => x === null)) return this._failJoin(p, '房间已满');
+
+    // 观战路径：房间进行中 / 已满 / 已结算时，允许以旁观者身份进入（不可操作，仅观看）
+    const wantSpectate = !!(msg && msg.spectate);
+    if (room.state !== 'waiting' || !room.players.some((x) => x === null)) {
+      if (wantSpectate && room.state === 'playing') return this._spectateRoom(p, room);
+      if (wantSpectate) return this._failJoin(p, '该房间暂不可观战（未开始）');
+      if (room.state !== 'waiting') return this._failJoin(p, '房间当前不可加入（游戏中或已结算）');
+      return this._failJoin(p, '房间已满');
+    }
 
     this._resetJoinFails(p);
     this._seatPlayer(room, p);
@@ -648,6 +667,21 @@ class GameServer {
     this._broadcastRoomState(room);
     this._broadcastLobby();
     // 不再自动开局：人齐后由房主点击「开始游戏」触发
+  }
+
+  // 以旁观者身份进入进行中的房间：seat=-1，收到 game_state/room_state 但看不到任何手牌
+  _spectateRoom(p, room) {
+    this._resetJoinFails(p);
+    p.roomId = room.id;
+    p.seat = -1;
+    p.isViewer = true;
+    p.score = 0;
+    p.roundScore = 0;
+    room.viewers.push(p);
+    this._log(room, `${p.name} 进入观战`);
+    this._send(p, { type: 'room_state', room: this._buildRoomView(room, -1) });
+    if (room.game) this._send(p, { type: 'game_state', game: this._buildGameView(room, -1) });
+    this._broadcastRoomState(room);
   }
 
   // ---------- 加入房间失败限频（防 4 位房间号暴力枚举） ----------
@@ -671,6 +705,18 @@ class GameServer {
   _leaveRoom(p) {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room) return this._err(p, '您不在房间中');
+    // 旁观者：随时可退出，不受 playing 状态限制
+    if (p.isViewer) {
+      room.viewers = (room.viewers || []).filter((v) => v !== p);
+      p.roomId = null;
+      p.seat = null;
+      p.isViewer = false;
+      this._log(room, `${p.name} 退出观战`);
+      this._send(p, { type: 'room_state', room: null });
+      this._sendLobbyState(p);
+      this._broadcastRoomState(room);
+      return;
+    }
     if (room.state === 'playing') {
       return this._err(p, '牌局进行中，无法退出（可请房主解散房间）');
     }
@@ -2608,6 +2654,9 @@ class GameServer {
       state: room.state,
       roundNo: room.roundNo,
       settings: room.settings,
+      // 旁观者标记：viewerSeat=-1 表示以旁观者视角查看（前端据此隐藏操作区）
+      isViewer: viewerSeat === -1,
+      viewerCount: (room.viewers || []).length,
       // 房主标识：本人视角下发真实 id（前端据此判断 isOwner），他人视角仅下发座位代称
       ownerId: this._ownerRefForViewer(room, viewerSeat),
       players: room.players.map((pl, seat) =>
@@ -3002,6 +3051,19 @@ class GameServer {
         this._sendLobbyState(pl);
       }
     }
+    // 旁观者：解散房间时一并清出（无座位、无重连需求）
+    for (const v of room.viewers || []) {
+      if (!v) continue;
+      v.roomId = null;
+      v.seat = null;
+      v.isViewer = false;
+      this._clearDisconnectTimer(v);
+      this.players.delete(v.id);
+      this.wsPlayers.delete(v.ws);
+      this._send(v, { type: 'room_state', room: null });
+      this._sendLobbyState(v);
+    }
+    room.viewers = [];
     for (const t of room.timers.values()) {
       clearTimeout(t);
       this._timers.delete(t);
