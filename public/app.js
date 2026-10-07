@@ -1003,11 +1003,13 @@
     }).join('');
   }
 
-  // 结算公开展示明牌区：牌局已结束、手牌已亮，暗杠牌面完整公开（4 张全亮用于查杠）
+  // 结算公开展示明牌区：牌局已结束、手牌已亮；明杠/碰/补杠牌面全亮，暗杠亮一张真牌 + 三张牌背（与明杠区分、用于查杠）
   function renderMeldsRevealed(melds, goldTile) {
     if (!melds || !melds.length) return '';
     return melds.map((m) => {
-      const tiles = m.tiles.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
+      const tiles = m.type === 'angang'
+        ? tileHtml(m.tiles[0], 'tiny', 0, false, false, undefined, false, goldTile) + '<span class="tile tiny back"></span><span class="tile tiny back"></span><span class="tile tiny back"></span>'
+        : m.tiles.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('');
       return `<div class="meld">${tiles}</div>`;
     }).join('');
   }
