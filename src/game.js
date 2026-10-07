@@ -265,6 +265,9 @@ class GameServer {
       if (msg.type === 'logout') return this._logout(ws, msg);
       // 历史对局记录：已登录（token）即可查，无需先进入大厅
       if (msg.type === 'get_history') return this._getHistory(ws, msg);
+      // 战绩统计与排行榜：已登录（token）即可查，无需先进入大厅
+      if (msg.type === 'get_stats') return this._getStats(ws, msg);
+      if (msg.type === 'get_leaderboard') return this._getLeaderboard(ws, msg);
 
       const playerId = this.wsPlayers.get(ws);
       const p = playerId ? this.players.get(playerId) : null;
@@ -395,6 +398,27 @@ class GameServer {
     const limit = Math.min(200, Math.max(10, Number(msg && msg.limit) || 50));
     const records = users.getHistory(account, limit);
     this._sendWs(ws, { type: 'history', records, account });
+  }
+
+  // 个人战绩统计：聚合历史记录，输出胜率/净积分/单局最佳等
+  _getStats(ws, msg) {
+    const p = this.wsPlayers.get(ws);
+    let account = p && p.account;
+    if (!account && msg && msg.token) {
+      const u = users.getUserByToken(msg.token);
+      if (u) account = u.username;
+    }
+    if (!account) {
+      this._sendWs(ws, { type: 'stats', guest: true });
+      return;
+    }
+    this._sendWs(ws, { type: 'stats', account, stats: users.getUserStats(account) });
+  }
+
+  // 全局排行榜：按净积分降序取前 N（任何人可查）
+  _getLeaderboard(ws, msg) {
+    const limit = Math.min(100, Math.max(1, Number((msg && msg.limit)) || 20));
+    this._sendWs(ws, { type: 'leaderboard', list: users.getLeaderboard(limit) });
   }
 
   // 本局结算收口：把有账户的玩家本局战绩落盘（增量 delta + 累计总分 + 是否胡牌）

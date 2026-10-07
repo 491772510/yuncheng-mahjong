@@ -141,6 +141,59 @@ function getHistory(username, limit) {
   }
 }
 
+// 由历史记录聚合个人战绩：总对局/胜/平/负/胜率/净积分/单局最佳/分玩法积分
+function computeStats(records) {
+  let games = 0, wins = 0, draws = 0, total = 0, best = 0;
+  const byVariant = {};
+  for (const r of records) {
+    games += 1;
+    if (r.isWin) wins += 1;
+    else if (r.type === 'draw') draws += 1;
+    const d = Number(r.delta) || 0;
+    total += d;
+    if (d > best) best = d;
+    const v = r.variant || 'unknown';
+    byVariant[v] = (byVariant[v] || 0) + d;
+  }
+  const losses = games - wins - draws;
+  return {
+    games, wins, draws, losses,
+    winRate: games ? wins / games : 0,
+    totalScore: total,
+    bestRound: best,
+    byVariant,
+  };
+}
+
+function getUserStats(username) {
+  return computeStats(getHistory(username, 1000000));
+}
+
+// 全局排行榜：聚合所有用户历史记录，按净积分降序取前 N
+function getLeaderboard(limit) {
+  limit = Math.min(100, Math.max(1, Number(limit) || 20));
+  let files = [];
+  try { files = fs.readdirSync(HISTORY_DIR); } catch (e) { return []; }
+  const agg = new Map(); // username -> 聚合
+  for (const f of files) {
+    if (!f.endsWith('.jsonl')) continue;
+    const uname = f.slice(0, -'.jsonl'.length);
+    if (!/^[A-Za-z0-9_一-龥]+$/.test(uname)) continue; // 防御：仅处理合法用户名文件
+    let recs;
+    try { recs = getHistory(uname, 1000000); } catch (e) { continue; }
+    let score = 0, games = 0, wins = 0;
+    for (const r of recs) { score += Number(r.delta) || 0; games += 1; if (r.isWin) wins += 1; }
+    const u = users.get(uname);
+    agg.set(uname, {
+      username: uname,
+      displayName: u ? u.displayName : uname,
+      score, games, wins,
+      winRate: games ? wins / games : 0,
+    });
+  }
+  return [...agg.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
 function initUsers() {
   load();
 }
@@ -159,5 +212,7 @@ module.exports = {
   logoutToken,
   appendHistory,
   getHistory,
+  getUserStats,
+  getLeaderboard,
   flush,
 };

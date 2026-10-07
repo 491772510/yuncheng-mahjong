@@ -267,6 +267,12 @@
       case 'history':
         renderHistory(msg.records || [], !!msg.guest);
         break;
+      case 'stats':
+        renderStatsSummary(msg.guest ? null : (msg.stats || null));
+        break;
+      case 'leaderboard':
+        renderLeaderboard(msg.list || []);
+        break;
       case 'voice_signal':
         handleVoiceSignal(msg);
         break;
@@ -1239,6 +1245,8 @@
     const logoutBtn = $('#logout-btn');
     if (authBtn) authBtn.classList.toggle('hidden', loggedIn);
     if (histBtn) histBtn.classList.toggle('hidden', !loggedIn);
+    const lbBtn = $('#leaderboard-btn');
+    if (lbBtn) lbBtn.classList.toggle('hidden', !loggedIn);
     if (logoutBtn) logoutBtn.classList.toggle('hidden', !loggedIn);
   }
 
@@ -1297,7 +1305,48 @@
 
   function openHistory() {
     showModal('history-modal');
+    if (state.token) send({ type: 'get_stats', token: state.token });
     send({ type: 'get_history', limit: 50, token: state.token || undefined });
+  }
+
+  // 个人战绩汇总（展示于对局记录弹窗顶部）
+  function renderStatsSummary(stats) {
+    const box = $('#stats-summary');
+    if (!box) return;
+    if (!stats) { box.innerHTML = ''; return; }
+    const wr = (stats.winRate * 100).toFixed(1);
+    const vTags = Object.keys(stats.byVariant || {})
+      .map((v) => `${VARIANT_LABEL[v] || v} ${stats.byVariant[v] >= 0 ? '+' : ''}${stats.byVariant[v]}`)
+      .join(' · ');
+    box.innerHTML = `
+      <div class="stats-grid">
+        <div class="st"><span class="st-v">${stats.games}</span><span class="st-k">总对局</span></div>
+        <div class="st"><span class="st-v">${wr}%</span><span class="st-k">胜率</span></div>
+        <div class="st"><span class="st-v ${stats.totalScore >= 0 ? 'up' : 'down'}">${stats.totalScore >= 0 ? '+' : ''}${stats.totalScore}</span><span class="st-k">净积分</span></div>
+        <div class="st"><span class="st-v">${stats.bestRound >= 0 ? '+' : ''}${stats.bestRound}</span><span class="st-k">单局最佳</span></div>
+      </div>
+      <div class="stats-sub">胜 ${stats.wins} · 平 ${stats.draws} · 负 ${stats.losses}${vTags ? '　|　' + vTags : ''}</div>`;
+  }
+
+  function openLeaderboard() {
+    showModal('leaderboard-modal');
+    send({ type: 'get_leaderboard', limit: 20 });
+  }
+
+  function renderLeaderboard(list) {
+    const box = $('#leaderboard-list');
+    if (!box) return;
+    if (!list.length) { box.innerHTML = '<div class="empty">还没有战绩数据，快去打几局吧</div>'; return; }
+    const medal = ['🥇', '🥈', '🥉'];
+    box.innerHTML = list.map((r, i) => {
+      const me = state.username && r.username === state.username ? ' me' : '';
+      return `<div class="lb-row${me}">
+        <span class="lb-rank">${medal[i] || (i + 1)}</span>
+        <span class="lb-name">${esc(r.displayName)}</span>
+        <span class="lb-score ${r.score >= 0 ? 'up' : 'down'}">${r.score >= 0 ? '+' : ''}${r.score}</span>
+        <span class="lb-games">${r.games}局</span>
+      </div>`;
+    }).join('');
   }
 
   // 常用聊天语：点击即发，避免每局都打字；短语在此集中维护
@@ -2189,6 +2238,8 @@
     $('#auth-submit').onclick = submitAuth;
     $('#history-btn').onclick = openHistory;
     $('#history-close').onclick = () => hideModal('history-modal');
+    $('#leaderboard-btn').onclick = openLeaderboard;
+    $('#leaderboard-close').onclick = () => hideModal('leaderboard-modal');
     $('#logout-btn').onclick = () => { send({ type: 'logout', token: state.token }); };
     $$('#seg-auth .seg-item').forEach((b) => { b.onclick = () => setAuthMode(b.dataset.value); });
     $('#auth-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });

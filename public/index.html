@@ -16,6 +16,7 @@
         <span id="auth-state" class="auth-state">未登录</span>
         <button id="auth-btn" class="btn small">登录 / 注册</button>
         <button id="history-btn" class="btn small hidden">对局记录</button>
+        <button id="leaderboard-btn" class="btn small hidden">排行榜</button>
         <button id="logout-btn" class="btn small hidden">退出</button>
       </div>
       <h1 class="logo">🀄 运城麻将</h1>
@@ -230,9 +231,21 @@
   <div id="history-modal" class="modal hidden">
     <div class="modal-box">
       <h3>对局记录</h3>
+      <div id="stats-summary" class="stats-summary"></div>
       <div id="history-list" class="history-list"></div>
       <div class="modal-actions">
         <button id="history-close" class="btn primary">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 排行榜 -->
+  <div id="leaderboard-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>🏆 积分排行榜</h3>
+      <div id="leaderboard-list" class="leaderboard-list"></div>
+      <div class="modal-actions">
+        <button id="leaderboard-close" class="btn primary">关闭</button>
       </div>
     </div>
   </div>

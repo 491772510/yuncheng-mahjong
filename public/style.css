@@ -161,6 +161,27 @@ body {
 .history-item .up { color: #2ecc71; }
 .history-item .down { color: #ff6b81; }
 
+/* 个人战绩汇总 */
+.stats-summary { margin-bottom: 12px; padding: 12px; border-radius: 10px; background: rgba(255,215,94,.1); border: 1px solid rgba(255,215,94,.28); }
+.stats-grid { display: flex; gap: 8px; }
+.stats-grid .st { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.stats-grid .st-v { font-size: 20px; font-weight: 800; color: #ffe9a8; font-variant-numeric: tabular-nums; }
+.stats-grid .st-v.up { color: #2ecc71; }
+.stats-grid .st-v.down { color: #ff6b81; }
+.stats-grid .st-k { font-size: 11px; opacity: .8; }
+.stats-sub { margin-top: 8px; font-size: 12px; opacity: .85; text-align: center; }
+
+/* 排行榜 */
+.leaderboard-list { max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.lb-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; background: rgba(255,255,255,.06); font-size: 14px; }
+.lb-row.me { background: rgba(255,215,94,.18); border: 1px solid rgba(255,215,94,.4); }
+.lb-rank { width: 28px; font-size: 18px; text-align: center; font-weight: 800; }
+.lb-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-score { font-weight: 800; font-variant-numeric: tabular-nums; }
+.lb-score.up { color: #2ecc71; }
+.lb-score.down { color: #ff6b81; }
+.lb-games { font-size: 12px; opacity: .7; }
+
 /* ---------- 牌桌 ---------- */
 .table { position: relative; width: 100%; height: 100%; }
 .table-center {
