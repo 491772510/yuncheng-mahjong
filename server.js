@@ -12,6 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const selfsigned = require('selfsigned');
+const zlib = require('zlib');
 const { WebSocketServer } = require('ws');
 const { GameServer } = require('./src/game');
 const { createTtsBridge, PRESET_TEXTS } = require('./src/tts-bridge');
@@ -39,6 +40,28 @@ const MIME = {
   '.woff2': 'font/woff2',
   '.mp3': 'audio/mpeg',
 };
+
+// 静态资源缓存策略：可带版本号的文本资源（html/css/js）短缓存，便于发布后快速刷新；
+// 图片/字体/音频等不变资源长缓存，减少重复下载。
+const CACHE_MAX_AGE = {
+  '.html': 'no-cache',                      // 入口页始终校验，避免拿到旧壳
+  '.css': 'public, max-age=300',            // 已用 ?v=N 打版本，5 分钟即可
+  '.js': 'public, max-age=300',
+  '.json': 'no-cache',
+  '.png': 'public, max-age=86400',
+  '.jpg': 'public, max-age=86400',
+  '.jpeg': 'public, max-age=86400',
+  '.gif': 'public, max-age=86400',
+  '.svg': 'public, max-age=86400',
+  '.ico': 'public, max-age=86400',
+  '.woff': 'public, max-age=86400',
+  '.woff2': 'public, max-age=86400',
+  '.mp3': 'public, max-age=86400',
+};
+
+// 可 gzip 的文本类型（图片/音频/字体已高压缩或已压缩，再 gzip 无益且费 CPU）
+const GZIPABLE = new Set(['.html', '.css', '.js', '.json', '.svg']);
+const GZIP_MIN_BYTES = 1024; // 小于 1KB 的文本不值得压缩
 
 // 后端 TTS 预合成桥接：独立 TTS 服务合成 -> 落盘 public/tts -> 同源 URL 供前端播放
 const ttsBridge = createTtsBridge();
@@ -133,6 +156,29 @@ function requestHandler(req, res) {
       }
       const ext = path.extname(filePath).toLowerCase();
       const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+      headers['Cache-Control'] = CACHE_MAX_AGE[ext] || 'no-cache';
+
+      // gzip：仅压缩可压缩的文本类型，且客户端声明支持、内容超过阈值
+      const acceptEncoding = String(req.headers['accept-encoding'] || '');
+      if (
+        GZIPABLE.has(ext) &&
+        data.length >= GZIP_MIN_BYTES &&
+        /\bgzip\b/.test(acceptEncoding)
+      ) {
+        zlib.gzip(data, (zerr, zdata) => {
+          if (zerr) {
+            // 压缩失败兜底：原样返回
+            res.writeHead(200, headers);
+            res.end(data);
+            return;
+          }
+          headers['Content-Encoding'] = 'gzip';
+          headers['Vary'] = 'Accept-Encoding';
+          res.writeHead(200, headers);
+          res.end(zdata);
+        });
+        return;
+      }
       res.writeHead(200, headers);
       res.end(data);
     });
