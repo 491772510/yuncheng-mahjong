@@ -17,6 +17,12 @@ const gameLogger = require('./game-logger');
 const users = require('./users');
 const crypto = require('crypto');
 
+// 阶段一重构：把账号/好友、纯工具、发送广播 I/O 拆到独立 mixin，方法内 this 上下文不变。
+// 视图构建（_buildRoomView/_buildGameView）与玩法状态机仍留在本文件（深度耦合 rules/游戏状态）。
+const accountMixin = require('./game/account');
+const utilsMixin = require('./game/utils');
+const ioMixin = require('./game/io');
+
 users.initUsers(); // 启动即加载账号与历史存储（文件在 data/，gitignore）
 
 const RECONNECT_MS = 60000; // 断线重连窗口
@@ -359,173 +365,8 @@ class GameServer {
     this._sendLobbyState(p);
   }
 
-  // ============ 账号体系（注册 / 登录 / 登出 / 历史） ============
-
-  _register(ws, msg) {
-    try {
-      const u = users.registerUser(msg && msg.username, msg && msg.password, msg && msg.name);
-      const token = users.issueToken(u.username);
-      this._sendWs(ws, { type: 'registered', token, user: u });
-    } catch (e) {
-      this._sendWs(ws, { type: 'error', code: e.code || 'AUTH_WEAK', message: e.message });
-    }
-  }
-
-  _login(ws, msg) {
-    // 支持两种登录：{username,password} 或 {token}（token 登录用于刷新页面后自动重登）
-    let u;
-    if (msg && msg.token) u = users.getUserByToken(msg.token);
-    else u = users.verifyUser(msg && msg.username, msg && msg.password);
-    if (!u) {
-      this._sendWs(ws, { type: 'error', code: 'AUTH_INVALID', message: '用户名或密码错误' });
-      return;
-    }
-    const token = users.issueToken(u.username); // 重新签发，旧 token 自然失效
-    this._sendWs(ws, { type: 'logged_in', token, user: u });
-  }
-
-  _logout(ws, msg) {
-    if (msg && msg.token) users.logoutToken(msg.token);
-    this._sendWs(ws, { type: 'logged_out' });
-  }
-
-  _getHistory(ws, msg) {
-    // 账户来源：优先用已进大厅并关联账户的玩家；未进大厅（仅 token 登录）则用 token 解析
-    const p = this.wsPlayers.get(ws);
-    let account = p && p.account;
-    if (!account && msg && msg.token) {
-      const u = users.getUserByToken(msg.token);
-      if (u) account = u.username;
-    }
-    if (!account) {
-      this._sendWs(ws, { type: 'history', records: [], guest: true });
-      return;
-    }
-    const limit = Math.min(200, Math.max(10, Number(msg && msg.limit) || 50));
-    const records = users.getHistory(account, limit);
-    this._sendWs(ws, { type: 'history', records, account });
-  }
-
-  // 个人战绩统计：聚合历史记录，输出胜率/净积分/单局最佳等
-  _getStats(ws, msg) {
-    const p = this.wsPlayers.get(ws);
-    let account = p && p.account;
-    if (!account && msg && msg.token) {
-      const u = users.getUserByToken(msg.token);
-      if (u) account = u.username;
-    }
-    if (!account) {
-      this._sendWs(ws, { type: 'stats', guest: true });
-      return;
-    }
-    this._sendWs(ws, { type: 'stats', account, stats: users.getUserStats(account) });
-  }
-
-  // 全局排行榜：按净积分降序取前 N（任何人可查）
-  _getLeaderboard(ws, msg) {
-    const limit = Math.min(100, Math.max(1, Number((msg && msg.limit)) || 20));
-    this._sendWs(ws, { type: 'leaderboard', list: users.getLeaderboard(limit) });
-  }
-
-  // 解析请求账户：优先用已进大厅并关联账户的玩家；其次 token
-  _accountOf(ws, msg) {
-    const p = this.wsPlayers.get(ws);
-    let account = p && p.account;
-    if (!account && msg && msg.token) {
-      const u = users.getUserByToken(msg.token);
-      if (u) account = u.username;
-    }
-    return account || null;
-  }
-
-  // 向某个账户的所有在线连接推送好友关系变更
-  _notifyFriendUpdate(username) {
-    if (!username) return;
-    for (const pl of this.players.values()) {
-      if (pl && pl.account === username && pl.ws && pl.ws.readyState === 1) {
-        this._sendWs(pl.ws, { type: 'friend_update' });
-      }
-    }
-  }
-
-  _addFriend(ws, msg) {
-    const account = this._accountOf(ws, msg);
-    if (!account) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'AUTH', message: '请先登录' });
-    const target = String((msg && msg.username) || '').trim();
-    try {
-      const r = users.sendFriendRequest(account, target);
-      if (r.already) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'ALREADY', message: '已是好友或请求待处理' });
-      this._sendWs(ws, { type: 'friend_result', ok: true, autoAccepted: !!r.autoAccepted, target });
-      if (r.autoAccepted) { this._notifyFriendUpdate(account); this._notifyFriendUpdate(target); }
-      else this._notifyFriendUpdate(target); // 通知对方有新的好友请求
-    } catch (e) {
-      this._sendWs(ws, { type: 'friend_result', ok: false, code: e.code || 'ERR', message: e.message });
-    }
-  }
-
-  _acceptFriend(ws, msg) {
-    const account = this._accountOf(ws, msg);
-    if (!account) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'AUTH', message: '请先登录' });
-    const from = String((msg && msg.username) || '').trim();
-    const ok = users.acceptFriendRequest(account, from);
-    if (!ok) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'NO_REQ', message: '没有该好友请求' });
-    this._sendWs(ws, { type: 'friend_result', ok: true, accepted: from });
-    this._notifyFriendUpdate(account);
-    this._notifyFriendUpdate(from);
-  }
-
-  _declineFriend(ws, msg) {
-    const account = this._accountOf(ws, msg);
-    if (!account) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'AUTH', message: '请先登录' });
-    const from = String((msg && msg.username) || '').trim();
-    users.declineFriendRequest(account, from);
-    this._sendWs(ws, { type: 'friend_result', ok: true, declined: from });
-  }
-
-  _removeFriend(ws, msg) {
-    const account = this._accountOf(ws, msg);
-    if (!account) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'AUTH', message: '请先登录' });
-    const target = String((msg && msg.username) || '').trim();
-    users.removeFriend(account, target);
-    this._sendWs(ws, { type: 'friend_result', ok: true, removed: target });
-    this._notifyFriendUpdate(account);
-    this._notifyFriendUpdate(target);
-  }
-
-  _friendList(ws, msg) {
-    const account = this._accountOf(ws, msg);
-    if (!account) return this._sendWs(ws, { type: 'friend_list', guest: true });
-    this._sendWs(ws, {
-      type: 'friend_list',
-      friends: users.listFriends(account),
-      requests: users.listIncomingRequests(account),
-    });
-  }
-
-  // 本局结算收口：把有账户的玩家本局战绩落盘（增量 delta + 累计总分 + 是否胡牌）
-  _recordRoundHistory(room) {
-    if (!room || !room.players) return;
-    const winners = room.game && room.game.winners;
-    if (!winners) return; // 异常中止的局不记录
-    const variant = room.settings ? room.settings.variant : 'unknown';
-    const roundNo = room.roundNo || 0;
-    const type = winners.type; // 'hu' | 'draw'
-    const winnerSeat = type === 'hu' ? winners.winnerSeat : -1;
-    for (const pl of room.players) {
-      if (!pl || !pl.account) continue; // 游客不记录
-      users.appendHistory(pl.account, {
-        t: Date.now(),
-        variant,
-        roundNo,
-        roomId: room.id,
-        name: pl.name,
-        delta: pl.roundScore || 0,
-        total: pl.score || 0,
-        isWin: type === 'hu' && winnerSeat === pl.seat,
-        type,
-      });
-    }
-  }
+  // ============ 账号体系（注册 / 登录 / 登出 / 历史 / 好友 / 战绩） ============
+  // 已拆至 src/game/account.js（通过 Object.assign 混入）。此处不再重复定义。
 
   _reconnect(ws, msg) {
     const id = String((msg && msg.playerId) || '');
@@ -2743,16 +2584,7 @@ class GameServer {
   // ============ 构建视图 / 消息 ============
 
   // ---------- 身份脱敏：真实 playerId 只在本人连接可见 ----------
-  /** 房间内座位代称（他人视角使用的 id），形如 s0-s3 */
-  _seatRef(pl) {
-    return pl && pl.seat != null ? 's' + pl.seat : '';
-  }
-
-  /** 房间视图中的玩家 id：本人为真实 playerId，他人为座位代称 */
-  _idForViewer(pl, viewerSeat) {
-    if (!pl) return null;
-    return pl.seat === viewerSeat ? pl.id : this._seatRef(pl);
-  }
+  // _seatRef / _idForViewer 已拆至 src/game/utils.js（mixin 混入）
 
   /** 房间视图中的 ownerId：本人是房主时为真实 id，否则为房主座位代称；房主不在座位时不下发 */
   _ownerRefForViewer(room, viewerSeat) {
@@ -3076,12 +2908,7 @@ class GameServer {
     return p;
   }
 
-  _sanitizeName(name) {
-    if (typeof name !== 'string') return '';
-    let n = name.replace(/[\u0000-\u001f\u007f]/g, '').trim();
-    if (n.length > 12) n = n.slice(0, 12);
-    return n;
-  }
+  // _sanitizeName 已拆至 src/game/utils.js（mixin 混入）
 
   _validateSettings(s) {
     if (!s || typeof s !== 'object') return null;
@@ -3206,130 +3033,9 @@ class GameServer {
     }
   }
 
-  _log(room, text, privateFor, maskedText) {
-    if (!room) return;
-    const entry = { time: nowTime(), text };
-    if (typeof privateFor === 'number') entry.privateFor = privateFor;
-    if (typeof maskedText === 'string') entry.maskedText = maskedText;
-    room.logs.push(entry);
-    if (room.logs.length > MAX_LOGS) room.logs.shift();
-  }
-
-  /** 游戏日志落盘：结构化记录本局事件（round_start / action / round_end），与 UI 日志 _log 互不影响 */
-  _logGame(room, type, data) {
-    if (!this.gameLogger) return;
-    this.gameLogger.append(room, type, data);
-  }
-
-  /** 玩家列表快照（seat / name / isAI / 累计积分 / 本局积分） */
-  _logPlayers(room) {
-    return (room.players || [])
-      .filter(Boolean)
-      .map((pl) => ({ seat: pl.seat, name: pl.name, isAI: !!pl.isAI, score: pl.score || 0, roundScore: pl.roundScore || 0 }));
-  }
-
-  /** 按查看者视角脱敏日志：私有日志（privateFor）仅本人见完整文本，他人见 maskedText */
-  _maskLogsForViewer(logs, viewerSeat) {
-    return (logs || []).map((e) => {
-      if (e && e.privateFor !== undefined && e.privateFor !== viewerSeat && typeof e.maskedText === 'string') {
-        return { time: e.time, text: e.maskedText };
-      }
-      return e;
-    });
-  }
-
-  _pName(room, seat) {
-    const pl = room.players[seat];
-    return pl ? pl.name : '空位';
-  }
-
-  _broadcastGameState(room) {
-    if (!room.game) return;
-    for (let s = 0; s < 4; s++) {
-      const pl = room.players[s];
-      if (pl && pl.ws) {
-        this._send(pl, { type: 'game_state', game: this._buildGameView(room, s) });
-      }
-    }
-  }
-
-  _broadcastRoomState(room) {
-    for (const pl of room.players) {
-      if (pl && pl.ws) this._send(pl, { type: 'room_state', room: this._buildRoomView(room, pl.seat) });
-    }
-  }
-
-  _broadcast(room, obj) {
-    for (const pl of room.players) {
-      if (pl && pl.ws) this._send(pl, obj);
-    }
-  }
-
-  _prompt(room, seat, prompt) {
-    const pl = room.players[seat];
-    if (pl && pl.ws) this._send(pl, { type: 'action_prompt', prompt });
-  }
-
-  _sendSettlement(room, targetPlayer) {
-    const g = room.game;
-    if (!g || !g.winners) return;
-    const msg = {
-      type: 'settlement',
-      result: g.winners,
-      roundNo: g.roundNo,
-      settings: room.settings,
-    };
-    // 携带本局确认状态（确认阶段 / 重连恢复用）
-    if (room.settleConfirms) msg.confirms = room.settleConfirms.slice();
-    if (targetPlayer) this._send(targetPlayer, msg);
-    else this._broadcast(room, msg);
-  }
-
-  // 大厅房间列表：仅下发「房间号 / 状态 / 玩法设置 / 创建者昵称 / 人数」，
-  // 无任何身份类字段：不含 ownerId、不含任何 playerId、不含 secret（已核对，无需再裁剪）。
-  // 房间号保留是因为 public/app.js:425 的「加入」按钮依赖 r.id，砍掉会直接让大厅列表不可用；
-  // 加入仍需房间号，且失败限频（JOIN_FAIL_LIMIT）已防暴力枚举。
-  _sendLobbyState(p) {
-    const rooms = [...this.rooms.values()].map((r) => ({
-      id: r.id,
-      state: r.state,
-      settings: r.settings,
-      ownerName: r.ownerName, // 创建者名称（房主转让/离开后仍保持原创建者）
-      playerCount: r.players.filter(Boolean).length,
-    }));
-    this._send(p, { type: 'lobby_state', rooms });
-  }
-
-  _broadcastLobby() {
-    for (const p of this.players.values()) {
-      if (p.ws && p.connected && !p.roomId) this._sendLobbyState(p);
-    }
-  }
-
-  _send(p, obj) {
-    if (p && p.ws && p.ws.readyState === 1) {
-      try {
-        p.ws.send(JSON.stringify(obj));
-      } catch (e) {
-        console.error('[game] send error:', e);
-      }
-    }
-  }
-
-  _sendWs(ws, obj) {
-    if (ws && ws.readyState === 1) {
-      try {
-        ws.send(JSON.stringify(obj));
-      } catch (e) {
-        console.error('[game] sendWs error:', e);
-      }
-    }
-  }
-
-  _err(p, message) {
-    this._send(p, { type: 'error', message });
-    return null;
-  }
+  // _log / _logGame / _logPlayers / _maskLogsForViewer / _pName 已拆至 src/game/utils.js（mixin 混入）
+  // _broadcastGameState / _broadcastRoomState / _broadcast / _prompt / _sendSettlement /
+  // _sendLobbyState / _broadcastLobby / _send / _sendWs / _err 已拆至 src/game/io.js（mixin 混入）
 
   // ============ 红中麻将流程模块（西安红中：112 张无风、庄14闲13、禁吃、癞子胡、抢杠、扎码；胡牌仅自摸/抢杠） ============
 
@@ -3636,5 +3342,11 @@ class GameServer {
     return 'pass';
   }
 }
+
+// 阶段一：混入拆分出的 mixin（账号/好友、纯工具、发送广播 I/O）。
+// 注意：混入需放在 class 定义之后、导出之前；方法以原型方式共享，this 上下文不变。
+Object.assign(GameServer.prototype, accountMixin);
+Object.assign(GameServer.prototype, utilsMixin);
+Object.assign(GameServer.prototype, ioMixin);
 
 module.exports = { GameServer, HEARTBEAT_INTERVAL_MS, HEARTBEAT_MAX_MISS };

@@ -1361,9 +1361,13 @@ test('get_stats/get_leaderboard/friend 流程经服务端 dispatch 可用', () =
     const wb = makeWs();
     srv.handleConnection(wa);
     srv.handleConnection(wb);
+    // 用随机用户名：避免持久化 data/ 跨运行残留导致「用户名已存在」偶发失败
+    const uniq = 'st' + Math.random().toString(36).slice(2, 8);
+    const uA = uniq + 'a';
+    const uB = uniq + 'b';
     // 注册两个账号
-    send(wa, { type: 'register', username: 'statu1', password: 'password1', name: '统计甲' });
-    send(wb, { type: 'register', username: 'statu2', password: 'password1', name: '统计乙' });
+    send(wa, { type: 'register', username: uA, password: 'password1', name: '统计甲' });
+    send(wb, { type: 'register', username: uB, password: 'password1', name: '统计乙' });
     const tokA = lastOf(wa, 'registered').token;
     const tokB = lastOf(wb, 'registered').token;
     assert.ok(tokA && tokB);
@@ -1378,17 +1382,17 @@ test('get_stats/get_leaderboard/friend 流程经服务端 dispatch 可用', () =
     assert.ok(st && !st.guest && st.stats, 'stats 返回聚合');
 
     // 好友：a 加 b → b 收到请求；b 接受 → 互为好友
-    send(wa, { type: 'add_friend', username: 'statu2', token: tokA });
+    send(wa, { type: 'add_friend', username: uB, token: tokA });
     assert.equal(lastOf(wa, 'friend_result').ok, true);
     send(wb, { type: 'friend_list', token: tokB });
-    assert.ok(lastOf(wb, 'friend_list').requests.find((r) => r.username === 'statu1'), 'b 收到请求');
-    send(wb, { type: 'accept_friend', username: 'statu1', token: tokB });
+    assert.ok(lastOf(wb, 'friend_list').requests.find((r) => r.username === uA), 'b 收到请求');
+    send(wb, { type: 'accept_friend', username: uA, token: tokB });
     assert.equal(lastOf(wb, 'friend_result').ok, true);
     send(wa, { type: 'friend_list', token: tokA });
-    assert.ok(lastOf(wa, 'friend_list').friends.find((r) => r.username === 'statu2'), 'a 好友含 b');
+    assert.ok(lastOf(wa, 'friend_list').friends.find((r) => r.username === uB), 'a 好友含 b');
 
     // 统计 u1 不存在 → 报错不崩溃
-    send(wa, { type: 'add_friend', username: 'nope_x', token: tokA });
+    send(wa, { type: 'add_friend', username: 'nope_' + uniq, token: tokA });
     assert.equal(lastOf(wa, 'friend_result').ok, false);
   } finally {
     cleanupServer(srv);
