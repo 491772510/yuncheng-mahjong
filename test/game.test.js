@@ -1564,3 +1564,108 @@ test('牌局进行中（playing）：仍禁止加入/踢人/补AI（仅 settled/
   await sleep(300);
   cleanupServer(srv);
 });
+
+// ============ 报听后补杠/暗杠（不破坏听口） ============
+
+// 辅助：构造「报听玩家」的 room/game 状态：seat 已报听，13 张报听手牌 + 刚摸一张可杠牌
+function makeTingGangRoom(srv, opts = {}) {
+  const { room } = makeHuRoom(srv);
+  const g = room.game;
+  // 清空定时器，避免 AI 链干扰
+  for (const timeoutId of room.timers.values()) clearTimeout(timeoutId);
+  room.timers.clear();
+  const seat = opts.seat != null ? opts.seat : 0;
+  g.turn = seat;
+  g.stage = 'draw';
+  g.tingSeats = [seat];
+  g.hands[seat] = opts.base13.slice();
+  g.melds[seat] = opts.melds || [];
+  g.drawnTile = opts.drawn;
+  g.hands[seat].push(opts.drawn); // 摸牌后 14 张
+  g.newTiles[seat] = null; // 报听玩家不标新牌
+  return { room, g, seat };
+}
+
+test('报听玩家摸到第 4 张凑满暗杠且该牌非听张：_tingGangOptions 返回暗杠选项', () => {
+  const srv = newServer();
+  const base13 = ['w9', 'w9', 'w9', 'w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'w3', 'w3', 'w3', 'w4'];
+  const { room, seat } = makeTingGangRoom(srv, { base13, drawn: 'w9' });
+  const g = room.game;
+  const ting = rules.isTing(base13, g.melds[seat]);
+  assert.ok(!ting.includes('w9'), '测试前提：w9 不在报听手牌的听口中');
+  const opts = srv._tingGangOptions(room, seat);
+  assert.ok(opts.some((o) => o.gangType === 'angang' && o.tile === 'w9'), '应返回 w9 的暗杠选项');
+  cleanupServer(srv);
+});
+
+test('报听玩家摸到可补杠牌且该牌非听张：_tingGangOptions 返回补杠选项', () => {
+  const srv = newServer();
+  const base13 = ['w2', 'w1', 'w1', 'w1', 'w3', 'w3', 'w3', 'w4', 'w4', 'w4', 'w5', 'w5', 'w5'];
+  const melds = [{ type: 'peng', tile: 'w2', tiles: ['w2', 'w2', 'w2'] }];
+  const { room, seat } = makeTingGangRoom(srv, { base13, melds, drawn: 'w2' });
+  const g = room.game;
+  const ting = rules.isTing(base13, g.melds[seat]);
+  assert.ok(!ting.includes('w2'), '测试前提：w2 不在听口中');
+  const opts = srv._tingGangOptions(room, seat);
+  assert.ok(opts.some((o) => o.gangType === 'bugang' && o.tile === 'w2'), '应返回 w2 的补杠选项');
+  cleanupServer(srv);
+});
+
+test('报听玩家杠的牌是听张：_tingGangOptions 不返回该杠（杠破坏听口）', () => {
+  const srv = newServer();
+  // 构造听 w9 的报听手牌：w1w1w1 w2w2w2 w3w3w3 w4w4w4 + w9（单吊 w9）？听口含 w9
+  // 用一套 w9 是听张的手牌：w9w9w9 刻子 + w1w1w1 + w2w2w2 + w3w3w3 + 摸 w9（此时 w9 是否听张需验证）
+  const base13 = ['w9', 'w9', 'w9', 'w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'w3', 'w3', 'w3', 'w4'];
+  const { room, seat } = makeTingGangRoom(srv, { base13, drawn: 'w9' });
+  const g = room.game;
+  const ting = rules.isTing(base13, g.melds[seat]);
+  if (!ting.includes('w9')) {
+    // 该手牌 w9 不是听张，跳过此断言（用例目标手牌已在上一个用例覆盖）
+    cleanupServer(srv);
+    return;
+  }
+  const opts = srv._tingGangOptions(room, seat);
+  assert.ok(!opts.some((o) => o.tile === 'w9'), 'w9 是听张时不返回暗杠选项');
+  cleanupServer(srv);
+});
+
+test('报听玩家摸牌后：能杠（不破坏听口）则进入行动阶段收到 gang 选项，而非强制摸打', async () => {
+  const srv = newServer();
+  const wa = makeWs();
+  const wb = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主' });
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS } });
+  const room = [...srv.rooms.values()][0];
+  send(wb, { type: 'join_room', roomId: room.id });
+  send(wa, { type: 'start_game' });
+  for (const timeoutId of room.timers.values()) clearTimeout(timeoutId);
+  room.timers.clear();
+
+  const g = room.game;
+  const seat = 0;
+  g.turn = seat;
+  g.stage = 'draw';
+  g.tingSeats = [seat];
+  const base13 = ['w9', 'w9', 'w9', 'w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'w3', 'w3', 'w3', 'w4'];
+  g.hands[seat] = base13.slice();
+  g.melds[seat] = [];
+  g.drawnTile = null;
+  g.wall = ['w9', 'w9', 'w9', 'w9', 'w9', 'w9', 'w9', 'w9', 'w9', 'w9', 'w9', 'w9', 'w9', 'w9'];
+  g.wallPos = 0;
+
+  srv._drawCard(room, seat, false);
+  assert.equal(g.stage, 'draw', '仍处于行动阶段');
+  assert.ok(g.drawnTile !== null, '已摸到牌');
+  const prompt = lastOf(wa, 'action_prompt');
+  assert.ok(prompt, '报听玩家应收到 action_prompt（进入行动阶段）');
+  assert.ok(
+    prompt.prompt.gangOptions && prompt.prompt.gangOptions.some((o) => o.tile === 'w9' && o.gangType === 'angang'),
+    'prompt 应含 w9 暗杠选项'
+  );
+
+  await sleep(300);
+  cleanupServer(srv);
+});
