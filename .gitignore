@@ -19,3 +19,14 @@ data/
 # 临时凭据文件（绝不入库）
 .ghtoken
 
+# 环境变量（含密钥/端口配置，不入库）
+.env
+.env.*
+!.env.example
+
+# 编辑器 / 系统文件
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+

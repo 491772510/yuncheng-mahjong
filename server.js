@@ -258,9 +258,17 @@ function attachWs(server) {
 const server = http.createServer(requestHandler);
 attachWs(server);
 
-// 端口占用（EADDRINUSE）等启动错误：记录日志并标记退出码，避免进程直接崩溃
+// 端口占用（EADDRINUSE）等启动错误：给出友好提示并标记退出码，避免进程直接崩溃
 server.on('error', (e) => {
-  console.error('[server] HTTP 服务启动失败:', e.message);
+  if (e.code === 'EADDRINUSE') {
+    console.error('');
+    console.error(`[server] ❌ 端口 ${PORT} 已被占用，无法启动 HTTP 服务。`);
+    console.error(`[server]    请关闭占用该端口的进程，或改用其他端口：`);
+    console.error(`[server]    PORT=3101 npm start`);
+    console.error('');
+  } else {
+    console.error('[server] HTTP 服务启动失败:', e.message);
+  }
   process.exitCode = 1;
 });
 
@@ -283,7 +291,11 @@ server.listen(PORT, () => {
     httpsServerRef = httpsServer;
     attachWs(httpsServer);
     httpsServer.on('error', (e) => {
-      console.error('[server] HTTPS 服务启动失败:', e.message);
+      if (e.code === 'EADDRINUSE') {
+        console.error(`[server] ⚠️  HTTPS 端口 ${PORT_HTTPS} 已被占用（语音对讲不可用），可设 PORT_HTTPS 更换端口`);
+      } else {
+        console.error('[server] HTTPS 服务启动失败:', e.message);
+      }
     });
     httpsServer.listen(PORT_HTTPS, () => {
       console.log(`[server] HTTPS 服务已启动: https://localhost:${PORT_HTTPS}`);
