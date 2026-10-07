@@ -1351,18 +1351,8 @@ class GameServer {
     const points = rules.tilePoints(tile); // 数牌按面值、字牌 10 点
     const perSeat = type === 'angang' ? points * 2 : points;
     g.gangLogs.push({ seat, tile, type, perSeat, points, kou: 1 });
-    const typeName = type === 'angang' ? '暗杠' : type === 'bugang' ? '补杠' : '明杠';
-    // 暗杠牌面隐私：算分日志对暗杠脱敏（他人只看点数金额，不见杠了哪张），明杠/补杠本就公开
-    if (type === 'angang') {
-      this._log(
-        room,
-        `${this._pName(room, seat)} 暗杠 ${rules.tileName(tile)}（${points}点），每家 ${perSeat} 分（整局结束统一结算）`,
-        seat,
-        `${this._pName(room, seat)} 暗杠（${points}点），每家 ${perSeat} 分（整局结束统一结算）`
-      );
-    } else {
-      this._log(room, `${this._pName(room, seat)} ${typeName} ${rules.tileName(tile)}（${points}点），每家 ${perSeat} 分（整局结束统一结算）`);
-    }
+    // 不在此处输出算分日志：扣点点杠分延迟到整局结束统一结算，进行中显示分值会泄露牌面信息
+    // （点数×倍数可反推暗杠/明杠的牌）；杠的动作日志已由 _doMingGang/_doAnGang/_doBuGang 各自记录
   }
 
   /** 136 模式杠分统一入账：仅胡牌结算时调用；遍历 gangLogs，杠家收 perSeat×3，其余三家各付 perSeat；流局（黄庄）不调用即杠分不计 */
