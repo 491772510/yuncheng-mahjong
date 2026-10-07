@@ -91,13 +91,16 @@ const ioMixin = {
   // 房间号保留是因为 public/app.js:425 的「加入」按钮依赖 r.id，砍掉会直接让大厅列表不可用；
   // 加入仍需房间号，且失败限频（JOIN_FAIL_LIMIT）已防暴力枚举。
   _sendLobbyState(p) {
-    const rooms = [...this.rooms.values()].map((r) => ({
-      id: r.id,
-      state: r.state,
-      settings: r.settings,
-      ownerName: r.ownerName, // 创建者名称（房主转让/离开后仍保持原创建者）
-      playerCount: r.players.filter(Boolean).length,
-    }));
+    // 大厅仅展示公共局（roomType === 'public'）；好友局只通过邀请进入，不进列表
+    const rooms = [...this.rooms.values()]
+      .filter((r) => r.settings && r.settings.roomType === 'public')
+      .map((r) => ({
+        id: r.id,
+        state: r.state,
+        settings: r.settings,
+        ownerName: r.ownerName, // 创建者名称（房主转让/离开后仍保持原创建者）
+        playerCount: r.players.filter(Boolean).length,
+      }));
     this._send(p, { type: 'lobby_state', rooms });
   },
 

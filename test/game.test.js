@@ -1669,3 +1669,103 @@ test('报听玩家摸牌后：能杠（不破坏听口）则进入行动阶段�
   await sleep(300);
   cleanupServer(srv);
 });
+
+// ============ 房间类型（公共局/好友局） + 邀请流程 ============
+test('好友局不进大厅列表，公共局进列表；好友局不能输房间号加入', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主甲' });
+  // 创建好友局
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS, roomType: 'friend' } });
+  const friendRoom = [...srv.rooms.values()][0];
+  assert.equal(friendRoom.settings.roomType, 'friend');
+
+  // 另一玩家进大厅：好友局不出现在列表
+  const wb = makeWs();
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  const lobbyB = lastOf(wb, 'lobby_state');
+  assert.equal(lobbyB.rooms.length, 0, '好友局不进大厅列表');
+
+  // 直接输房间号加入好友局被拒
+  send(wb, { type: 'join_room', roomId: friendRoom.id });
+  const err = lastOf(wb, 'error');
+  assert.ok(err && /好友局/.test(err.message), '好友局不能直接输房间号加入');
+
+  // 创建公共局：出现在列表（由仍在大厅的玩家 wd 视角查询）
+  const wc = makeWs();
+  srv.handleConnection(wc);
+  send(wc, { type: 'join_lobby', name: '玩家丙' });
+  send(wc, { type: 'create_room', settings: { ...BASE_SETTINGS, roomType: 'public' } });
+  const pubRoom = [...srv.rooms.values()].find((r) => r.settings.roomType === 'public');
+  assert.ok(pubRoom, '公共局已创建');
+  const wd = makeWs();
+  srv.handleConnection(wd);
+  send(wd, { type: 'join_lobby', name: '玩家丁' });
+  const lobbyD = lastOf(wd, 'lobby_state');
+  assert.ok(lobbyD.rooms.some((r) => r.id === pubRoom.id), '公共局出现在大厅列表');
+
+  cleanupServer(srv);
+});
+
+test('房主邀请大厅空闲玩家 → 对方收到弹窗 → 接受进入房间', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主甲' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS, roomType: 'friend' } });
+  const room = [...srv.rooms.values()][0];
+
+  // 大厅空闲玩家
+  const wb = makeWs();
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+
+  // 房主查询在线大厅人员
+  send(wa, { type: 'list_online' });
+  const online = lastOf(wa, 'online_list');
+  assert.ok(online, '返回在线列表');
+  assert.ok(online.lobby.some((x) => x.name === '玩家乙'), '大厅列表含玩家乙');
+
+  // 房主邀请玩家乙
+  const targetKey = online.lobby.find((x) => x.name === '玩家乙').key;
+  send(wa, { type: 'invite_player', key: targetKey });
+  const recv = lastOf(wb, 'invite_received');
+  assert.ok(recv, '玩家乙收到邀请弹窗');
+  assert.equal(recv.roomId, room.id);
+  assert.equal(recv.roomType, 'friend');
+  assert.equal(recv.ownerName, '房主甲');
+
+  // 玩家乙接受
+  send(wb, { type: 'invite_reply', roomId: room.id, accept: true });
+  assert.ok(room.players.some((p) => p && p.name === '玩家乙'), '玩家乙进入房间');
+
+  cleanupServer(srv);
+});
+
+test('非房主不能邀请；目标不在线时报错', () => {
+  const srv = newServer();
+  const wa = makeWs();
+  srv.handleConnection(wa);
+  send(wa, { type: 'join_lobby', name: '房主甲' });
+  send(wa, { type: 'create_room', settings: { ...BASE_SETTINGS, roomType: 'public' } });
+  const room = [...srv.rooms.values()][0];
+
+  // 非房主进入房间后尝试邀请（应被拒）
+  const wb = makeWs();
+  srv.handleConnection(wb);
+  send(wb, { type: 'join_lobby', name: '玩家乙' });
+  send(wb, { type: 'join_room', roomId: room.id }); // 公共局可直接加入
+  send(wb, { type: 'invite_player', key: 'someone' });
+  const err1 = lastOf(wb, 'error');
+  assert.ok(err1 && /房主/.test(err1.message), '非房主不能邀请');
+
+  // 房主邀请不存在的玩家
+  send(wa, { type: 'invite_player', key: 'nonexistent' });
+  const err2 = lastOf(wa, 'error');
+  assert.ok(err2 && /不在线|其他房间/.test(err2.message), '目标不在线报错');
+
+  cleanupServer(srv);
+});
+

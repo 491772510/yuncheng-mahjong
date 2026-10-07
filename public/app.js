@@ -294,6 +294,16 @@
         // 好友关系变更推送：若好友面板开着则刷新
         if (!$('#friends-modal').classList.contains('hidden')) send({ type: 'friend_list', token: state.token });
         break;
+      case 'online_list':
+        renderInviteList(msg.friends || [], msg.lobby || []);
+        break;
+      case 'invite_received':
+        showInviteReceive(msg);
+        break;
+      case 'invite_result':
+        if (msg.ok && msg.name) toast(`已邀请 ${msg.name}`);
+        else if (msg.declined) { /* 对方拒绝，静默 */ }
+        break;
       case 'voice_signal':
         handleVoiceSignal(msg);
         break;
@@ -530,6 +540,7 @@
         <div class="rc-id">房间 ${r.id}</div>
         <div class="rc-meta">
           <span class="badge ${r.state}">${roomStateText(r.state)}</span>
+          <span class="badge public">公共局</span>
           <span>${r.playerCount}/4 人</span>
           <span>创建者 ${esc(r.ownerName || '未知')}</span>
           <span>${hz ? '112张·红中麻将' : tj ? '136张·贴金麻将' : '136张·带风带箭'}</span>
@@ -574,8 +585,9 @@
     const room = state.room;
     applyVariantChrome(room.settings && room.settings.variant || 'koudian');
     $('#room-id-text').textContent = room.id;
+    const roomTypeName = (room.roomType || (room.settings && room.settings.roomType)) === 'public' ? '公共局' : '好友局';
     $('#room-state-text').textContent =
-      `${variantLabel(room.settings)} · ${roomStateText(room.state)}` +
+      `${roomTypeName} · ${variantLabel(room.settings)} · ${roomStateText(room.state)}` +
       (room.roundNo ? ` · 第 ${room.roundNo} 局` : '') +
       (room.settleConfirms && !room.settleConfirms.every(Boolean) ? ' · 等待确认' : '') +
       ` · ${roundsText(room.settings.totalRounds)}`;
@@ -611,6 +623,7 @@
     let html = '';
     if (isOwner && (room.state === 'waiting' || room.state === 'settled')) {
       if (!full) html += `<button class="btn small" id="btn-add-ai">＋ AI 补位</button>`;
+      if (!full) html += `<button class="btn small" id="btn-invite">邀请</button>`;
       html += `<button class="btn small primary" id="btn-start">${room.state === 'settled' ? '再来一轮' : '开始游戏'}</button>`;
     }
     if (isOwner) {
@@ -620,7 +633,6 @@
     }
     html += `<button class="btn small${voiceEnabled ? ' voice-on' : ''}" id="btn-voice">${voiceEnabled ? '语音开' : '语音'}</button>`;
     html += `<button class="btn small${sfxOn ? ' sfx-on' : ''}" id="btn-sfx">${sfxOn ? '音效开' : '音效'}</button>`;
-    html += `<button class="btn small" id="btn-invite">邀请</button>`;
     box.innerHTML = html;
     const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
     on('btn-add-ai', () => send({ type: 'add_ai' }));
@@ -1462,38 +1474,54 @@
   }
 
   // ================= 房间邀请分享 =================
+  // ================= 房间邀请（在线好友 / 大厅人员） =================
   function openInvite() {
     const room = state.room;
     if (!room) { toast('请先进入房间', true); return; }
     showModal('invite-modal');
-    $('#invite-room-id').textContent = room.id;
-    const link = location.origin + location.pathname + '?room=' + encodeURIComponent(room.id);
-    $('#invite-link').value = link;
-    const qr = $('#invite-qr-img');
-    qr.onerror = () => { qr.style.display = 'none'; };
-    qr.style.display = '';
-    qr.src = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(link);
+    $('#invite-friends-list').innerHTML = '<div class="empty">加载中…</div>';
+    $('#invite-lobby-list').innerHTML = '<div class="empty">加载中…</div>';
+    send({ type: 'list_online' });
   }
 
-  function copyInvite() {
-    const link = $('#invite-link').value;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(link).then(() => toast('邀请链接已复制'), () => fallbackCopy(link));
-    } else fallbackCopy(link);
-  }
-  function fallbackCopy(text) {
-    const el = $('#invite-link'); el.select();
-    try { document.execCommand('copy'); toast('邀请链接已复制'); } catch { toast('复制失败，请手动复制', true); }
+  function renderInviteList(friends, lobby) {
+    const renderItem = (item) =>
+      `<div class="invite-item">
+        <span class="nm">${esc(item.name)}</span>
+        <button class="btn small primary" data-invite="${esc(item.key)}">邀请</button>
+      </div>`;
+    $('#invite-friends-list').innerHTML = friends.length
+      ? friends.map(renderItem).join('')
+      : '<div class="empty">暂无在线好友</div>';
+    $('#invite-lobby-list').innerHTML = lobby.length
+      ? lobby.map(renderItem).join('')
+      : '<div class="empty">大厅暂无空闲玩家</div>';
+    // 事件委托：点击邀请按钮发邀请
+    document.querySelectorAll('#invite-modal [data-invite]').forEach((b) => {
+      b.onclick = () => {
+        send({ type: 'invite_player', key: b.dataset.invite });
+        b.textContent = '已邀请';
+        b.disabled = true;
+      };
+    });
   }
 
-  // 启动参数 ?room=xxxx：预填加入房间号，方便通过分享链接一键加入
-  function prefillRoomFromUrl() {
-    const m = /[?&]room=([^&]+)/.exec(location.search);
-    if (m) {
-      const code = decodeURIComponent(m[1]);
-      const inp = $('#join-room-input');
-      if (inp && /^\d{1,4}$/.test(code)) inp.value = code;
-    }
+  // 被邀请方弹窗：选择是否进入房间
+  function showInviteReceive(msg) {
+    const variantName = msg.variant === 'hongzhong' ? '红中麻将' : msg.variant === 'tiejin' ? '贴金麻将' : '扣点点';
+    const typeName = msg.roomType === 'public' ? '公共局' : '好友局';
+    $('#invite-recv-owner').textContent = msg.ownerName || '未知';
+    $('#invite-recv-info').textContent = `${typeName} · ${variantName} · 房间 ${msg.roomId}`;
+    showModal('invite-recv-modal');
+    // 记录待回应邀请的房间号（接受时带上）
+    $('#invite-recv-accept').onclick = () => {
+      send({ type: 'invite_reply', roomId: msg.roomId, accept: true });
+      hideModal('invite-recv-modal');
+    };
+    $('#invite-recv-decline').onclick = () => {
+      send({ type: 'invite_reply', roomId: msg.roomId, accept: false });
+      hideModal('invite-recv-modal');
+    };
   }
 
   // 常用聊天语：点击即发，避免每局都打字；支持自定义增删，本地保存
@@ -2141,6 +2169,7 @@
       $('#create-tip').textContent = hz ? hongzhongTip : tj ? tiejinTip : koudianTip;
     });
     buildSeg('seg-rounds', [4, 8, 12, 0], (v) => (v === 0 ? '不限' : v + ' 局'));
+    buildSeg('seg-roomtype', ['public', 'friend'], (v) => (v === 'public' ? '公共局（大厅可见）' : '好友局（仅受邀）'));
     buildSeg('seg-score-model', ['multiply', 'add'], (v) => (v === 'add' ? '加分（固定加番）' : '乘算（倍数）'), applyScoreModelPanel);
     applyScoreModelPanel();
     buildSeg('seg-dealer-flow', ['next', 'keep'], (v) => (v === 'keep' ? '连庄' : '下家接庄'));
@@ -2154,7 +2183,8 @@
       const variant = segValue('seg-variant');
       const totalRounds = segValue('seg-rounds');
       const aiFill = $('#opt-aifill').checked;
-      const base = { totalRounds, aiFill };
+      const roomType = segValue('seg-roomtype') === 'public' ? 'public' : 'friend';
+      const base = { totalRounds, aiFill, roomType };
       if (variant === 'hongzhong') {
         send({ type: 'create_room', settings: {
           ...base,
@@ -2601,8 +2631,6 @@
       }
     });
     $('#invite-close').onclick = () => hideModal('invite-modal');
-    $('#invite-copy-btn').onclick = copyInvite;
-    prefillRoomFromUrl();
     $('#logout-btn').onclick = () => { send({ type: 'logout', token: state.token }); };
     $$('#seg-auth .seg-item').forEach((b) => { b.onclick = () => setAuthMode(b.dataset.value); });
     $('#auth-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });

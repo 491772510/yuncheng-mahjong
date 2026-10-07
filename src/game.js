@@ -283,6 +283,11 @@ class GameServer {
       if (msg.type === 'friend_list') return this._friendList(ws, msg);
 
       const playerId = this.wsPlayers.get(ws);
+      const p0 = playerId ? this.players.get(playerId) : null;
+      // 邀请相关：需已进大厅（有身份）。查询在线好友/大厅人员 + 发邀请 + 受邀回应
+      if (p0 && msg.type === 'list_online') return this._listOnline(p0, msg);
+      if (p0 && msg.type === 'invite_player') return this._invitePlayer(p0, msg);
+      if (p0 && msg.type === 'invite_reply') return this._inviteReply(p0, msg);
       const p = playerId ? this.players.get(playerId) : null;
       if (!p) {
         this._sendWs(ws, { type: 'error', message: '请先进入大厅' });
@@ -650,6 +655,10 @@ class GameServer {
     if (!/^\d{4}$/.test(id)) return this._failJoin(p, '房间号必须是 4 位数字');
     const room = this.rooms.get(id);
     if (!room) return this._failJoin(p, '房间不存在');
+    // 好友局不进大厅列表，也不接受直接输房间号加入——只能由房主邀请进入
+    if (room.settings && room.settings.roomType === 'friend') {
+      return this._failJoin(p, '该房间为好友局，需由房主邀请加入');
+    }
 
     // 观战路径：房间进行中 / 已满 / 已结算时，允许以旁观者身份进入（不可操作，仅观看）
     const wantSpectate = !!(msg && msg.spectate);
@@ -702,6 +711,109 @@ class GameServer {
   /** 剩余锁定毫秒数（0 表示未锁定） */
   _joinLockLeft(p) {
     return Math.max(0, (p.joinLockUntil || 0) - Date.now());
+  }
+
+  // ---------- 邀请（在线好友 / 大厅人员） ----------
+
+  /** 在线玩家唯一标识：已登录账户用 username 定位（跨连接稳定），游客用 playerId */
+  _onlineKey(pl) {
+    return pl.account || pl.id;
+  }
+
+  /** 某人是否在线且空闲（有连接、未断线、不在任何房间中） */
+  _isLobbyIdle(pl) {
+    return !!pl && pl.connected && !pl.roomId;
+  }
+
+  /**
+   * 查询可邀请对象：在线好友 + 大厅空闲人员。
+   * 返回 { friends:[...], lobby:[...] }，每条含 id/key、name、online 标记。
+   * 好友仅列在线者（离线好友不可邀）；大厅列所有空闲在线玩家（不含自己）。
+   */
+  _listOnline(p, msg) {
+    const meKey = this._onlineKey(p);
+    // 在线好友：取好友列表，映射到在线空闲连接
+    let friends = [];
+    if (p.account) {
+      const list = users.listFriends(p.account);
+      const onlineMap = new Map(); // account -> 空闲在线 player
+      for (const pl of this.players.values()) {
+        if (pl.account && this._isLobbyIdle(pl) && pl.account !== p.account) onlineMap.set(pl.account, pl);
+      }
+      friends = list
+        .map((f) => onlineMap.get(f.username))
+        .filter(Boolean)
+        .map((pl) => ({ key: this._onlineKey(pl), name: pl.name, online: true }));
+    }
+    // 大厅空闲人员：所有在线空闲玩家（排除自己、排除已在房间内的自己）
+    const lobby = [];
+    for (const pl of this.players.values()) {
+      const key = this._onlineKey(pl);
+      if (key === meKey) continue; // 排除自己
+      if (!this._isLobbyIdle(pl)) continue; // 已在房间或离线者不可邀
+      // 已登录且已出现在好友列表里的不再重复列入大厅
+      if (p.account && pl.account && users.listFriends(p.account).some((f) => f.username === pl.account)) continue;
+      lobby.push({ key, name: pl.name, online: true });
+    }
+    this._send(p, { type: 'online_list', friends, lobby });
+  }
+
+  /**
+   * 房主邀请在线玩家（好友或大厅人员）进入自己的房间。
+   * msg.key：目标玩家的 onlineKey（登录用户=username，游客=playerId）。
+   * 好友局必须受邀进入；公共局也可邀请。目标空闲则下发 invite_received 弹窗。
+   */
+  _invitePlayer(p, msg) {
+    const room = p.roomId ? this.rooms.get(p.roomId) : null;
+    if (!room) return this._err(p, '您不在房间中');
+    if (p.id !== room.ownerId) return this._err(p, '只有房主可以邀请玩家');
+    // 仅 waiting/settled 状态可邀请（进行中不可加人，观战另说）
+    if (room.state !== 'waiting' && room.state !== 'settled') return this._err(p, '牌局进行中，无法邀请新玩家');
+    if (!room.players.some((x) => x === null)) return this._err(p, '房间已满');
+    const key = String((msg && msg.key) || '').trim();
+    if (!key) return this._err(p, '未指定邀请对象');
+    // 定位目标在线玩家
+    let target = null;
+    for (const pl of this.players.values()) {
+      if (this._onlineKey(pl) === key) { target = pl; break; }
+    }
+    if (!target || !this._isLobbyIdle(target)) return this._err(p, '该玩家当前不在线或已在其他房间');
+    if (target.id === p.id) return this._err(p, '不能邀请自己');
+    // 下发邀请弹窗（含房间信息）
+    this._send(target, {
+      type: 'invite_received',
+      roomId: room.id,
+      roomType: room.settings ? room.settings.roomType : 'public',
+      ownerName: p.name,
+      variant: room.settings ? room.settings.variant : 'koudian',
+    });
+    this._send(p, { type: 'invite_result', ok: true, name: target.name });
+    this._log(room, `${p.name} 邀请了 ${target.name}`);
+  }
+
+  /**
+   * 被邀请方回应：accept 则直接拉入房间（好友局无需房间号），decline 则忽略。
+   * 仅等待中的房间可接受；好友局依赖此路径进入（大厅列表不可见）。
+   */
+  _inviteReply(p, msg) {
+    const roomId = String((msg && msg.roomId) || '').trim();
+    const accept = !!(msg && msg.accept);
+    if (!roomId) return this._err(p, '缺少房间号');
+    const room = this.rooms.get(roomId);
+    if (!room) return this._err(p, '房间已不存在');
+    if (!accept) {
+      this._send(p, { type: 'invite_result', ok: false, declined: true });
+      return;
+    }
+    if (p.roomId) return this._err(p, '您已在房间中');
+    if (room.state !== 'waiting' && room.state !== 'settled') return this._err(p, '牌局已开始，无法加入');
+    if (!room.players.some((x) => x === null)) return this._err(p, '房间已满');
+    this._resetJoinFails(p);
+    this._seatPlayer(room, p);
+    this._log(room, `${p.name} 接受邀请加入房间`);
+    this._send(p, { type: 'room_state', room: this._buildRoomView(room, p.seat) });
+    this._broadcastRoomState(room);
+    this._broadcastLobby();
   }
 
   _leaveRoom(p) {
@@ -2691,6 +2803,7 @@ class GameServer {
       state: room.state,
       roundNo: room.roundNo,
       settings: room.settings,
+      roomType: room.settings ? room.settings.roomType : 'public',
       // 旁观者标记：viewerSeat=-1 表示以旁观者视角查看（前端据此隐藏操作区）
       isViewer: viewerSeat === -1,
       viewerCount: (room.viewers || []).length,
@@ -3008,6 +3121,8 @@ class GameServer {
     const totalRounds = Number(s.totalRounds);
     if (![0, 4, 8, 12].includes(totalRounds)) return null;
     const variant = s.variant === 'hongzhong' ? 'hongzhong' : (s.variant === 'tiejin' ? 'tiejin' : 'koudian');
+    // 房间类型：public=公共局（大厅列表可见，任何人可加入）；friend=好友局（大厅列表不可见，仅受邀进入）。默认 public 保持向后兼容
+    const roomType = s.roomType === 'friend' ? 'friend' : 'public';
     // 红中麻将专属设置：扎码张数（0=不扎码 / 1/2/4/6）。
     // 固定胡牌方式：只能自摸/抢杠胡（禁点炮、抢杠仅限补杠）。
     if (variant === 'hongzhong') {
@@ -3017,6 +3132,7 @@ class GameServer {
         totalRounds,
         aiFill: !!s.aiFill,
         variant,
+        roomType,
         zhaMa,
         dealerFlow: 'keep', // 红中：流局庄家连庄（设计固定）
       };
@@ -3027,6 +3143,7 @@ class GameServer {
         totalRounds,
         aiFill: !!s.aiFill,
         variant,
+        roomType,
         drawEndMode: s.drawEndMode === 'B' ? 'B' : 'A', // 流局开关：默认 A（摸完）
         scoreMode: s.scoreMode === 'B' ? 'B' : 'A', // 计分开关：默认 A（边趣版）
         dealerFlow: 'flow', // 贴金：轮庄/流局坐庄（有杠下家、无杠连庄）
@@ -3040,6 +3157,7 @@ class GameServer {
       totalRounds,
       aiFill: !!s.aiFill,
       variant,
+      roomType,
       allowTing: true, // 报听为 136 必选核心规则
       enableQingYiSe: !!s.enableQingYiSe,
       enableYiTiaoLong: !!s.enableYiTiaoLong,

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>运城麻将 · 扣点点 / 红中 / 贴金</title>
-  <link rel="stylesheet" href="style.css?v=25">
+  <link rel="stylesheet" href="style.css?v=26">
 </head>
 <body>
 <div id="app">
@@ -96,6 +96,10 @@
       <div class="setting-row">
         <label>总局数</label>
         <div class="seg" id="seg-rounds"></div>
+      </div>
+      <div class="setting-row">
+        <label>房间类型</label>
+        <div class="seg" id="seg-roomtype"></div>
       </div>
       <div class="setting-row">
         <label>AI 补位</label>
@@ -289,23 +293,40 @@
     </div>
   </div>
 
-  <!-- 邀请分享 -->
+  <!-- 邀请玩家 -->
   <div id="invite-modal" class="modal hidden">
     <div class="modal-box">
-      <h3>🔗 邀请好友进房</h3>
-      <div class="invite-code">房间号 <b id="invite-room-id">----</b></div>
-      <div class="invite-qr"><img id="invite-qr-img" alt="房间二维码" referrerpolicy="no-referrer"></div>
-      <div class="invite-link-row">
-        <input id="invite-link" readonly>
-        <button id="invite-copy-btn" class="btn small primary">复制链接</button>
+      <h3>👥 邀请玩家进房</h3>
+      <div class="invite-section">
+        <div class="invite-sec-title">在线好友</div>
+        <div id="invite-friends-list" class="invite-list"></div>
       </div>
-      <p class="tip">把链接或房间号发给好友（需在同一局域网/可访问本服务），对方打开即可一键加入。</p>
+      <div class="invite-section">
+        <div class="invite-sec-title">大厅空闲玩家</div>
+        <div id="invite-lobby-list" class="invite-list"></div>
+      </div>
+      <p class="tip">对方会收到邀请弹窗，可选择是否进入本房间。</p>
       <div class="modal-actions">
         <button id="invite-close" class="btn primary">关闭</button>
       </div>
     </div>
   </div>
+
+  <!-- 收到邀请弹窗 -->
+  <div id="invite-recv-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>📩 邀请入房</h3>
+      <div class="invite-recv-body">
+        <div class="invite-recv-line"><b id="invite-recv-owner">未知</b> 邀请你加入房间</div>
+        <div class="invite-recv-line" id="invite-recv-info"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="invite-recv-decline" class="btn">拒绝</button>
+        <button id="invite-recv-accept" class="btn primary">进入</button>
+      </div>
+    </div>
+  </div>
 </div>
-<script src="app.js?v=27"></script>
+<script src="app.js?v=28"></script>
 </body>
 </html>
