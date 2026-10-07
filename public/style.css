@@ -24,6 +24,8 @@ body {
 .btn.primary:hover { background: #ffc234; }
 .btn.small { padding: 6px 12px; font-size: 13px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.danger { background: #ff4757; color: #fff; font-weight: 600; }
+.btn.danger:hover { background: #ff6b81; }
 /* 弹窗内非主按钮（取消等）：浅底深字 + 边框 + 阴影，在浅色弹窗背景上清晰可见，与金色主按钮形成对比 */
 .modal-actions .btn:not(.primary) {
   background: #ffffff;

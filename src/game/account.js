@@ -38,6 +38,47 @@ const accountMixin = {
     this._sendWs(ws, { type: 'logged_out' });
   },
 
+  // 修改显示昵称（登录用户名不变）
+  _changeName(ws, msg) {
+    const account = this._accountOf(ws, msg);
+    if (!account) return this._sendWs(ws, { type: 'change_name_result', ok: false, code: 'AUTH', message: '请先登录' });
+    try {
+      const user = users.changeDisplayName(account, msg && msg.name);
+      this._sendWs(ws, { type: 'change_name_result', ok: true, user });
+    } catch (e) {
+      this._sendWs(ws, { type: 'change_name_result', ok: false, code: e.code || 'ERR', message: e.message });
+    }
+  },
+
+  // 修改密码：验证旧密码后更新
+  _changePassword(ws, msg) {
+    const account = this._accountOf(ws, msg);
+    if (!account) return this._sendWs(ws, { type: 'change_password_result', ok: false, code: 'AUTH', message: '请先登录' });
+    try {
+      users.changePassword(account, msg && msg.oldPassword, msg && msg.newPassword);
+      this._sendWs(ws, { type: 'change_password_result', ok: true });
+    } catch (e) {
+      this._sendWs(ws, { type: 'change_password_result', ok: false, code: e.code || 'ERR', message: e.message });
+    }
+  },
+
+  // 注销账号：彻底删除账号与关联数据，并登出当前连接 token
+  _deleteAccount(ws, msg) {
+    const account = this._accountOf(ws, msg);
+    if (!account) return this._sendWs(ws, { type: 'delete_account_result', ok: false, code: 'AUTH', message: '请先登录' });
+    try {
+      users.deleteAccount(account);
+      if (msg && msg.token) users.logoutToken(msg.token);
+      // 解绑所有在线连接上的该账户关联：避免已注销账号的历史/好友在后续对局中被再次写入
+      for (const pl of this.players.values()) {
+        if (pl && pl.account === account) pl.account = null;
+      }
+      this._sendWs(ws, { type: 'delete_account_result', ok: true });
+    } catch (e) {
+      this._sendWs(ws, { type: 'delete_account_result', ok: false, code: e.code || 'ERR', message: e.message });
+    }
+  },
+
   _getHistory(ws, msg) {
     // 账户来源：优先用已进大厅并关联账户的玩家；未进大厅（仅 token 登录）则用 token 解析
     const p = this.wsPlayers.get(ws);

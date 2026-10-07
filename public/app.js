@@ -273,6 +273,49 @@
         renderAuthBar();
         syncNickInput();
         break;
+      case 'change_name_result':
+        if (msg.ok && msg.user) {
+          state.displayName = msg.user.displayName;
+          state.name = msg.user.displayName;
+          localStorage.setItem('kd.displayName', msg.user.displayName);
+          localStorage.setItem('kd.name', msg.user.displayName);
+          renderAuthBar();
+          syncNickInput();
+          hideModal('account-modal');
+          toast('昵称已更新');
+        } else {
+          showAccountError(msg.message || '修改昵称失败');
+        }
+        break;
+      case 'change_password_result':
+        if (msg.ok) {
+          hideModal('account-modal');
+          toast('密码已修改');
+        } else {
+          showAccountError(msg.message || '修改密码失败');
+        }
+        break;
+      case 'delete_account_result':
+        if (msg.ok) {
+          // 回到游客态：清空登录身份与昵称（本地仍保留大厅玩家身份 playerId/secret）
+          state.token = '';
+          state.username = '';
+          state.displayName = '';
+          state.name = '';
+          localStorage.removeItem('kd.token');
+          localStorage.removeItem('kd.username');
+          localStorage.removeItem('kd.displayName');
+          localStorage.removeItem('kd.name');
+          hideModal('account-modal');
+          renderAuthBar();
+          syncNickInput();
+          const nick = $('#nick-input');
+          if (nick) nick.value = '';
+          toast('账号已注销');
+        } else {
+          showAccountError(msg.message || '注销账号失败');
+        }
+        break;
       case 'history':
         renderHistory(msg.records || [], !!msg.guest);
         break;
@@ -1334,6 +1377,8 @@
     if (lbBtn) lbBtn.classList.toggle('hidden', !loggedIn);
     const frBtn = $('#friends-btn');
     if (frBtn) frBtn.classList.toggle('hidden', !loggedIn);
+    const acBtn = $('#account-btn');
+    if (acBtn) acBtn.classList.toggle('hidden', !loggedIn);
     if (logoutBtn) logoutBtn.classList.toggle('hidden', !loggedIn);
   }
 
@@ -1366,6 +1411,52 @@
     }
     if (mode === 'register') send({ type: 'register', username, password, name });
     else send({ type: 'login', username, password });
+  }
+
+  function showAccountError(msg) {
+    const tip = $('#account-tip');
+    if (!tip) return;
+    tip.textContent = msg || '';
+    tip.classList.add('err');
+  }
+
+  function clearAccountTip() {
+    const tip = $('#account-tip');
+    if (tip) { tip.textContent = ''; tip.classList.remove('err'); }
+  }
+
+  function openAccount() {
+    clearAccountTip();
+    const nameInput = $('#account-name');
+    if (nameInput) nameInput.value = state.displayName || state.username || '';
+    const oldPwd = $('#account-old-password');
+    const newPwd = $('#account-new-password');
+    if (oldPwd) oldPwd.value = '';
+    if (newPwd) newPwd.value = '';
+    showModal('account-modal');
+  }
+
+  function submitNameChange() {
+    const name = $('#account-name').value.trim();
+    if (!name) { showAccountError('请输入新昵称'); return; }
+    if (name.length > 12) { showAccountError('昵称最多 12 个字'); return; }
+    clearAccountTip();
+    send({ type: 'change_name', name, token: state.token });
+  }
+
+  function submitPasswordChange() {
+    const oldPassword = $('#account-old-password').value;
+    const newPassword = $('#account-new-password').value;
+    if (!oldPassword) { showAccountError('请输入旧密码'); return; }
+    if (!newPassword || newPassword.length < 6) { showAccountError('新密码至少 6 位'); return; }
+    clearAccountTip();
+    send({ type: 'change_password', oldPassword, newPassword, token: state.token });
+  }
+
+  function submitDeleteAccount() {
+    if (!confirm('确定注销账号？将永久删除账号、历史对局与好友关系，不可恢复。')) return;
+    clearAccountTip();
+    send({ type: 'delete_account', token: state.token });
   }
 
   function renderHistory(records, guest) {
@@ -2632,6 +2723,14 @@
     });
     $('#invite-close').onclick = () => hideModal('invite-modal');
     $('#logout-btn').onclick = () => { send({ type: 'logout', token: state.token }); };
+    // 账号设置 UI 绑定
+    $('#account-btn').onclick = openAccount;
+    $('#account-close').onclick = () => hideModal('account-modal');
+    $('#account-name-save').onclick = submitNameChange;
+    $('#account-password-save').onclick = submitPasswordChange;
+    $('#account-delete').onclick = submitDeleteAccount;
+    $('#account-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitNameChange(); });
+    $('#account-new-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitPasswordChange(); });
     $$('#seg-auth .seg-item').forEach((b) => { b.onclick = () => setAuthMode(b.dataset.value); });
     $('#auth-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
     renderAuthBar();

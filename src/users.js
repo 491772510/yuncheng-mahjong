@@ -290,6 +290,78 @@ function listIncomingRequests(username) {
   return list.map(_friendView);
 }
 
+// 修改显示昵称：仅更新 displayName，登录用户名 username 保持不变（好友/历史/排行榜主键）
+function changeDisplayName(username, displayName) {
+  username = String(username || '').trim();
+  const u = users.get(username);
+  if (!u) {
+    const e = new Error('用户不存在');
+    e.code = 'NO_USER';
+    throw e;
+  }
+  displayName = String(displayName || '').trim().slice(0, 12);
+  if (!displayName) {
+    const e = new Error('昵称不能为空');
+    e.code = 'PARAM';
+    throw e;
+  }
+  u.displayName = displayName;
+  scheduleSave();
+  return publicUser(u);
+}
+
+// 修改密码：验证旧密码后重新生成 salt + hash
+function changePassword(username, oldPassword, newPassword) {
+  username = String(username || '').trim();
+  if (!verifyUser(username, oldPassword)) {
+    const e = new Error('原密码错误');
+    e.code = 'AUTH_INVALID';
+    throw e;
+  }
+  if (!newPassword || String(newPassword).length < 6) {
+    const e = new Error('新密码至少 6 位');
+    e.code = 'AUTH_WEAK';
+    throw e;
+  }
+  const u = users.get(username);
+  const salt = crypto.randomBytes(16).toString('hex');
+  u.salt = salt;
+  u.hash = hashPassword(newPassword, salt);
+  scheduleSave();
+  return true;
+}
+
+// 注销账号：彻底删除账号 + 历史对局文件 + 好友关系 + 会话 token，不可恢复
+function deleteAccount(username) {
+  username = String(username || '').trim();
+  if (!users.has(username)) {
+    const e = new Error('用户不存在');
+    e.code = 'NO_USER';
+    throw e;
+  }
+  users.delete(username);
+  // 删除所有指向该账号的会话 token
+  for (const [token, uname] of sessions) {
+    if (uname === username) sessions.delete(token);
+  }
+  // 删除历史对局文件（串行进 writeChain，排在已挂起的 appendFile 之后，避免竞争）
+  const file = path.join(HISTORY_DIR, username + '.jsonl');
+  writeChain = writeChain.then(() =>
+    fsp.unlink(file).catch((e) => { if (e.code !== 'ENOENT') { /* noop */ } }));
+  // 清理好友关系：删除自己的 key，并从别人的 friends/requests 数组里移除它
+  delete friendGraph.friends[username];
+  delete friendGraph.requests[username];
+  for (const key of Object.keys(friendGraph.friends)) {
+    friendGraph.friends[key] = friendGraph.friends[key].filter((x) => x !== username);
+  }
+  for (const key of Object.keys(friendGraph.requests)) {
+    friendGraph.requests[key] = friendGraph.requests[key].filter((x) => x !== username);
+  }
+  saveFriends();
+  scheduleSave(); // 删除后落盘用户表
+  return true;
+}
+
 function initUsers() {
   load();
   loadFriends();
@@ -321,6 +393,9 @@ module.exports = {
   removeFriend,
   listFriends,
   listIncomingRequests,
+  changeDisplayName,
+  changePassword,
+  deleteAccount,
   hasUser,
   flush,
 };

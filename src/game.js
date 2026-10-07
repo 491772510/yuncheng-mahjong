@@ -270,6 +270,10 @@ class GameServer {
       if (msg.type === 'register') return this._register(ws, msg);
       if (msg.type === 'login') return this._login(ws, msg);
       if (msg.type === 'logout') return this._logout(ws, msg);
+      // 账号设置：改昵称 / 改密码 / 注销账号，已登录即可操作，无需先进入大厅
+      if (msg.type === 'change_name') return this._changeName(ws, msg);
+      if (msg.type === 'change_password') return this._changePassword(ws, msg);
+      if (msg.type === 'delete_account') return this._deleteAccount(ws, msg);
       // 历史对局记录：已登录（token）即可查，无需先进入大厅
       if (msg.type === 'get_history') return this._getHistory(ws, msg);
       // 战绩统计与排行榜：已登录（token）即可查，无需先进入大厅
