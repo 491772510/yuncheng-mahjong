@@ -194,8 +194,109 @@ function getLeaderboard(limit) {
   return [...agg.values()].sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
+// ============ 好友关系 ============
+// 存储：data/friends.json —— { friends: {username:[...]}, requests: {username:[requester,...]} }
+// 好友为双向（mutual）；requests 为「待我处理的 incoming」。
+const FRIENDS_FILE = path.join(DATA_DIR, 'friends.json');
+let friendGraph = { friends: {}, requests: {} };
+
+function saveFriends() {
+  writeChain = writeChain.then(() =>
+    fsp.writeFile(FRIENDS_FILE, JSON.stringify(friendGraph)).catch(() => { /* noop */ }));
+}
+
+function loadFriends() {
+  ensureDir();
+  try {
+    const raw = fs.readFileSync(FRIENDS_FILE, 'utf8');
+    const obj = JSON.parse(raw || '{}');
+    friendGraph = { friends: obj.friends || {}, requests: obj.requests || {} };
+  } catch (e) {
+    friendGraph = { friends: {}, requests: {} };
+  }
+}
+
+function _friendView(username) {
+  const u = users.get(username);
+  return { username, displayName: u ? u.displayName : username };
+}
+
+// 发送好友请求：返回 { ok, autoAccepted, already }；双向 pending 时自动互加
+function sendFriendRequest(from, to) {
+  from = String(from || '').trim();
+  to = String(to || '').trim();
+  if (!from || !to) { const e = new Error('用户名不能为空'); e.code = 'PARAM'; throw e; }
+  if (from === to) { const e = new Error('不能添加自己为好友'); e.code = 'SELF'; throw e; }
+  if (!users.has(to)) { const e = new Error('用户不存在'); e.code = 'NO_USER'; throw e; }
+  if (!friendGraph.friends[from]) friendGraph.friends[from] = [];
+  if (friendGraph.friends[from].includes(to)) { return { ok: false, already: true }; }
+  // 对方也已向我发起请求 → 自动互加
+  if ((friendGraph.requests[from] || []).includes(to)) {
+    _addMutual(from, to);
+    saveFriends();
+    return { ok: true, autoAccepted: true };
+  }
+  if (!friendGraph.requests[to]) friendGraph.requests[to] = [];
+  if (friendGraph.requests[to].includes(from)) { return { ok: false, already: true }; }
+  friendGraph.requests[to].push(from);
+  saveFriends();
+  return { ok: true };
+}
+
+function _addMutual(a, b) {
+  if (!friendGraph.friends[a]) friendGraph.friends[a] = [];
+  if (!friendGraph.friends[b]) friendGraph.friends[b] = [];
+  if (!friendGraph.friends[a].includes(b)) friendGraph.friends[a].push(b);
+  if (!friendGraph.friends[b].includes(a)) friendGraph.friends[b].push(a);
+  // 清除双方 pending
+  friendGraph.requests[a] = (friendGraph.requests[a] || []).filter((x) => x !== b);
+  friendGraph.requests[b] = (friendGraph.requests[b] || []).filter((x) => x !== a);
+}
+
+function acceptFriendRequest(to, from) {
+  to = String(to || '').trim();
+  from = String(from || '').trim();
+  if (!friendGraph.requests[to] || !friendGraph.requests[to].includes(from)) return false;
+  _addMutual(from, to);
+  saveFriends();
+  return true;
+}
+
+function declineFriendRequest(to, from) {
+  to = String(to || '').trim();
+  from = String(from || '').trim();
+  if (!friendGraph.requests[to]) return false;
+  friendGraph.requests[to] = friendGraph.requests[to].filter((x) => x !== from);
+  saveFriends();
+  return true;
+}
+
+function removeFriend(a, b) {
+  a = String(a || '').trim();
+  b = String(b || '').trim();
+  if (friendGraph.friends[a]) friendGraph.friends[a] = friendGraph.friends[a].filter((x) => x !== b);
+  if (friendGraph.friends[b]) friendGraph.friends[b] = friendGraph.friends[b].filter((x) => x !== a);
+  saveFriends();
+  return true;
+}
+
+function listFriends(username) {
+  const list = friendGraph.friends[String(username || '').trim()] || [];
+  return list.map(_friendView);
+}
+
+function listIncomingRequests(username) {
+  const list = friendGraph.requests[String(username || '').trim()] || [];
+  return list.map(_friendView);
+}
+
 function initUsers() {
   load();
+  loadFriends();
+}
+
+function hasUser(username) {
+  return users.has(String(username || '').trim());
 }
 
 // 等待所有挂起的落盘完成（测试与优雅退出用）
@@ -214,5 +315,12 @@ module.exports = {
   getHistory,
   getUserStats,
   getLeaderboard,
+  sendFriendRequest,
+  acceptFriendRequest,
+  declineFriendRequest,
+  removeFriend,
+  listFriends,
+  listIncomingRequests,
+  hasUser,
   flush,
 };

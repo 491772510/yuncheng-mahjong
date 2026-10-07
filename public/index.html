@@ -17,6 +17,7 @@
         <button id="auth-btn" class="btn small">登录 / 注册</button>
         <button id="history-btn" class="btn small hidden">对局记录</button>
         <button id="leaderboard-btn" class="btn small hidden">排行榜</button>
+        <button id="friends-btn" class="btn small hidden">好友</button>
         <button id="logout-btn" class="btn small hidden">退出</button>
       </div>
       <h1 class="logo">🀄 运城麻将</h1>
@@ -246,6 +247,39 @@
       <div id="leaderboard-list" class="leaderboard-list"></div>
       <div class="modal-actions">
         <button id="leaderboard-close" class="btn primary">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 好友 -->
+  <div id="friends-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>👥 好友</h3>
+      <div class="add-friend-row">
+        <input id="friend-input" maxlength="16" placeholder="输入对方用户名" autocomplete="off">
+        <button id="friend-add-btn" class="btn small primary">添加</button>
+      </div>
+      <div id="friend-requests" class="friend-requests"></div>
+      <div id="friend-list" class="friend-list"></div>
+      <div class="modal-actions">
+        <button id="friends-close" class="btn primary">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 邀请分享 -->
+  <div id="invite-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>🔗 邀请好友进房</h3>
+      <div class="invite-code">房间号 <b id="invite-room-id">----</b></div>
+      <div class="invite-qr"><img id="invite-qr-img" alt="房间二维码" referrerpolicy="no-referrer"></div>
+      <div class="invite-link-row">
+        <input id="invite-link" readonly>
+        <button id="invite-copy-btn" class="btn small primary">复制链接</button>
+      </div>
+      <p class="tip">把链接或房间号发给好友（需在同一局域网/可访问本服务），对方打开即可一键加入。</p>
+      <div class="modal-actions">
+        <button id="invite-close" class="btn primary">关闭</button>
       </div>
     </div>
   </div>

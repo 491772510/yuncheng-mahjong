@@ -268,6 +268,12 @@ class GameServer {
       // 战绩统计与排行榜：已登录（token）即可查，无需先进入大厅
       if (msg.type === 'get_stats') return this._getStats(ws, msg);
       if (msg.type === 'get_leaderboard') return this._getLeaderboard(ws, msg);
+      // 好友系统：已登录（token）即可操作，无需先进入大厅
+      if (msg.type === 'add_friend') return this._addFriend(ws, msg);
+      if (msg.type === 'accept_friend') return this._acceptFriend(ws, msg);
+      if (msg.type === 'decline_friend') return this._declineFriend(ws, msg);
+      if (msg.type === 'remove_friend') return this._removeFriend(ws, msg);
+      if (msg.type === 'friend_list') return this._friendList(ws, msg);
 
       const playerId = this.wsPlayers.get(ws);
       const p = playerId ? this.players.get(playerId) : null;
@@ -419,6 +425,81 @@ class GameServer {
   _getLeaderboard(ws, msg) {
     const limit = Math.min(100, Math.max(1, Number((msg && msg.limit)) || 20));
     this._sendWs(ws, { type: 'leaderboard', list: users.getLeaderboard(limit) });
+  }
+
+  // 解析请求账户：优先用已进大厅并关联账户的玩家；其次 token
+  _accountOf(ws, msg) {
+    const p = this.wsPlayers.get(ws);
+    let account = p && p.account;
+    if (!account && msg && msg.token) {
+      const u = users.getUserByToken(msg.token);
+      if (u) account = u.username;
+    }
+    return account || null;
+  }
+
+  // 向某个账户的所有在线连接推送好友关系变更
+  _notifyFriendUpdate(username) {
+    if (!username) return;
+    for (const pl of this.players.values()) {
+      if (pl && pl.account === username && pl.ws && pl.ws.readyState === 1) {
+        this._sendWs(pl.ws, { type: 'friend_update' });
+      }
+    }
+  }
+
+  _addFriend(ws, msg) {
+    const account = this._accountOf(ws, msg);
+    if (!account) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'AUTH', message: '请先登录' });
+    const target = String((msg && msg.username) || '').trim();
+    try {
+      const r = users.sendFriendRequest(account, target);
+      if (r.already) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'ALREADY', message: '已是好友或请求待处理' });
+      this._sendWs(ws, { type: 'friend_result', ok: true, autoAccepted: !!r.autoAccepted, target });
+      if (r.autoAccepted) { this._notifyFriendUpdate(account); this._notifyFriendUpdate(target); }
+      else this._notifyFriendUpdate(target); // 通知对方有新的好友请求
+    } catch (e) {
+      this._sendWs(ws, { type: 'friend_result', ok: false, code: e.code || 'ERR', message: e.message });
+    }
+  }
+
+  _acceptFriend(ws, msg) {
+    const account = this._accountOf(ws, msg);
+    if (!account) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'AUTH', message: '请先登录' });
+    const from = String((msg && msg.username) || '').trim();
+    const ok = users.acceptFriendRequest(account, from);
+    if (!ok) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'NO_REQ', message: '没有该好友请求' });
+    this._sendWs(ws, { type: 'friend_result', ok: true, accepted: from });
+    this._notifyFriendUpdate(account);
+    this._notifyFriendUpdate(from);
+  }
+
+  _declineFriend(ws, msg) {
+    const account = this._accountOf(ws, msg);
+    if (!account) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'AUTH', message: '请先登录' });
+    const from = String((msg && msg.username) || '').trim();
+    users.declineFriendRequest(account, from);
+    this._sendWs(ws, { type: 'friend_result', ok: true, declined: from });
+  }
+
+  _removeFriend(ws, msg) {
+    const account = this._accountOf(ws, msg);
+    if (!account) return this._sendWs(ws, { type: 'friend_result', ok: false, code: 'AUTH', message: '请先登录' });
+    const target = String((msg && msg.username) || '').trim();
+    users.removeFriend(account, target);
+    this._sendWs(ws, { type: 'friend_result', ok: true, removed: target });
+    this._notifyFriendUpdate(account);
+    this._notifyFriendUpdate(target);
+  }
+
+  _friendList(ws, msg) {
+    const account = this._accountOf(ws, msg);
+    if (!account) return this._sendWs(ws, { type: 'friend_list', guest: true });
+    this._sendWs(ws, {
+      type: 'friend_list',
+      friends: users.listFriends(account),
+      requests: users.listIncomingRequests(account),
+    });
   }
 
   // 本局结算收口：把有账户的玩家本局战绩落盘（增量 delta + 累计总分 + 是否胡牌）

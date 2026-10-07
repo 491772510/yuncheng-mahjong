@@ -273,6 +273,18 @@
       case 'leaderboard':
         renderLeaderboard(msg.list || []);
         break;
+      case 'friend_list':
+        renderFriends(msg.guest ? null : (msg.friends || []), msg.guest ? null : (msg.requests || []));
+        break;
+      case 'friend_result':
+        if (msg.ok) toast(msg.autoAccepted ? '已互为好友' : (msg.accepted ? '已添加好友' : '好友请求已发送'));
+        else if (msg.message) toast(msg.message, true);
+        if (msg.ok) send({ type: 'friend_list', token: state.token });
+        break;
+      case 'friend_update':
+        // 好友关系变更推送：若好友面板开着则刷新
+        if (!$('#friends-modal').classList.contains('hidden')) send({ type: 'friend_list', token: state.token });
+        break;
       case 'voice_signal':
         handleVoiceSignal(msg);
         break;
@@ -587,6 +599,7 @@
       html += `<button class="btn small" id="btn-leave">退出房间</button>`;
     }
     html += `<button class="btn small${voiceEnabled ? ' voice-on' : ''}" id="btn-voice">${voiceEnabled ? '语音开' : '语音'}</button>`;
+    html += `<button class="btn small" id="btn-invite">邀请</button>`;
     box.innerHTML = html;
     const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
     on('btn-add-ai', () => send({ type: 'add_ai' }));
@@ -600,6 +613,7 @@
       if (voiceEnabled) voiceDisable();
       else voiceEnable();
     });
+    on('btn-invite', () => openInvite());
   }
 
   function renderWaitingRoom() {
@@ -1247,6 +1261,8 @@
     if (histBtn) histBtn.classList.toggle('hidden', !loggedIn);
     const lbBtn = $('#leaderboard-btn');
     if (lbBtn) lbBtn.classList.toggle('hidden', !loggedIn);
+    const frBtn = $('#friends-btn');
+    if (frBtn) frBtn.classList.toggle('hidden', !loggedIn);
     if (logoutBtn) logoutBtn.classList.toggle('hidden', !loggedIn);
   }
 
@@ -1347,6 +1363,78 @@
         <span class="lb-games">${r.games}局</span>
       </div>`;
     }).join('');
+  }
+
+  // ================= 好友系统 =================
+  function openFriends() {
+    showModal('friends-modal');
+    send({ type: 'friend_list', token: state.token });
+  }
+
+  function renderFriends(friends, requests) {
+    const listBox = $('#friend-list');
+    const reqBox = $('#friend-requests');
+    if (!listBox) return;
+    if (friends === null) { listBox.innerHTML = '<div class="empty">登录后可查看好友</div>'; if (reqBox) reqBox.innerHTML = ''; return; }
+    if (requests && requests.length) {
+      reqBox.innerHTML = '<div class="fr-title">好友请求</div>' + requests.map((r) =>
+        `<div class="fr-row">
+          <span class="fr-name">${esc(r.displayName)}</span>
+          <button class="btn small" data-accept="${esc(r.username)}">接受</button>
+          <button class="btn small" data-decline="${esc(r.username)}">忽略</button>
+        </div>`).join('');
+    } else {
+      reqBox.innerHTML = '';
+    }
+    if (!friends.length) { listBox.innerHTML = '<div class="empty">还没有好友，添加对手的用户名即可</div>'; return; }
+    listBox.innerHTML = friends.map((r) =>
+      `<div class="fr-row">
+        <span class="fr-name">${esc(r.displayName)}</span>
+        <button class="btn small" data-remove="${esc(r.username)}">删除</button>
+      </div>`).join('');
+  }
+
+  function addFriend() {
+    const input = $('#friend-input');
+    const name = input.value.trim();
+    if (!name) return;
+    send({ type: 'add_friend', username: name, token: state.token });
+    input.value = '';
+  }
+
+  // ================= 房间邀请分享 =================
+  function openInvite() {
+    const room = state.room;
+    if (!room) { toast('请先进入房间', true); return; }
+    showModal('invite-modal');
+    $('#invite-room-id').textContent = room.id;
+    const link = location.origin + location.pathname + '?room=' + encodeURIComponent(room.id);
+    $('#invite-link').value = link;
+    const qr = $('#invite-qr-img');
+    qr.onerror = () => { qr.style.display = 'none'; };
+    qr.style.display = '';
+    qr.src = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent(link);
+  }
+
+  function copyInvite() {
+    const link = $('#invite-link').value;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(() => toast('邀请链接已复制'), () => fallbackCopy(link));
+    } else fallbackCopy(link);
+  }
+  function fallbackCopy(text) {
+    const el = $('#invite-link'); el.select();
+    try { document.execCommand('copy'); toast('邀请链接已复制'); } catch { toast('复制失败，请手动复制', true); }
+  }
+
+  // 启动参数 ?room=xxxx：预填加入房间号，方便通过分享链接一键加入
+  function prefillRoomFromUrl() {
+    const m = /[?&]room=([^&]+)/.exec(location.search);
+    if (m) {
+      const code = decodeURIComponent(m[1]);
+      const inp = $('#join-room-input');
+      if (inp && /^\d{1,4}$/.test(code)) inp.value = code;
+    }
   }
 
   // 常用聊天语：点击即发，避免每局都打字；短语在此集中维护
@@ -2240,6 +2328,22 @@
     $('#history-close').onclick = () => hideModal('history-modal');
     $('#leaderboard-btn').onclick = openLeaderboard;
     $('#leaderboard-close').onclick = () => hideModal('leaderboard-modal');
+    $('#friends-btn').onclick = openFriends;
+    $('#friends-close').onclick = () => hideModal('friends-modal');
+    $('#friend-add-btn').onclick = addFriend;
+    $('#friend-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') addFriend(); });
+    // 好友请求/列表内的接受、忽略、删除（事件委托）
+    $('#friends-modal').addEventListener('click', (e) => {
+      const t = e.target;
+      if (t.dataset.accept) send({ type: 'accept_friend', username: t.dataset.accept, token: state.token });
+      else if (t.dataset.decline) send({ type: 'decline_friend', username: t.dataset.decline, token: state.token });
+      else if (t.dataset.remove) {
+        if (confirm('确定删除该好友？')) send({ type: 'remove_friend', username: t.dataset.remove, token: state.token });
+      }
+    });
+    $('#invite-close').onclick = () => hideModal('invite-modal');
+    $('#invite-copy-btn').onclick = copyInvite;
+    prefillRoomFromUrl();
     $('#logout-btn').onclick = () => { send({ type: 'logout', token: state.token }); };
     $$('#seg-auth .seg-item').forEach((b) => { b.onclick = () => setAuthMode(b.dataset.value); });
     $('#auth-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
