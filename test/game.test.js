@@ -1137,6 +1137,34 @@ test('暗杠不触及弃牌区：g.discards[discarder] 原样保留', async () =
   cleanupServer(srv);
 });
 
+test('暗杠算分日志脱敏：本人见牌面，他人只见「暗杠」不泄露杠了哪张', async () => {
+  const srv = newServer();
+  const { room } = makeHuRoom(srv);
+  const g = makeMeldedState(room);
+  const seat = 0;
+  g.hands[seat] = ['b7', 'b7', 'b7', 'b7', 'w1', 'w3', 't1', 't2', 't3', 'w5', 'w6', 'b2', 'b3'];
+  g.gangLogs = [];
+
+  srv._doAnGang(room, seat, 'b7');
+
+  // 暗杠应产生脱敏日志（privateFor=杠家座位，maskedText 不含牌面）
+  const gangLogs = room.logs.filter((e) => /暗杠/.test(e.text) || /暗杠/.test(e.maskedText || ''));
+  assert.ok(gangLogs.length >= 1, '存在暗杠相关日志');
+  // 算分明细日志（_settleGangScore 产生）：他人视角必须被脱敏
+  const settleLog = room.logs.find((e) => e.text && e.text.includes('整局结束统一结算') && e.text.includes('暗杠'));
+  assert.ok(settleLog, '存在暗杠算分日志');
+  assert.equal(settleLog.privateFor, seat, '暗杠算分日志仅杠家本人可见完整牌面');
+  assert.ok(settleLog.maskedText && !/b7|条7|七条/.test(settleLog.maskedText), '他人视角的 maskedText 不含牌面');
+
+  // 用 _maskLogsForViewer 模拟他人视角（seat=1），确认看不到 b7
+  const othersView = srv._maskLogsForViewer(room.logs, 1);
+  const leaked = othersView.some((e) => e.text && /b7/.test(e.text) && /暗杠/.test(e.text));
+  assert.equal(leaked, false, '其他玩家视角的暗杠日志不含牌面 b7');
+
+  await sleep(300);
+  cleanupServer(srv);
+});
+
 test('补杠不触及弃牌区：g.discards[discarder] 原样保留', async () => {
   const srv = newServer();
   const { room } = makeHuRoom(srv);
