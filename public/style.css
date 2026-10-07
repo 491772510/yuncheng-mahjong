@@ -1,4 +1,4 @@
-/* 运城扣点点麻将 - 样式（桌面 + 手机自适应） */
+/* 运城麻将 - 样式（桌面 + 手机自适应） */
 
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { height: 100%; }
@@ -112,11 +112,45 @@ body {
 .chat-msg { margin-bottom: 8px; }
 .chat-msg .who { font-weight: 600; color: #ffd75e; margin-right: 6px; font-size: 12.5px; }
 .chat-msg .txt { word-break: break-all; }
+.chat-quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0; max-height: 76px; overflow-y: auto; }
+.chat-quick-btn {
+  border: 1px solid rgba(255,215,94,.5); background: rgba(255,215,94,.12); color: #ffe9a8;
+  border-radius: 14px; padding: 5px 10px; font-size: 13px; cursor: pointer; white-space: nowrap;
+  transition: background .15s;
+}
+.chat-quick-btn:hover { background: rgba(255,215,94,.28); }
+.chat-quick-btn:active { background: rgba(255,215,94,.4); }
 .chat-input-row { display: flex; gap: 8px; padding-top: 8px; }
 .chat-input-row input {
   flex: 1; border: none; border-radius: 8px; padding: 8px 10px; font-size: 16px; outline: none;
   background: rgba(255,255,255,.9); color: #222;
 }
+
+/* ---------- 账号栏 / 登录注册 ---------- */
+.auth-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; margin-bottom: 6px; }
+.auth-state { font-size: 13px; color: #cfe; opacity: .9; }
+.auth-form { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.auth-form input {
+  border: none; border-radius: 8px; padding: 9px 10px; font-size: 15px; outline: none;
+  background: rgba(255,255,255,.92); color: #222;
+}
+.tip.err { color: #ff6b81; font-weight: 600; }
+
+/* ---------- 对局记录 ---------- */
+.history-list { max-height: 56vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.history-item {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(255,255,255,.06); font-size: 13.5px;
+}
+.history-item .h-time { color: #9fb; opacity: .8; font-variant-numeric: tabular-nums; }
+.history-item .h-variant { color: #ffd75e; font-weight: 600; }
+.history-item .h-round { opacity: .8; }
+.history-item .h-win { background: #ff4757; color: #fff; border-radius: 6px; padding: 1px 7px; font-weight: 700; }
+.history-item .h-draw { background: #576; color: #fff; border-radius: 6px; padding: 1px 7px; font-weight: 700; }
+.history-item .h-delta { font-weight: 700; margin-left: auto; }
+.history-item .h-total { opacity: .85; font-variant-numeric: tabular-nums; }
+.history-item .up { color: #2ecc71; }
+.history-item .down { color: #ff6b81; }
 
 /* ---------- 牌桌 ---------- */
 .table { position: relative; width: 100%; height: 100%; }
@@ -139,7 +173,8 @@ body {
 .act-peng { background: #00b894; color: #fff; }
 .act-ting { background: #e67e22; color: #fff; }
 .act-pass { background: rgba(255,255,255,.85); color: #333; }
-.countdown { font-size: 12px; opacity: .85; margin-top: 6px; }
+.action-guide { flex: 1 0 100%; order: 2; font-size: 12px; opacity: .85; margin-top: 2px; }
+.action-timer { order: 1; align-self: center; font-size: 12px; opacity: .85; white-space: nowrap; }
 /* 碰/杠/胡 响应提示：文字+牌面图案 */
 .resp-hint { display: inline-flex; align-items: center; gap: 4px; align-self: center; color: #fff; font-size: 13px; font-weight: 700; white-space: nowrap; }
 .resp-hint .tile { box-shadow: none; border-color: #fff; }
@@ -180,6 +215,10 @@ body {
 .pc-name { font-weight: 600; max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pc-score { margin-left: auto; color: #ffd75e; font-weight: 700; }
 .pc-host { font-size: 11px; color: #ffb4b4; }
+.hosted-status {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin: -1px 0 5px; color: #ffd75e; font-size: 12px; font-weight: 600;
+}
 .btn-cancel-hosted {
   font-size: 12px; color: #fff; background: #e67e22; border: none; border-radius: 6px;
   padding: 3px 8px; cursor: pointer; font-weight: 700; margin-left: 2px; white-space: nowrap;

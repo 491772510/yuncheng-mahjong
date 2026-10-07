@@ -1,5 +1,5 @@
 'use strict';
-/* 运城扣点点麻将 - 前端渲染与交互 */
+/* 运城麻将 - 前端渲染与交互 */
 (() => {
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
@@ -7,7 +7,13 @@
   const state = {
     ws: null,
     playerId: localStorage.getItem('kd.playerId') || '',
+    // 重连凭据第二因子：由服务端 hello 下发一次并持久化，reconnect 时必须回传
+    secret: localStorage.getItem('kd.secret') || '',
     name: localStorage.getItem('kd.name') || '',
+    // 登录账户：token 由服务端登录/注册下发，join_lobby 时回传以关联账户（历史对局归因）
+    token: localStorage.getItem('kd.token') || '',
+    username: localStorage.getItem('kd.username') || '',
+    displayName: localStorage.getItem('kd.displayName') || '',
     lobby: null,
     room: null,
     game: null,
@@ -15,6 +21,8 @@
     tingPick: false, // 听口选牌状态：点击手牌表示报听
     selectedIndex: null, // 手牌选中交互：当前选中的手牌索引（默认模式，开关关闭时生效）
     _lastTurn: null, // 最近一次 game_state 的 turn，用于检测轮次变化并清除选中态
+    _selfHosted: null, // 自己最近一次托管状态，用于只提示一次托管原因
+    _hostedRequestAt: 0, // 主动托管请求时间，用于区分手动托管与超时托管
     reconnectAttempts: 0,
     countdownTimer: null,
     countdownEnd: 0,
@@ -29,8 +37,10 @@
     ws.onopen = () => {
       state.reconnectAttempts = 0;
       hideConnMask();
+      // 已有登录 token：开连接即用 token 自动重登（刷新页面后无需重新输入账号）
+      if (state.token) send({ type: 'login', token: state.token });
       if (state.playerId) {
-        send({ type: 'reconnect', playerId: state.playerId, name: state.name });
+        send({ type: 'reconnect', playerId: state.playerId, secret: state.secret, name: state.name });
       }
     };
     ws.onmessage = (e) => {
@@ -70,6 +80,12 @@
       case 'hello':
         state.playerId = msg.playerId;
         state.name = msg.name;
+        // secret 由服务端在首次加入 / 重连成功两条路径的 hello 中下发；仅在有值时写入，
+        // 避免任何未携带 secret 的 hello 把本地凭据清空
+        if (msg.secret) {
+          state.secret = msg.secret;
+          localStorage.setItem('kd.secret', msg.secret);
+        }
         localStorage.setItem('kd.playerId', state.playerId);
         localStorage.setItem('kd.name', state.name);
         $('#nick-input').value = state.name;
@@ -85,6 +101,8 @@
           state.prompt = null;
           state.selectedIndex = null;
           state._lastTurn = null;
+          state._selfHosted = null;
+          state._hostedRequestAt = 0;
           hideConnMask();
           resetVoiceBaseline();
           voiceDisable();
@@ -92,6 +110,7 @@
           renderLobby();
           return;
         }
+        syncHostedNoticeFromRoom(msg.room);
         state.room = msg.room;
         renderRoomView();
         // 不在确认阶段时清理结算确认区，避免跨局/跨房间残留
@@ -105,6 +124,7 @@
         }
         break;
       case 'game_state':
+        syncHostedNotice(msg.game && msg.game.players && msg.game.players[msg.game.yourSeat]);
         state.game = msg.game;
         state.tingPick = false;
         // 手牌选中态：轮次变化 / 自己不可出牌 / 本局结束任一条件满足即清除，避免残留
@@ -202,7 +222,46 @@
         }
         break;
       case 'error':
+        // 服务端结构化错误码：凭据失效（老用户本地无 secret / secret 不匹配）→ 走自愈，不重复弹普通错误
+        if (msg.code === 'AUTH_FAILED') { _handleAuthFailed(); break; }
+        // 登录类错误：账号相关错误码单独提示，文案已由服务端给出
+        if (msg.code === 'AUTH_INVALID' || msg.code === 'AUTH_EXISTS' || msg.code === 'AUTH_WEAK') {
+          // token 失效（多为服务端重启后内存会话清空）：清掉本地 token，回退游客，避免每次重连都弹错
+          if (msg.code === 'AUTH_INVALID' && state.token) {
+            state.token = '';
+            localStorage.removeItem('kd.token');
+            renderAuthBar();
+          }
+          showAuthError(msg.message || '操作失败');
+          break;
+        }
         toast(msg.message || '操作失败', true);
+        break;
+      case 'registered':
+      case 'logged_in':
+        state.token = msg.token;
+        state.username = msg.user.username;
+        state.displayName = msg.user.displayName;
+        state.name = msg.user.displayName;
+        localStorage.setItem('kd.token', msg.token);
+        localStorage.setItem('kd.username', msg.user.username);
+        localStorage.setItem('kd.displayName', msg.user.displayName);
+        localStorage.setItem('kd.name', msg.user.displayName);
+        hideModal('auth-modal');
+        renderAuthBar();
+        toast('已登录：' + msg.user.displayName);
+        break;
+      case 'logged_out':
+        state.token = '';
+        state.username = '';
+        state.displayName = '';
+        localStorage.removeItem('kd.token');
+        localStorage.removeItem('kd.username');
+        localStorage.removeItem('kd.displayName');
+        renderAuthBar();
+        break;
+      case 'history':
+        renderHistory(msg.records || [], !!msg.guest);
         break;
       case 'voice_signal':
         handleVoiceSignal(msg);
@@ -210,6 +269,29 @@
       default:
         break;
     }
+  }
+
+  // 凭据失效自愈：收到 AUTH_FAILED 时清除本地身份（localStorage + state），回到大厅重新登录。
+  // 不清身份会带着旧 playerId 在 ws.onopen 里无限重连，用户卡在"正在重连"遮罩里出不来。
+  // 清理后 onopen 不再发 reconnect（state.playerId 为空），重连风暴自然停止。
+  function _handleAuthFailed() {
+    state.playerId = '';
+    state.secret = '';
+    state.room = null;
+    state.game = null;
+    state.prompt = null;
+    state.selectedIndex = null;
+    state._lastTurn = null;
+    state._selfHosted = null;
+    state._hostedRequestAt = 0;
+    state.reconnectAttempts = 0;
+    localStorage.removeItem('kd.playerId');
+    localStorage.removeItem('kd.secret');
+    hideConnMask();
+    resetVoiceBaseline();
+    voiceDisable();
+    renderLobby(); // 内部会切到 lobby-view
+    toast('登录状态已失效，请重新进入大厅', true);
   }
 
   // ================= 实时语音对讲（WebRTC mesh） =================
@@ -437,10 +519,10 @@
   function variantLabel(settings) { return settings && settings.variant === 'hongzhong' ? '红中麻将' : settings && settings.variant === 'tiejin' ? '贴金麻将' : '扣点点'; }
   // 页面标题/Logo/Slogan 随玩法切换：koudian 默认，tiejin/hongzhong 各自文案
   function variantChrome(variant) {
-    if (variant === 'lobby') return { title: '麻将 · 扣点点 / 红中 / 贴金', logo: '🀄 麻将 · 扣点点 / 红中 / 贴金', slogan: '三种玩法，一局开打：扣点点 · 红中 · 贴金' };
+    if (variant === 'lobby') return { title: '运城麻将 · 扣点点 / 红中 / 贴金', logo: '🀄 运城麻将', slogan: '三种玩法，一局开打：扣点点 · 红中 · 贴金' };
     if (variant === 'tiejin') return { title: '运城贴金麻将', logo: '🀄 运城贴金麻将', slogan: '贴金 · 金牌万能 · 亮金锁金' };
     if (variant === 'hongzhong') return { title: '红中麻将', logo: '🀄 红中麻将', slogan: '红中癞子 · 自摸抢杠 · 扎码翻倍' };
-    return { title: '运城扣点点麻将', logo: '🀄 运城扣点点麻将', slogan: '扣点点 · 只碰不吃 · 胡牌自摸' };
+    return { title: '运城麻将 · 扣点点', logo: '🀄 运城麻将 · 扣点点', slogan: '扣点点 · 只碰不吃 · 胡牌自摸' };
   }
   function applyVariantChrome(variant) {
     const c = variantChrome(variant);
@@ -616,8 +698,37 @@
       const t = e.target.closest('.btn-cancel-hosted, .btn-hosted');
       if (!t) return;
       e.preventDefault();
-      send({ type: t.classList.contains('btn-cancel-hosted') ? 'cancel_hosted' : 'set_hosted' });
+      const canceling = t.classList.contains('btn-cancel-hosted');
+      state._hostedRequestAt = canceling ? 0 : Date.now();
+      send({ type: canceling ? 'cancel_hosted' : 'set_hosted' });
     });
+  }
+
+  // 托管状态由 room_state / game_state 交替下发；只在 false → true 时提示一次原因
+  function syncHostedNotice(me) {
+    if (!me) return;
+    const hosted = !!me.hosted;
+    if (state._selfHosted === false && hosted) {
+      const manuallyRequested = state._hostedRequestAt && Date.now() - state._hostedRequestAt < 5000;
+      toast(manuallyRequested ? '已开启托管，AI 将代你操作' : '超时未操作，已由 AI 代打', false);
+    }
+    state._selfHosted = hosted;
+    if (!hosted) state._hostedRequestAt = 0;
+  }
+
+  // room_state 往往比超时后的 AI 动作更早到达，同步到当前牌局可立即显示托管状态
+  function syncHostedNoticeFromRoom(room) {
+    if (!room || !room.players) return;
+    let seat = state.game ? state.game.yourSeat : -1;
+    if (seat == null || seat < 0 || !room.players[seat]) {
+      seat = room.players.findIndex((pl) => pl && pl.id === state.playerId);
+    }
+    const me = seat >= 0 ? room.players[seat] : null;
+    if (!me) return;
+    syncHostedNotice(me);
+    if (state.game && state.game.players && state.game.players[seat]) {
+      state.game.players[seat].hosted = !!me.hosted;
+    }
   }
 
   function turnText() {
@@ -635,6 +746,17 @@
     const you = game.yourSeat === game.turn;
     if (you) return cur.ting ? '你已报听，摸牌即打（只能杠，不能碰/换牌）' : '轮到你出牌';
     return cur.ting ? `等待 ${cur.name} 摸打（报听）…` : `等待 ${cur.name} 出牌…`;
+  }
+
+  function hostedActionText(seat) {
+    const game = state.game;
+    if (!game || game.winners) return 'AI 已完成本局代打';
+    if (game.stage === 'response' && game.pending && game.pending.responders) {
+      const responder = game.pending.responders.find((r) => r.seat === seat);
+      if (responder && responder.choice === null) return 'AI 正在判断碰、杠或胡';
+    }
+    if (game.turn === seat) return 'AI 正在代你选择出牌';
+    return 'AI 正在等待其他玩家操作';
   }
 
   function renderOtherCard(p, seat, pos) {
@@ -723,8 +845,9 @@
         ${lockedBadge}
         <span class="pc-name">${esc(p.name)}（我）</span>
         <span class="pc-score">${p.score}</span>
-        ${p.hosted ? '<button class="btn-cancel-hosted">取消托管</button>' : '<button class="btn-hosted">托管</button>'}
+        ${p.hosted ? '' : '<button class="btn-hosted">托管</button>'}
       </div>
+      ${p.hosted ? `<div class="hosted-status" aria-live="polite"><span>${hostedActionText(seat)}</span><button class="btn-cancel-hosted">取消托管</button></div>` : ''}
       ${shangjin ? `<div class="shangjin-area" title="亮金区（${shangjin.length}/3）">${shangjin.map((t) => tileHtml(t, 'tiny', 0, false, false, undefined, false, goldTile)).join('')}</div>` : ''}
       <div class="melds">${meldHtml}</div>
       <div class="hand">${state.tingPick ? '<div class="ting-pick-hint">请选择要扣的牌报听（需听牌中含 ≥6 点牌，灰色不可选）</div>' : ''}<div class="hand-tiles${state.tingPick ? ' ting-pick' : ''}">${hand}</div></div>
@@ -953,6 +1076,7 @@
     const p = state.prompt;
     if (!p) { bar.innerHTML = ''; return; }
     let btns = '';
+    let guideText = '';
     if (p.type === 'draw') {
       if (p.canHu) btns += `<button class="act act-hu" data-act="hu">胡</button>`;
       if (p.actions && p.actions.includes('pass')) btns += `<button class="act act-pass" data-act="pass">过</button>`;
@@ -961,9 +1085,9 @@
       if (p.canDeclareTing && !state.tingPick) btns += `<button class="act act-ting" data-act="ting">报听</button>`;
       if (state.tingPick) {
         btns += `<button class="act act-pass" data-act="ting-cancel">取消</button>`;
-        btns += `<span class="countdown" style="align-self:center;">点击要扣的牌选中，再次点击报听</span>`;
+        guideText = '点击要扣的牌选中，再次点击报听';
       } else {
-        btns += `<span class="countdown" style="align-self:center;">${isTapToDiscard() ? '点击手牌出牌' : '点击手牌选中，再次点击出牌'}</span>`;
+        guideText = isTapToDiscard() ? '点击手牌出牌' : '点击手牌选中，再次点击出牌';
       }
     } else if (p.type === 'response') {
       if (p.canHu) btns += `<button class="act act-hu" data-act="hu">胡</button>`;
@@ -978,7 +1102,18 @@
       btns += `<span class="resp-hint">${actLabel ? actLabel + '「' : ''}${tileHtml(p.tile, 'small')}${actLabel ? '」' : ''}</span>`;
     }
     bar.innerHTML = btns;
+    if (guideText) {
+      // 引导与倒计时使用两个独立节点，避免 startCountdown 覆写操作说明
+      const guide = document.createElement('span');
+      guide.className = 'action-guide countdown';
+      guide.textContent = guideText;
+      bar.appendChild(guide);
+    }
     if (p.timeoutMs) {
+      const timer = document.createElement('span');
+      timer.className = 'action-timer';
+      timer.setAttribute('aria-live', 'polite');
+      bar.appendChild(timer);
       state.countdownEnd = Date.now() + p.timeoutMs;
       startCountdown();
     }
@@ -991,7 +1126,7 @@
     if (state.countdownTimer) clearInterval(state.countdownTimer);
     const cd = () => {
       const remain = Math.max(0, Math.round((state.countdownEnd - Date.now()) / 1000));
-      const el = document.querySelector('.countdown');
+      const el = document.querySelector('.action-timer');
       if (el && remain > 0) el.textContent = `⏱ ${remain}s`;
     };
     cd();
@@ -1086,6 +1221,105 @@
     box.innerHTML = (chat || []).map((m) => `
       <div class="chat-msg"><span class="who">${esc(m.from)}</span><span class="txt">${esc(m.text)}</span></div>`).join('');
     box.scrollTop = box.scrollHeight;
+  }
+
+  // ================= 账号体系 UI =================
+  const VARIANT_LABEL = { koudian: '扣点点', hongzhong: '红中', tiejin: '贴金', unknown: '未知' };
+
+  function renderAuthBar() {
+    const loggedIn = !!state.token;
+    const st = $('#auth-state');
+    if (st) st.textContent = loggedIn ? ('👤 ' + (state.displayName || state.username)) : '未登录（游客）';
+    const authBtn = $('#auth-btn');
+    const histBtn = $('#history-btn');
+    const logoutBtn = $('#logout-btn');
+    if (authBtn) authBtn.classList.toggle('hidden', loggedIn);
+    if (histBtn) histBtn.classList.toggle('hidden', !loggedIn);
+    if (logoutBtn) logoutBtn.classList.toggle('hidden', !loggedIn);
+  }
+
+  function showAuthError(msg) {
+    const tip = $('#auth-tip');
+    if (!tip) return;
+    tip.textContent = msg || '';
+    tip.classList.add('err');
+  }
+
+  function setAuthMode(mode) {
+    $$('#seg-auth .seg-item').forEach((b) => b.classList.toggle('active', b.dataset.value === mode));
+    $('#auth-title').textContent = mode === 'register' ? '注册账号' : '登录';
+    $('#auth-submit').textContent = mode === 'register' ? '注册并登录' : '登录';
+    $('#auth-name').classList.toggle('hidden', mode !== 'register');
+    $('#auth-tip').textContent = '';
+    $('#auth-tip').classList.remove('err');
+  }
+
+  function submitAuth() {
+    const mode = $('#seg-auth .seg-item.active').dataset.value;
+    const username = $('#auth-username').value.trim();
+    const password = $('#auth-password').value;
+    const name = $('#auth-name').value.trim();
+    if (!username) { showAuthError('请输入用户名'); return; }
+    if (!password || password.length < 6) { showAuthError('密码至少 6 位'); return; }
+    if (mode === 'register' && !/^[A-Za-z0-9_一-龥]{2,16}$/.test(username)) {
+      showAuthError('用户名需 2-16 位（字母/数字/下划线/中文）');
+      return;
+    }
+    if (mode === 'register') send({ type: 'register', username, password, name });
+    else send({ type: 'login', username, password });
+  }
+
+  function renderHistory(records, guest) {
+    const box = $('#history-list');
+    if (!box) return;
+    if (guest) { box.innerHTML = '<div class="empty">登录后可查看你的对局记录</div>'; return; }
+    if (!records.length) { box.innerHTML = '<div class="empty">还没有对局记录，快去打一局吧</div>'; return; }
+    box.innerHTML = records.map((r) => {
+      const d = new Date(r.t);
+      const hh = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const delta = (r.delta >= 0 ? '+' : '') + r.delta;
+      const total = (r.total >= 0 ? '+' : '') + r.total;
+      const badge = r.isWin ? '<span class="h-win">胡</span>' : (r.type === 'draw' ? '<span class="h-draw">流</span>' : '');
+      return `<div class="history-item">
+        <span class="h-time">${hh}</span>
+        <span class="h-variant">${esc(VARIANT_LABEL[r.variant] || r.variant)}</span>
+        <span class="h-round">第${r.roundNo}局</span>
+        ${badge}
+        <span class="h-delta ${r.delta >= 0 ? 'up' : 'down'}">${delta}</span>
+        <span class="h-total ${r.total >= 0 ? 'up' : 'down'}">累计 ${total}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function openHistory() {
+    showModal('history-modal');
+    send({ type: 'get_history', limit: 50, token: state.token || undefined });
+  }
+
+  // 常用聊天语：点击即发，避免每局都打字；短语在此集中维护
+  const QUICK_CHATS = [
+    '快点出牌~',
+    '该你啦',
+    '稍等，卡了',
+    '慢点，我想想',
+    '这把稳了',
+    '胡了！',
+    '杠！',
+    '碰！',
+    '不好意思',
+    '哈哈',
+  ];
+
+  function renderQuickChat() {
+    const box = $('#chat-quick');
+    if (!box || box.dataset.ready) return;
+    box.dataset.ready = '1';
+    box.innerHTML = QUICK_CHATS.map((t) =>
+      `<button class="chat-quick-btn" data-text="${esc(t)}">${esc(t)}</button>`).join('');
+    box.addEventListener('click', (e) => {
+      const btn = e.target.closest('.chat-quick-btn');
+      if (btn) sendChatText(btn.dataset.text);
+    });
   }
 
   // ================= 聊天消息气泡 =================
@@ -1532,7 +1766,7 @@
   function hideModal(id) { $('#' + id).classList.add('hidden'); }
 
   function initCreateModal() {
-    const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：计分模型可选乘算（点数×牌型倍数）或加算（底分+固定加番，清一色/一条龙/七小对+20、豪七额外+40）；庄底加分默认开启（非自摸+5/自摸+10，庄家胡三家各加、闲家胡庄家份加）；报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
+    const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：计分模型可选乘算（点数×牌型倍数）或加算（底分+固定加番，清一色/一条龙/七小对+20、豪七额外+40）；庄底默认关闭（开启后仅庄家胡牌单边加分：非自摸+5/自摸+10，输家不额外扣分；闲家胡无庄底）；报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
     const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；只能自摸或抢杠胡，不能点炮；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
     const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），金牌亮出为「亮金」独立操作（摸牌后、出牌前亮出金牌摆面前、牌尾补一张、手牌数不变），金牌不可当普通牌打出；亮金一次才有点炮胡资格，亮金区独立展示，三金封顶；连续亮金两张自动锁金（锁定其他三家只能自摸，被锁者亮出最后金牌解锁）；可碰可杠不可吃，无报听；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
     buildSeg('seg-variant', ['koudian', 'hongzhong', 'tiejin'], (v) => (v === 'hongzhong' ? '红中麻将' : v === 'tiejin' ? '贴金麻将' : '扣点点'), (v) => {
@@ -1891,7 +2125,8 @@
       if (!name) { toast('请输入昵称', true); return; }
       state.name = name;
       localStorage.setItem('kd.name', name);
-      send({ type: 'join_lobby', name });
+      // 已登录则带 token 关联账户（昵称会被账户 displayName 覆盖）；游客不带
+      send({ type: 'join_lobby', name, token: state.token || undefined });
     };
     $('#join-room-btn').onclick = () => {
       const id = $('#join-room-input').value.trim();
@@ -1902,6 +2137,18 @@
     $('#join-room-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#join-room-btn').click(); });
     $('#chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
     $('#chat-send-btn').onclick = sendChat;
+    renderQuickChat();
+
+    // 账号体系 UI 绑定
+    $('#auth-btn').onclick = () => { setAuthMode('login'); showModal('auth-modal'); };
+    $('#auth-cancel').onclick = () => hideModal('auth-modal');
+    $('#auth-submit').onclick = submitAuth;
+    $('#history-btn').onclick = openHistory;
+    $('#history-close').onclick = () => hideModal('history-modal');
+    $('#logout-btn').onclick = () => { send({ type: 'logout', token: state.token }); };
+    $$('#seg-auth .seg-item').forEach((b) => { b.onclick = () => setAuthMode(b.dataset.value); });
+    $('#auth-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
+    renderAuthBar();
     $('#create-room-btn').onclick = () => { applyScoreModelPanel(); showModal('create-modal'); };
 
     document.addEventListener('click', (e) => {
@@ -1921,8 +2168,14 @@
     const input = $('#chat-input');
     const text = input.value.trim();
     if (!text) return;
-    send({ type: 'chat', text });
+    sendChatText(text);
     input.value = '';
+  }
+
+  function sendChatText(text) {
+    text = String(text || '').trim().slice(0, 200);
+    if (!text) return;
+    send({ type: 'chat', text });
   }
 
   // ================= 启动 =================

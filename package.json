@@ -1,7 +1,7 @@
 {
-  "name": "koudian-mahjong",
+  "name": "yuncheng-mahjong",
   "version": "1.0.0",
-  "description": "运城扣点点麻将 Web 应用（多人联机 + AI 补位）",
+  "description": "运城麻将 Web 应用（多人联机 + AI 补位，含扣点点/红中/贴金三种玩法）",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

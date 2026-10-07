@@ -47,6 +47,8 @@ function newServer() {
 }
 
 function cleanupServer(srv) {
+  // 优先走服务端全量清理入口：覆盖所有曾被创建的连接，避免只遍历 wsPlayers 漏掉已移除的 socket
+  if (typeof srv.stop === 'function') srv.stop();
   for (const room of srv.rooms.values()) {
     for (const t of room.timers.values()) clearTimeout(t);
     room.timers.clear();

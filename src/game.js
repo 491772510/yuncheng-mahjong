@@ -14,10 +14,14 @@
 const rules = require('./rules');
 const ai = require('./ai');
 const gameLogger = require('./game-logger');
+const users = require('./users');
+const crypto = require('crypto');
+
+users.initUsers(); // 启动即加载账号与历史存储（文件在 data/，gitignore）
 
 const RECONNECT_MS = 60000; // 断线重连窗口
-const HEARTBEAT_INTERVAL_MS = 30000; // 心跳 ping 间隔
-const HEARTBEAT_MAX_MISS = 3; // 连续 3 次未收到 pong（约 90s）判定死连接
+const HEARTBEAT_INTERVAL_MS = 30000; // 心跳 ping 间隔（模块级默认，生产用；可按实例注入覆盖）
+const HEARTBEAT_MAX_MISS = 3; // 连续 3 次未收到 pong（约 90s）判定死连接（模块级默认；可按实例注入覆盖）
 const OWNER_OFFLINE_MS = 60000; // 房主离线超时：AI 托管打完本局，本局结束后自动解散房间
 const HUMAN_TIMEOUT_MS = 30000; // 真人行动超时（自动托管）
 const RESPONSE_TIMEOUT_MS = 20000; // 响应窗口
@@ -26,9 +30,27 @@ const MAX_ROOMS = 100;
 const MAX_LOGS = 200;
 const MAX_CHAT = 50;
 
+// ---- 安全护栏（P0）----
+const MAX_RAW_MSG = 16 * 1024; // 单条消息最大字符数（与 server.js WebSocketServer maxPayload 一致），超限直接丢弃
+const RATE_LIMIT_PER_SEC = 60; // 每连接令牌桶速率（条/秒），桶容量同值（允许 60 条突发）
+const MAX_WS_PER_IP = 24; // 单「IP + User-Agent 哈希」额度：局域网/家庭 WiFi 多机共用出口 IP 时不再互相挤占
+const MAX_WS_PER_IP_TOTAL = 48; // 单 IP 硬顶：UA 可伪造，必须有 IP 级总闸兜底，否则伪造 UA 即可绕过上限
+const MAX_WS_PER_IP_NO_UA = 12; // 握手拿不到 User-Agent 时（脚本/非浏览器）退化为按 IP 计数的保守上限
+const MAX_PLAYERS = 5000; // this.players 上限：超限拒绝新身份，防止重复 join_lobby 造成内存无界增长
+const VOICE_SIG_MAX = 12 * 1024; // 语音信令 sig 上限：须小于 MAX_RAW_MSG，否则永远到不了业务逻辑
+const JOIN_FAIL_LIMIT = 5; // 连续加入房间失败次数上限（达到即锁定）
+const JOIN_LOCK_MS = 30000; // 加入失败锁定退避时长
+const SEAT_REF_RE = /^s[0-3]$/; // 房间内座位代称（他人视角的 id）：s0-s3
+
 function nowTime() {
   const d = new Date();
   return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+}
+
+/** 校验注入值为正整数，非法（undefined/null/0/负数/非数字）时回落到模块级默认值 */
+function positiveInt(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
 class GameServer {
@@ -36,6 +58,20 @@ class GameServer {
     this.rooms = new Map(); // roomId -> room
     this.players = new Map(); // playerId -> player
     this.wsPlayers = new Map(); // ws -> playerId
+    // 心跳参数可按实例注入（测试注入极小间隔便于快速收敛），缺省沿用模块级生产默认值
+    this.heartbeatIntervalMs = positiveInt(opts.heartbeatIntervalMs, HEARTBEAT_INTERVAL_MS);
+    this.heartbeatMaxMiss = positiveInt(opts.heartbeatMaxMiss, HEARTBEAT_MAX_MISS);
+    // 全局登记「所有曾创建」的心跳定时器（ws -> interval）。wsPlayers 只含当前在册连接，
+    // 已离开房间/已超时移除/从未 join 的连接不在其中，仅遍历 wsPlayers 会漏清其 interval。
+    this._heartbeatTimers = new Map();
+    // 全局登记所有仍在运行的房间/断线定时器句柄。room.timers 与 p.disconnectTimer
+    // 都可能被外部（如测试）丢弃引用，只遍历它们会漏清真实存活的定时器；
+    // 这里以句柄为准，stop() 时无条件全量清理。
+    this._timers = new Set();
+    this.ipConns = new Map(); // 「ip|uaHash」-> 连接数（有 UA 时）/ ip -> 连接数（无 UA 时）
+    this.ipTotals = new Map(); // ip -> 该 IP 的连接总数（UA 可伪造的兜底总闸，仅在能拿到 UA 时维护）
+    // 安全护栏计数：仅用于观测/测试断言，超限行为是丢弃而非报错
+    this.stats = { oversize: 0, rateLimited: 0, unknownType: 0, rejectedConn: 0, joinLocked: 0 };
     // 游戏日志：默认按环境启用（NODE_ENV=test 或 MARVIS_GAME_LOG=0 时禁用）；
     // opts.gameLog === false 强制关闭（测试场景用）；opts.gameLog === true 强制开启（集成测试用）
     const gameLogOpt = opts.gameLog !== undefined ? { enabled: !!opts.gameLog } : {};
@@ -45,11 +81,93 @@ class GameServer {
 
   // ============ 网络层 ============
 
-  handleConnection(ws) {
-    ws.on('message', (raw) => this.handleMessage(ws, raw.toString()));
-    ws.on('close', () => this._onWsClose(ws));
+  /**
+   * 新连接接入。opts.ip 由 server.js 从 req.socket.remoteAddress 传入（测试伪 ws 不传，即不启用 IP 限制）；
+   * opts.ua 为握手 User-Agent（可缺省），用于把单 IP 计数细化到「IP + UA」，降低 NAT 误伤。
+   * 单 IP 并发超限时直接关闭，不进入业务层。
+   */
+  handleConnection(ws, opts = {}) {
+    const ip = (opts && opts.ip) || '';
+    const ua = (opts && opts.ua) || '';
+    const key = ip ? this._trackIpConnect(ip, ua) : '';
+    if (ip && !key) {
+      this.stats.rejectedConn += 1;
+      try { ws.close(1008, '连接数超限'); } catch (e) { /* ignore */ }
+      return;
+    }
+    ws._ip = ip;
+    ws._ipKey = key;
+    ws.on('message', (raw) => {
+      // 先量长度再 toString：避免超大帧进入 JSON 解析（ws 层 maxPayload 之外的二次护栏）
+      const len = typeof raw === 'string' ? raw.length : (raw && raw.length) || 0;
+      if (len > MAX_RAW_MSG) {
+        this.stats.oversize += 1;
+        return;
+      }
+      this.handleMessage(ws, raw.toString());
+    });
+    ws.on('close', () => {
+      this._releaseIp(ws);
+      this._onWsClose(ws);
+    });
     ws.on('error', () => {});
     this._startHeartbeat(ws);
+  }
+
+  /**
+   * 单 IP 并发计数（只在传入 ip 时生效）。返回计数 key（超限返回 ''），由调用方挂在 ws._ipKey 供关闭时回收。
+   * 双重额度：① 「IP + User-Agent 哈希」桶 ≤ MAX_WS_PER_IP —— 同一出口 IP 下不同设备（UA 不同）
+   * 各自有额度，降低 NAT 误伤；② 该 IP 的连接总数 ≤ MAX_WS_PER_IP_TOTAL —— UA 是客户端可控字段，
+   * 只按桶计数会被「伪造 UA」无限绕过，因此必须有 IP 级总闸。
+   * 拿不到 UA（脚本/非浏览器直连）时无法区分来源，退化为按 IP 计数并沿用更严的 MAX_WS_PER_IP_NO_UA。
+   */
+  _trackIpConnect(ip, ua) {
+    const key = this._ipKeyOf(ip, ua);
+    const bucketLimit = ua ? MAX_WS_PER_IP : MAX_WS_PER_IP_NO_UA;
+    const ipLimit = ua ? MAX_WS_PER_IP_TOTAL : MAX_WS_PER_IP_NO_UA;
+    const ipTotal = (this.ipTotals.get(ip) || 0) + 1;
+    if (ipTotal > ipLimit) return '';
+    const n = (this.ipConns.get(key) || 0) + 1;
+    if (n > bucketLimit) return '';
+    this.ipTotals.set(ip, ipTotal);
+    this.ipConns.set(key, n);
+    return key;
+  }
+
+  _ipKeyOf(ip, ua) {
+    if (!ua) return ip;
+    return ip + '|' + crypto.createHash('sha1').update(ua).digest('hex').slice(0, 10);
+  }
+
+  _releaseIp(ws) {
+    const key = ws && ws._ipKey;
+    if (!key) return;
+    const n = (this.ipConns.get(key) || 0) - 1;
+    if (n <= 0) this.ipConns.delete(key);
+    else this.ipConns.set(key, n);
+    const ip = ws._ip;
+    if (ip && this.ipTotals.has(ip)) {
+      const t = this.ipTotals.get(ip) - 1;
+      if (t <= 0) this.ipTotals.delete(ip);
+      else this.ipTotals.set(ip, t);
+    }
+  }
+
+  /** 每连接令牌桶：速率 RATE_LIMIT_PER_SEC 条/秒、容量同值；超限丢弃（不报错、不计入业务） */
+  _allowByRate(ws) {
+    const now = Date.now();
+    if (typeof ws._tokens !== 'number' || typeof ws._lastRefill !== 'number') {
+      ws._tokens = RATE_LIMIT_PER_SEC;
+      ws._lastRefill = now;
+    }
+    const elapsed = now - ws._lastRefill;
+    if (elapsed > 0) {
+      ws._tokens = Math.min(RATE_LIMIT_PER_SEC, ws._tokens + (elapsed / 1000) * RATE_LIMIT_PER_SEC);
+      ws._lastRefill = now;
+    }
+    if (ws._tokens < 1) return false;
+    ws._tokens -= 1;
+    return true;
   }
 
   // ---------- 心跳保活（ping/pong） ----------
@@ -58,22 +176,72 @@ class GameServer {
     ws._pongMiss = 0;
     // ws 库收到 pong 帧自动触发 'pong' 事件（客户端浏览器/ws 库均自动回 pong，无需改协议）
     ws.on('pong', () => { ws._pongMiss = 0; });
-    ws._heartbeatTimer = setInterval(() => this._heartbeatTick(ws), HEARTBEAT_INTERVAL_MS);
+    const timer = setInterval(() => this._heartbeatTick(ws), this.heartbeatIntervalMs);
+    ws._heartbeatTimer = timer;
+    this._heartbeatTimers.set(ws, timer);
+    this._timers.add(timer);
+  }
+
+  /** 停止单个连接的心跳定时器并注销登记；连接关闭与全量清理共用，保证不会漏清 */
+  _stopHeartbeat(ws) {
+    const timer = ws && ws._heartbeatTimer;
+    if (!timer) return;
+    clearInterval(timer);
+    this._timers.delete(timer);
+    ws._heartbeatTimer = null;
+    this._heartbeatTimers.delete(ws);
   }
 
   // 每个心跳周期：累计 miss，超过阈值判定半开/死连接
   _heartbeatTick(ws) {
     if (!ws || ws.readyState !== 1) return;
     ws._pongMiss = (ws._pongMiss || 0) + 1;
-    if (ws._pongMiss > HEARTBEAT_MAX_MISS) {
+    if (ws._pongMiss > this.heartbeatMaxMiss) {
       // 连续超过阈值未收到 pong：强制断开，触发 close → _onWsClose 走既有断线重连流程
+      // 先在本侧摘除定时器：即便 terminate 因异常未触发 close，也不会留下悬挂 interval
+      this._stopHeartbeat(ws);
       try { ws.terminate(); } catch (e) { console.error('[game] heartbeat terminate error:', e); }
       return;
     }
     try { ws.ping(); } catch (e) { console.error('[game] heartbeat ping error:', e); }
   }
 
+  /**
+   * 服务端侧全量清理入口：停掉所有心跳 interval、房间定时器、玩家断线重连定时器。
+   * 覆盖「所有曾创建」的连接（不依赖 wsPlayers / rooms 的当前成员关系），供退出前调用，
+   * 避免 setInterval 持续持有事件循环导致进程无法退出。不涉及任何游戏逻辑。
+   */
+  stop() {
+    for (const ws of this._heartbeatTimers.keys()) this._stopHeartbeat(ws);
+    this._heartbeatTimers.clear();
+    // 以句柄集合为准，不依赖 room.timers / players 的当前成员关系：
+    // 被外部丢弃引用的定时器（room.timers.clear()）与已从 players 移除但仍在计时的
+    // 断线定时器，都能在这里被可靠停掉。
+    for (const t of this._timers) {
+      clearTimeout(t);
+      clearInterval(t);
+    }
+    this._timers.clear();
+    for (const room of this.rooms.values()) room.timers.clear();
+    for (const p of this.players.values()) p.disconnectTimer = null;
+  }
+
+  /** stop() 的语义别名 */
+  dispose() {
+    this.stop();
+  }
+
   handleMessage(ws, raw) {
+    // 护栏1：超长消息直接丢弃（不解析、不报错）
+    if (typeof raw !== 'string' || raw.length > MAX_RAW_MSG) {
+      this.stats.oversize += 1;
+      return;
+    }
+    // 护栏2：每连接令牌桶限流，超限静默丢弃
+    if (!this._allowByRate(ws)) {
+      this.stats.rateLimited += 1;
+      return;
+    }
     let msg;
     try {
       msg = JSON.parse(raw);
@@ -81,13 +249,19 @@ class GameServer {
       this._sendWs(ws, { type: 'error', message: '无效的消息格式' });
       return;
     }
-    if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') {
+    if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string' || msg.type.length > 32) {
       this._sendWs(ws, { type: 'error', message: '无效的消息格式' });
       return;
     }
     try {
       if (msg.type === 'join_lobby') return this._joinLobby(ws, msg);
       if (msg.type === 'reconnect') return this._reconnect(ws, msg);
+      // 账号体系：注册/登录/登出 不要求已进入大厅，可随时发起
+      if (msg.type === 'register') return this._register(ws, msg);
+      if (msg.type === 'login') return this._login(ws, msg);
+      if (msg.type === 'logout') return this._logout(ws, msg);
+      // 历史对局记录：已登录（token）即可查，无需先进入大厅
+      if (msg.type === 'get_history') return this._getHistory(ws, msg);
 
       const playerId = this.wsPlayers.get(ws);
       const p = playerId ? this.players.get(playerId) : null;
@@ -115,7 +289,10 @@ class GameServer {
         case 'settle_confirm': return this._settleConfirm(p);
         case 'chat': return this._chat(p, msg);
         case 'voice_signal': return this._voiceSignal(p, msg);
-        default: return this._send(p, { type: 'error', message: '未知消息类型' });
+        default:
+          // 未知消息类型：静默丢弃并计数（不回显，避免成为探测通道）
+          this.stats.unknownType += 1;
+          return;
       }
     } catch (e) {
       console.error('[game] handleMessage error:', e);
@@ -126,21 +303,131 @@ class GameServer {
   // ============ 大厅 ============
 
   _joinLobby(ws, msg) {
-    const name = this._sanitizeName(msg && msg.name);
+    // 若携带有效 token，则关联账号（昵称用账户的 displayName，避免游客改名绕过身份）
+    let account = null;
+    if (msg && msg.token) {
+      const u = users.getUserByToken(msg.token);
+      if (u) account = u;
+    }
+    const name = this._sanitizeName(account ? account.displayName : (msg && msg.name));
     if (!name) {
       this._sendWs(ws, { type: 'error', message: '昵称不能为空（1-12 个字符）' });
       return;
     }
+    // 同一连接重复 join_lobby：复用该连接上已有的旧身份（无房间绑定者），
+    // 避免每次调用都新建 player 让 this.players 无界增长（内存 DoS + _broadcastLobby O(N)）
+    const oldId = this.wsPlayers.get(ws);
+    const old = oldId ? this.players.get(oldId) : null;
+    if (old) {
+      // 仍在房间内（含重连窗口内断线的座位）：绝不回收/顶替——删除会把座位变成无法重连的幽灵玩家，
+      // 重连路径 _reconnect 依赖 p.id/p.secret/p.roomId 保持不变
+      if (old.roomId) {
+        this._sendWs(ws, { type: 'error', code: 'ALREADY_IN_ROOM', message: '当前身份仍在房间中，请先退出房间' });
+        return;
+      }
+      old.name = name;
+      old.ws = ws;
+      old.connected = true;
+      old.hosted = false;
+      if (account) { old.account = account.username; old.name = account.displayName; }
+      this._clearDisconnectTimer(old);
+      this._send(old, { type: 'hello', playerId: old.id, secret: old.secret, name: old.name });
+      this._sendLobbyState(old);
+      return;
+    }
+    if (this.players.size >= MAX_PLAYERS) {
+      this._sendWs(ws, { type: 'error', code: 'SERVER_FULL', message: '服务器人数已满，请稍后再试' });
+      return;
+    }
     const p = this._createPlayer(ws, name);
-    this._send(p, { type: 'hello', playerId: p.id, name: p.name });
+    if (account) p.account = account.username; // 关联登录账户，供历史对局记录归因
+    // secret 仅在此处（本人连接）下发一次；room_state 与任何广播不再携带 playerId/secret
+    this._send(p, { type: 'hello', playerId: p.id, secret: p.secret, name: p.name });
     this._sendLobbyState(p);
+  }
+
+  // ============ 账号体系（注册 / 登录 / 登出 / 历史） ============
+
+  _register(ws, msg) {
+    try {
+      const u = users.registerUser(msg && msg.username, msg && msg.password, msg && msg.name);
+      const token = users.issueToken(u.username);
+      this._sendWs(ws, { type: 'registered', token, user: u });
+    } catch (e) {
+      this._sendWs(ws, { type: 'error', code: e.code || 'AUTH_WEAK', message: e.message });
+    }
+  }
+
+  _login(ws, msg) {
+    // 支持两种登录：{username,password} 或 {token}（token 登录用于刷新页面后自动重登）
+    let u;
+    if (msg && msg.token) u = users.getUserByToken(msg.token);
+    else u = users.verifyUser(msg && msg.username, msg && msg.password);
+    if (!u) {
+      this._sendWs(ws, { type: 'error', code: 'AUTH_INVALID', message: '用户名或密码错误' });
+      return;
+    }
+    const token = users.issueToken(u.username); // 重新签发，旧 token 自然失效
+    this._sendWs(ws, { type: 'logged_in', token, user: u });
+  }
+
+  _logout(ws, msg) {
+    if (msg && msg.token) users.logoutToken(msg.token);
+    this._sendWs(ws, { type: 'logged_out' });
+  }
+
+  _getHistory(ws, msg) {
+    // 账户来源：优先用已进大厅并关联账户的玩家；未进大厅（仅 token 登录）则用 token 解析
+    const p = this.wsPlayers.get(ws);
+    let account = p && p.account;
+    if (!account && msg && msg.token) {
+      const u = users.getUserByToken(msg.token);
+      if (u) account = u.username;
+    }
+    if (!account) {
+      this._sendWs(ws, { type: 'history', records: [], guest: true });
+      return;
+    }
+    const limit = Math.min(200, Math.max(10, Number(msg && msg.limit) || 50));
+    const records = users.getHistory(account, limit);
+    this._sendWs(ws, { type: 'history', records, account });
+  }
+
+  // 本局结算收口：把有账户的玩家本局战绩落盘（增量 delta + 累计总分 + 是否胡牌）
+  _recordRoundHistory(room) {
+    if (!room || !room.players) return;
+    const winners = room.game && room.game.winners;
+    if (!winners) return; // 异常中止的局不记录
+    const variant = room.settings ? room.settings.variant : 'unknown';
+    const roundNo = room.roundNo || 0;
+    const type = winners.type; // 'hu' | 'draw'
+    const winnerSeat = type === 'hu' ? winners.winnerSeat : -1;
+    for (const pl of room.players) {
+      if (!pl || !pl.account) continue; // 游客不记录
+      users.appendHistory(pl.account, {
+        t: Date.now(),
+        variant,
+        roundNo,
+        roomId: room.id,
+        name: pl.name,
+        delta: pl.roundScore || 0,
+        total: pl.score || 0,
+        isWin: type === 'hu' && winnerSeat === pl.seat,
+        type,
+      });
+    }
   }
 
   _reconnect(ws, msg) {
     const id = String((msg && msg.playerId) || '');
+    const secret = String((msg && msg.secret) || '');
     const p = this.players.get(id);
-    if (!p) {
-      this._sendWs(ws, { type: 'error', message: '重连失败：找不到玩家记录，请重新进入' });
+    // 重连凭据：playerId + secret 双因子。缺 secret 或 secret 不匹配一律拒绝，
+    // 防止房间内其他人仅凭广播到的 playerId 顶替座位、接管积分
+    if (!p || !p.secret || !secret || secret !== p.secret) {
+      // 结构化错误码：前端据此判断"凭据已失效"，清除本地身份并回大厅重新登录（老用户自愈）
+      // 中文文案保留用于直接展示；校验强度不变，不因缺少 secret 放行
+      this._sendWs(ws, { type: 'error', code: 'AUTH_FAILED', message: '重连失败：凭据无效，请重新进入大厅' });
       return;
     }
     // 替换旧连接
@@ -151,9 +438,9 @@ class GameServer {
     p.ws = ws;
     p.connected = true;
     p.hosted = false;
-    if (p.disconnectTimer) { clearTimeout(p.disconnectTimer); p.disconnectTimer = null; }
+    this._clearDisconnectTimer(p);
     this.wsPlayers.set(ws, p.id);
-    this._send(p, { type: 'hello', playerId: p.id, name: p.name });
+    this._send(p, { type: 'hello', playerId: p.id, secret: p.secret, name: p.name });
 
     if (p.roomId) {
       const room = this.rooms.get(p.roomId);
@@ -196,10 +483,7 @@ class GameServer {
 
   _onWsClose(ws) {
     // 连接关闭即清理心跳定时器，避免泄漏
-    if (ws._heartbeatTimer) {
-      clearInterval(ws._heartbeatTimer);
-      ws._heartbeatTimer = null;
-    }
+    this._stopHeartbeat(ws);
     const playerId = this.wsPlayers.get(ws);
     if (!playerId) return;
     this.wsPlayers.delete(ws);
@@ -243,14 +527,25 @@ class GameServer {
       if (room.state === 'playing' && room.game) this._broadcastGameState(room);
     }
     if (!p.disconnectTimer) {
-      p.disconnectTimer = setTimeout(() => {
+      const dt = setTimeout(() => {
+        this._timers.delete(dt);
         try {
           this._handleDisconnectTimeout(p);
         } catch (e) {
           console.error('[game] disconnect timer error:', e);
         }
       }, RECONNECT_MS);
+      p.disconnectTimer = dt;
+      this._timers.add(dt);
     }
+  }
+
+  /** 统一清理断线重连定时器：同步注销全局句柄登记，避免 stop() 漏清 */
+  _clearDisconnectTimer(p) {
+    if (!p || !p.disconnectTimer) return;
+    clearTimeout(p.disconnectTimer);
+    this._timers.delete(p.disconnectTimer);
+    p.disconnectTimer = null;
   }
 
   _handleDisconnectTimeout(p) {
@@ -348,7 +643,8 @@ class GameServer {
 
     let id;
     do {
-      id = String(Math.floor(1000 + Math.random() * 9000));
+      // 4 位房间码保持不变（熟人局不增加输入负担），但改用 crypto 随机，避免可预测
+      id = String(crypto.randomInt(1000, 10000));
     } while (this.rooms.has(id));
 
     const room = {
@@ -373,6 +669,7 @@ class GameServer {
     };
     this.rooms.set(id, room);
     this._seatPlayer(room, p);
+    this._resetJoinFails(p); // 创建成功：清空加入失败计数/锁定
     this._log(room, `${p.name} 创建了房间 ${id}`);
     this._send(p, { type: 'room_state', room: this._buildRoomView(room, p.seat) });
     this._broadcastLobby();
@@ -380,19 +677,44 @@ class GameServer {
 
   _joinRoom(p, msg) {
     if (p.roomId) return this._err(p, '您已在房间中，请先退出');
+    // 防房间号暴力枚举：连续失败达上限后锁定退避（成功后清零），锁定期内不再处理加入请求
+    const lockLeft = this._joinLockLeft(p);
+    if (lockLeft > 0) {
+      this.stats.joinLocked += 1;
+      return this._err(p, `加入尝试过于频繁，请 ${Math.ceil(lockLeft / 1000)} 秒后再试`);
+    }
     const id = String((msg && msg.roomId) || '').trim();
-    if (!/^\d{4}$/.test(id)) return this._err(p, '房间号必须是 4 位数字');
+    if (!/^\d{4}$/.test(id)) return this._failJoin(p, '房间号必须是 4 位数字');
     const room = this.rooms.get(id);
-    if (!room) return this._err(p, '房间不存在');
-    if (room.state !== 'waiting') return this._err(p, '房间当前不可加入（游戏中或已结算）');
-    if (!room.players.some((x) => x === null)) return this._err(p, '房间已满');
+    if (!room) return this._failJoin(p, '房间不存在');
+    if (room.state !== 'waiting') return this._failJoin(p, '房间当前不可加入（游戏中或已结算）');
+    if (!room.players.some((x) => x === null)) return this._failJoin(p, '房间已满');
 
+    this._resetJoinFails(p);
     this._seatPlayer(room, p);
     this._log(room, `${p.name} 加入房间`);
     this._send(p, { type: 'room_state', room: this._buildRoomView(room, p.seat) });
     this._broadcastRoomState(room);
     this._broadcastLobby();
     // 不再自动开局：人齐后由房主点击「开始游戏」触发
+  }
+
+  // ---------- 加入房间失败限频（防 4 位房间号暴力枚举） ----------
+  // 计数挂在 player 上：玩家对象随断线超时/退出从 this.players 删除而自然回收，不会无界增长
+  _failJoin(p, message) {
+    p.joinFails = (p.joinFails || 0) + 1;
+    if (p.joinFails >= JOIN_FAIL_LIMIT) p.joinLockUntil = Date.now() + JOIN_LOCK_MS;
+    return this._err(p, message);
+  }
+
+  _resetJoinFails(p) {
+    p.joinFails = 0;
+    p.joinLockUntil = 0;
+  }
+
+  /** 剩余锁定毫秒数（0 表示未锁定） */
+  _joinLockLeft(p) {
+    return Math.max(0, (p.joinLockUntil || 0) - Date.now());
   }
 
   _leaveRoom(p) {
@@ -445,7 +767,8 @@ class GameServer {
     if (p.id !== room.ownerId) return this._err(p, '只有房主可以踢出玩家');
     if (room.state !== 'waiting') return this._err(p, '牌局进行中，无法踢出玩家');
     const targetId = String((msg && msg.targetId) || '').trim();
-    const target = room.players.find((x) => x && x.id === targetId);
+    // 房间视图里他人 id 是座位代称（s0-s3）；兼容旧客户端直传的真实 playerId
+    const target = this._resolveRoomPlayer(room, targetId);
     if (!target) return this._err(p, '目标玩家不在房间中');
     if (target.id === p.id) return this._err(p, '不能踢出自己');
     this._unseatPlayer(room, target);
@@ -1688,6 +2011,7 @@ class GameServer {
   _endRound(room) {
     const g = room.game;
     if (g) g.stage = 'over';
+    this._recordRoundHistory(room); // 本局结算收口处落盘历史（胡/流局统一入口）
     // 游戏日志：本局结束（完整结算：winners 含支付明细/杠分/金分/庄底/各家手牌，players 含各家最终得分）
     this._logGame(room, 'round_end', {
       result: g && g.winners ? g.winners.type : 'aborted',
@@ -1700,7 +2024,11 @@ class GameServer {
     });
     // 保留房主离线超时定时器：本局结束时不能误清，否则房主超时后本局结束自动解散将失效
     const ownerOfflineTimer = room.timers.get('owner:offline');
-    for (const [k, t] of room.timers) if (k !== 'owner:offline') clearTimeout(t);
+    for (const [k, t] of room.timers) {
+      if (k === 'owner:offline') continue;
+      clearTimeout(t);
+      this._timers.delete(t);
+    }
     room.timers.clear();
     // 清理 AI 代打：本局结束所有挂起的自动代打定时器已清除，令牌作废防泄漏
     for (const pl of room.players) {
@@ -2056,13 +2384,13 @@ class GameServer {
   }
 
   // 实时语音对讲信令转发（WebRTC mesh：信令走 WS，媒体走 P2P）
-  // 校验：发起者在房间内；目标为同房间真人玩家（非 AI、有可用 ws）；sig 序列化 ≤ 64KB
+  // 校验：发起者在房间内；目标为同房间真人玩家（非 AI、有可用 ws）；sig 序列化 ≤ VOICE_SIG_MAX
   _voiceSignal(p, msg) {
     const room = p.roomId ? this.rooms.get(p.roomId) : null;
     if (!room || !room.players || room.players[p.seat] !== p) return; // 不在房间，静默忽略
     const targetId = String((msg && msg.target) || '');
-    const target = this.players.get(targetId);
-    // 目标必须是同房间真人玩家（非 AI、有可用 ws），否则静默忽略
+    // 目标按房间内身份解析（座位代称 s0-s3 或兼容真实 id），且必须是同房间真人玩家
+    const target = this._resolveRoomPlayer(room, targetId);
     if (!target || target.isAI || !target.ws || target.ws.readyState !== 1) return;
     if (target.roomId !== room.id || !room.players || room.players[target.seat] !== target) return;
     const sig = (msg && msg.sig) || null;
@@ -2073,10 +2401,13 @@ class GameServer {
     } catch {
       return; // 序列化失败（循环引用等）直接忽略
     }
-    if (sigJson.length > 64 * 1024) return; // 超限拒绝，防滥用
+    // 上限与 MAX_RAW_MSG（16KB，ws maxPayload）对齐：单条 SDP/ICE 信令实际仅数 KB，
+    // 保留足够余量即可，避免整帧在 ws 层就被切断导致语音功能不可用
+    if (sigJson.length > VOICE_SIG_MAX) return; // 超限拒绝，防滥用
     this._send(target, {
       type: 'voice_signal',
-      from: p.id,
+      // 不下发真实 playerId：用房间内座位代称，接收方据此回查座位
+      from: this._seatRef(p),
       fromName: p.name,
       fromSeat: p.seat,
       sig,
@@ -2186,11 +2517,10 @@ class GameServer {
     // 纳入 room.timers 统一跟踪：唯一 key（seat + 递增序号）支持同一座位并发多定时器，
     // 不使用 _setTimer（会 clear 旧 key），回调触发后自行删除本 key。
     const autoKey = 'auto:' + seat + ':' + (++room.autoSeq);
-    room.timers.set(
-      autoKey,
-      setTimeout(() => {
-        room.timers.delete(autoKey);
-        try {
+    const autoTimer = setTimeout(() => {
+      this._timers.delete(autoTimer);
+      room.timers.delete(autoKey);
+      try {
         if (!room.players[seat]) return;
         if (room.state !== 'playing' || !room.game) return;
         const g = room.game;
@@ -2282,11 +2612,39 @@ class GameServer {
       } catch (e) {
         console.error('[game] AI action error:', e);
       }
-      }, 80)
-    );
+    }, 80);
+    room.timers.set(autoKey, autoTimer);
+    this._timers.add(autoTimer);
   }
 
   // ============ 构建视图 / 消息 ============
+
+  // ---------- 身份脱敏：真实 playerId 只在本人连接可见 ----------
+  /** 房间内座位代称（他人视角使用的 id），形如 s0-s3 */
+  _seatRef(pl) {
+    return pl && pl.seat != null ? 's' + pl.seat : '';
+  }
+
+  /** 房间视图中的玩家 id：本人为真实 playerId，他人为座位代称 */
+  _idForViewer(pl, viewerSeat) {
+    if (!pl) return null;
+    return pl.seat === viewerSeat ? pl.id : this._seatRef(pl);
+  }
+
+  /** 房间视图中的 ownerId：本人是房主时为真实 id，否则为房主座位代称；房主不在座位时不下发 */
+  _ownerRefForViewer(room, viewerSeat) {
+    const ownerSeat = room.players.findIndex((pl) => pl && pl.id === room.ownerId);
+    if (ownerSeat < 0) return '';
+    const owner = room.players[ownerSeat];
+    return owner.seat === viewerSeat ? room.ownerId : this._seatRef(owner);
+  }
+
+  /** 房间内身份解析：首选座位代称（s0-s3），兼容旧客户端直传真实 playerId */
+  _resolveRoomPlayer(room, ref) {
+    if (!ref) return null;
+    if (SEAT_REF_RE.test(ref)) return room.players[Number(ref.slice(1))] || null;
+    return room.players.find((x) => x && x.id === ref) || null;
+  }
 
   _buildRoomView(room, viewerSeat) {
     return {
@@ -2294,12 +2652,14 @@ class GameServer {
       state: room.state,
       roundNo: room.roundNo,
       settings: room.settings,
-      ownerId: room.ownerId,
+      // 房主标识：本人视角下发真实 id（前端据此判断 isOwner），他人视角仅下发座位代称
+      ownerId: this._ownerRefForViewer(room, viewerSeat),
       players: room.players.map((pl, seat) =>
         pl
           ? {
               seat,
-              id: pl.id,
+              // 他人一律用座位代称（s0-s3）：真实 playerId 是重连凭据的一半，不再广播
+              id: this._idForViewer(pl, viewerSeat),
               name: pl.name,
               isAI: pl.isAI,
               connected: pl.connected,
@@ -2566,11 +2926,15 @@ class GameServer {
   // ============ 工具方法 ============
 
   _createPlayer(ws, name) {
-    const id = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    // id 与 secret 均用 crypto 随机：playerId 不再可预测，secret 作为重连第二因子
+    const id = 'u' + crypto.randomBytes(8).toString('hex');
+    const secret = crypto.randomBytes(24).toString('hex');
     const p = {
       id,
+      secret, // 重连凭据第二因子：仅通过 hello 下发给本人连接
       name,
       ws,
+      account: null, // 关联登录账户用户名（null = 游客）；历史对局记录据此归因
       roomId: null,
       seat: null,
       connected: true,
@@ -2579,6 +2943,8 @@ class GameServer {
       score: 0,
       roundScore: 0,
       disconnectTimer: null,
+      joinFails: 0, // 连续加入房间失败次数（成功即清零）
+      joinLockUntil: 0, // 加入失败锁定截止时间戳
       _autoToken: 0, _autoGen: 0, _autoActing: false,
     };
     this.players.set(id, p);
@@ -2658,10 +3024,7 @@ class GameServer {
 
   _unseatPlayer(room, p) {
     if (p.seat != null && room.players[p.seat] === p) room.players[p.seat] = null;
-    if (p.disconnectTimer) {
-      clearTimeout(p.disconnectTimer);
-      p.disconnectTimer = null;
-    }
+    this._clearDisconnectTimer(p);
     p.roomId = null;
     p.seat = null;
   }
@@ -2676,10 +3039,7 @@ class GameServer {
         pl.hosted = false;
         pl._autoToken = 0; pl._autoGen = 0; pl._autoActing = false;
         pl._autoRetry = 0;
-        if (pl.disconnectTimer) {
-          clearTimeout(pl.disconnectTimer);
-          pl.disconnectTimer = null;
-        }
+        this._clearDisconnectTimer(pl);
         // AI 与掉线超时玩家无重连可能：从全局 players 移除，避免内存泄漏；在线/短暂离线真人保留可重连
         if (pl.isAI || timedOut) {
           this.players.delete(pl.id);
@@ -2689,7 +3049,10 @@ class GameServer {
         this._sendLobbyState(pl);
       }
     }
-    for (const t of room.timers.values()) clearTimeout(t);
+    for (const t of room.timers.values()) {
+      clearTimeout(t);
+      this._timers.delete(t);
+    }
     room.timers.clear();
     this.rooms.delete(room.id);
     this._broadcastLobby();
@@ -2697,23 +3060,24 @@ class GameServer {
 
   _setTimer(room, key, ms, fn) {
     this._clearTimer(room, key);
-    room.timers.set(
-      key,
-      setTimeout(() => {
-        room.timers.delete(key);
-        try {
-          fn();
-        } catch (e) {
-          console.error('[game] timer error (' + key + '):', e);
-        }
-      }, ms)
-    );
+    const t = setTimeout(() => {
+      this._timers.delete(t);
+      room.timers.delete(key);
+      try {
+        fn();
+      } catch (e) {
+        console.error('[game] timer error (' + key + '):', e);
+      }
+    }, ms);
+    room.timers.set(key, t);
+    this._timers.add(t);
   }
 
   _clearTimer(room, key) {
     const t = room.timers.get(key);
     if (t) {
       clearTimeout(t);
+      this._timers.delete(t);
       room.timers.delete(key);
     }
   }
@@ -2797,6 +3161,10 @@ class GameServer {
     else this._broadcast(room, msg);
   }
 
+  // 大厅房间列表：仅下发「房间号 / 状态 / 玩法设置 / 创建者昵称 / 人数」，
+  // 无任何身份类字段：不含 ownerId、不含任何 playerId、不含 secret（已核对，无需再裁剪）。
+  // 房间号保留是因为 public/app.js:425 的「加入」按钮依赖 r.id，砍掉会直接让大厅列表不可用；
+  // 加入仍需房间号，且失败限频（JOIN_FAIL_LIMIT）已防暴力枚举。
   _sendLobbyState(p) {
     const rooms = [...this.rooms.values()].map((r) => ({
       id: r.id,

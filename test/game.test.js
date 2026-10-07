@@ -38,28 +38,21 @@ function lastOf(ws, type) {
   return list.length ? list[list.length - 1] : null;
 }
 
-function newServer() {
-  return new GameServer({ gameLog: false });
+// 测试心跳参数：间隔注入极小值（10ms），让挂在事件循环上的 interval 不再按生产
+// 的 30s 拖延进程退出；同时把「最大丢失次数」放大——伪 ws 永不回 pong，若沿用生产
+// 阈值 3，任何一次 sleep 都会被误判死连接而 terminate，污染其余用例的断言。
+// 需要真实 miss 语义的心跳用例自行用 newServer({ heartbeatMaxMiss: HEARTBEAT_MAX_MISS }) 覆盖。
+const TEST_HEARTBEAT = { heartbeatIntervalMs: 10, heartbeatMaxMiss: 10000 };
+
+function newServer(opts = {}) {
+  return new GameServer({ gameLog: false, ...TEST_HEARTBEAT, ...opts });
 }
 
-// 清理服务端所有定时器，避免 node --test 因 pending timer 拖慢退出
+// 清理服务端所有定时器，避免 node --test 因 pending timer 拖慢退出。
+// 走服务端全量清理入口 stop()：它按「所有曾创建的连接」清理，覆盖已离开房间 /
+// 已超时移除 / 从未 join 的 socket —— 这些都不在当前 wsPlayers 里，自行遍历必然漏清。
 function cleanupServer(srv) {
-  for (const room of srv.rooms.values()) {
-    for (const t of room.timers.values()) clearTimeout(t);
-    room.timers.clear();
-  }
-  for (const ws of srv.wsPlayers.keys()) {
-    if (ws._heartbeatTimer) {
-      clearInterval(ws._heartbeatTimer);
-      ws._heartbeatTimer = null;
-    }
-  }
-  for (const p of srv.players.values()) {
-    if (p.disconnectTimer) {
-      clearTimeout(p.disconnectTimer);
-      p.disconnectTimer = null;
-    }
-  }
+  srv.stop();
 }
 
 const BASE_SETTINGS = { aiFill: true, totalRounds: 4, zhuangDi: false };
@@ -138,7 +131,7 @@ test('摸牌后 game_state 下发 newTile（仅自己视角），打出后清除
   const gsB2 = lastOf(wb, 'game_state');
   assert.equal(gsB2.game.newTile, null, '打出后 newTile 应清除');
   assert.equal(g.newTiles[1], null);
-  await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -176,7 +169,7 @@ test('房主离线超时：广播提示，本局结束后自动解散房间并�
   assert.equal(kick.room, null, '玩家收到 room_state null（回大厅）');
   const lobbyB = lastOf(wb, 'lobby_state');
   assert.ok(lobbyB && !lobbyB.rooms.some((r) => r.id === room.id), '大厅房间列表不再包含该房间');
-  await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -212,7 +205,7 @@ test('牌局中途 _endRound 结算不得误清房主离线超时定时器（保
   const notice = lastOf(wb, 'room_notice');
   assert.ok(notice && notice.text.includes('成为新房主'), '已广播新房主提示');
   assert.equal(srv.rooms.has(room.id), true, '有在线真人时房间不解散');
-  await sleep(400); // 等待残留定时器跑完，避免挂住 worker
+  await sleep(300); // 等待残留定时器跑完，避免挂住 worker
   cleanupServer(srv);
 });
 
@@ -242,7 +235,7 @@ test('房主超时时本局已终局（settled）：转让房主给在线真人�
   assert.ok(notice && notice.text.includes('房主离线超时'), '已广播房主离线超时提示');
   assert.equal(room.ownerId, playerB.id, '房主转让给在线真人玩家乙');
   assert.equal(srv.rooms.has(room.id), true, '有在线真人时房间不解散');
-  await sleep(400); // 等待残留定时器跑完，避免挂住 worker
+  await sleep(300); // 等待残留定时器跑完，避免挂住 worker
   cleanupServer(srv);
 });
 
@@ -264,7 +257,7 @@ test('房主离线超时且无其他在线真人（仅AI）：终局阶段直接
   room.state = 'settled';
   srv._handleOwnerOfflineTimeout(room);
   assert.equal(srv.rooms.has(room.id), false, '无在线真人时房间直接解散');
-  await sleep(400); // 等待残留定时器跑完，避免挂住 worker
+  await sleep(300); // 等待残留定时器跑完，避免挂住 worker
   cleanupServer(srv);
 });
 
@@ -290,7 +283,8 @@ test('房主 60 秒内重连：取消离线超时解散，房间继续正常进�
   // 60 秒内重连：使用新连接执行 reconnect
   const wa2 = makeWs();
   srv.handleConnection(wa2);
-  send(wa2, { type: 'reconnect', playerId: ownerId, name: '房主' });
+  // 安全改动：重连需 playerId + secret 双因子（缺 secret 一律拒绝），此处补上本人 secret
+  send(wa2, { type: 'reconnect', playerId: ownerId, secret: srv.players.get(ownerId).secret, name: '房主' });
   assert.equal(room.ownerOfflineSince, null, '重连后离线起始时间已清除');
   assert.equal(room.timers.has('owner:offline'), false, '重连后超时定时器已取消');
 
@@ -298,7 +292,7 @@ test('房主 60 秒内重连：取消离线超时解散，房间继续正常进�
   srv._handleOwnerOfflineTimeout(room);
   assert.equal(room.pendingDisband, false, '重连后不应触发解散');
   assert.equal(srv.rooms.has(room.id), true, '房间仍在进行');
-  await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -348,7 +342,7 @@ test('点炮胡七对：胡牌 tile 并入后正确算 4 倍（七小对），�
   assert.ok(g.winners.multNames.includes('七小对'), '番型应识别为七小对');
   assert.ok(!g.winners.multNames.includes('平胡'), '点炮七对不得误判为平胡');
   assert.equal(g.winners.score, 84, '放炮者未报听独赔 3 份 = 点数7 × 4倍 × 扣点1 × 3 = 84');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -364,7 +358,7 @@ test('点炮胡碰碰胡：胡牌 tile 并入后正确算 2 倍（碰碰胡）�
   assert.ok(g.winners.multNames.includes('碰碰胡'), '番型应识别为碰碰胡');
   assert.ok(!g.winners.multNames.includes('平胡'), '点炮碰碰胡不得误判为平胡');
   assert.equal(g.winners.score, 42, '放炮者未报听独赔 3 份 = 点数7 × 2倍 × 扣点1 × 3 = 42');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -379,7 +373,7 @@ test('点炮胡一条龙：胡牌 tile 并入后正确计一条龙倍数', async
   assert.ok(g.winners.multNames.includes('一条龙'), '番型应识别为一条龙');
   assert.equal(g.winners.mult, 4, '平胡1 × 一条龙4 = 4 倍');
   assert.equal(g.winners.score, 60, '放炮者未报听独赔 3 份 = 点数5 × 4倍 × 扣点1 × 3 = 60');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -395,7 +389,7 @@ test('点炮胡十三幺：胡牌 tile 并入后正确计 8 倍（十三幺）',
   assert.ok(g.winners.multNames.includes('十三幺'), '番型应识别为十三幺');
   assert.ok(!g.winners.multNames.includes('平胡'), '点炮十三幺不得误判为平胡');
   assert.equal(g.winners.score, 240, '放炮者未报听独赔 3 份 = 点数10 × 8倍 × 扣点1 × 3 = 240');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -409,7 +403,7 @@ test('抢杠胡七对：qianggang 路径同样并入胡牌 tile，正确计 4 �
   srv._settleHu(room, winnerSeat, { winType: 'qianggang', tile: 'b7', discarder: 1, qiangGang: true });
   assert.equal(g.winners.mult, 4, '抢杠胡七对应计 4 倍');
   assert.ok(g.winners.multNames.includes('七小对'), '番型应识别为七小对');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -427,7 +421,7 @@ test('自摸路径不受影响：完整 14 张手牌照常识别七对 4 倍', a
   assert.equal(g.winners.mult, 4, '自摸七对应计 4 倍');
   assert.ok(g.winners.multNames.includes('七小对'), '自摸番型应识别为七小对');
   assert.equal(g.winners.score, 56, '自摸分 = 点数7 × 2(自摸) × 4倍 × 扣点1 = 56');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -457,7 +451,7 @@ test('点炮胡结算展示：赢家补入胡牌 tile 显示 14 张，原始手�
     rules.sortTiles(g.hands[otherView.seat]),
     '其他玩家展示手牌应与真实手牌排序一致'
   );
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -474,7 +468,7 @@ test('抢杠胡结算展示：赢家同样补入胡牌 tile 显示 14 张', asyn
   assert.equal(winnerView.hand.length, 14, '抢杠胡赢家结算展示应为 14 张（补入胡牌）');
   assert.equal(winnerView.hand.filter((t) => t === 'b7').length, 2, '展示手牌应含两张 b7');
   assert.equal(g.hands[winnerSeat].length, 13, 'g.hands 原始手牌仍为 13 张');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -494,7 +488,7 @@ test('自摸结算展示：手牌本就 14 张，不重复补牌', async () => {
   assert.equal(winnerView.hand.length, 14, '自摸赢家结算展示应为 14 张（真实手牌）');
   assert.equal(winnerView.hand.filter((t) => t === 'b7').length, 2, '自摸展示手牌保持两张 b7，不额外补牌');
   assert.equal(g.hands[winnerSeat].length, 14, 'g.hands 原始手牌保持 14 张');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -518,7 +512,7 @@ test('点炮者已报听：三家各出 1 份，胡牌者共收 3 份', async ()
   assert.equal(room.players[2].roundScore, -28, '闲家2出 1 份');
   assert.equal(room.players[3].roundScore, -28, '闲家3出 1 份');
   assert.equal(room.players[1].roundScore + room.players[2].roundScore + room.players[3].roundScore, -84, '三家合计支出 = 胡牌者收入');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -536,7 +530,7 @@ test('胡牌者未报听、放炮者未报听：放炮者独赔 3 份点炮分�
   assert.equal(room.players[1].roundScore, -84, '放炮者独赔 84');
   assert.equal(room.players[2].roundScore, 0, '闲家2不出分');
   assert.equal(room.players[3].roundScore, 0, '闲家3不出分');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -554,7 +548,7 @@ test('包胡并入此规则：胡者报听、放炮者未报听同样独赔 3 �
   assert.equal(room.players[1].roundScore, -84, '放炮者独赔 84');
   assert.equal(room.players[2].roundScore, 0, '闲家2不出分');
   assert.equal(room.players[3].roundScore, 0, '闲家3不出分');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -572,7 +566,7 @@ test('抢杠胡且放炮者已报听：同样三家各出 1 份（抢杠胡算�
   assert.equal(room.players[1].roundScore, -28, '放炮者出 1 份');
   assert.equal(room.players[2].roundScore, -28, '闲家2出 1 份');
   assert.equal(room.players[3].roundScore, -28, '闲家3出 1 份');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -592,7 +586,7 @@ test('自摸不受影响：三家各付 1 份自摸分，胡牌者共收 3 份�
   assert.equal(room.players[1].roundScore, -56, '闲家1出 1 份自摸分');
   assert.equal(room.players[2].roundScore, -56, '闲家2出 1 份自摸分');
   assert.equal(room.players[3].roundScore, -56, '闲家3出 1 份自摸分');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -620,7 +614,7 @@ test('支付明细-点炮未报听：payments 含 hu 条目，放炮者独赔 3 
   assert.equal(hu.rows[0].seat, 1);
   assert.equal(hu.rows[0].amount, -84, '放炮者独赔 84');
   assert.match(hu.rows[0].role, /未报听/, '角色标签含未报听独赔');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -641,7 +635,7 @@ test('支付明细-点炮已报听：三家各付 1 份，放炮者带已报听�
   const discarderRow = hu.rows.find((r) => r.seat === 1);
   assert.match(discarderRow.role, /已报听/, '放炮者角色标签含已报听');
   assert.ok(hu.rows.filter((r) => r.seat !== 1).every((r) => r.role === '闲家' || r.role === '庄家'), '另两家为闲家/庄家（首局庄家随机）');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -661,7 +655,7 @@ test('支付明细-自摸：三家各付 1 份自摸分，角色均为闲家', a
   assert.equal(hu.rows.length, 3);
   assert.ok(hu.rows.every((r) => r.amount === -56), '三家各付 56 分');
   assert.ok(hu.rows.every((r) => r.role === '闲家' || r.role === '庄家'), '角色均为闲家/庄家（首局庄家随机）');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -677,7 +671,7 @@ test('支付明细-流局：黄庄杠分不计，payments 为空且分数不变'
   assert.equal(g.winners.gangLogs.length, 1, '杠分明细仍保留展示');
   assert.equal(room.players[1].roundScore, 0, '杠主流局不计杠分');
   assert.equal(room.players[0].roundScore, 0, '付家流局不计杠分');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -699,7 +693,7 @@ test('支付明细-胡牌：杠分整局结束统一结算（明杠 w5：杠主�
   const gangPay = g.winners.payments.find((p) => p.kind === 'gang');
   assert.ok(gangPay, 'payments 含杠分明细');
   assert.equal(gangPay.toAmount, 15, '杠主共收 5 × 3 = 15');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -798,7 +792,7 @@ test('一炮一响：下家与下下家都能点炮胡时，仅最近下家胡�
   assert.ok(g.winners, '本局已结算');
   assert.equal(g.winners.winnerSeat, 1, '一炮一响：仅最近下家胡牌');
   assert.equal(g.winners.discarder, 0, '放炮者为房主');
-  await sleep(400); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链（80ms 裸定时器）跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -841,7 +835,7 @@ test('未报听玩家不能点炮胡：g.tingSeats 为空时点炮不产生胡�
     assert.equal(r.canHu, false, '未报听玩家点炮胡 canHu 必须为 false');
   }
   assert.ok(!g.winners, '未报听玩家不能点炮胡结算');
-  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -861,7 +855,7 @@ test('未报听玩家摸到自摸牌不能胡：_buildDrawPrompt 不提供 hu �
   assert.equal(prompt.canHu, false, '未报听玩家自摸 canHu 必须为 false');
   assert.ok(!prompt.actions.includes('hu'), '未报听玩家 actions 不得包含 hu');
   assert.ok(prompt.actions.includes('play'), '未报听玩家仍可出牌');
-  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -883,7 +877,7 @@ test('定时器回调抛错不崩溃：_setTimer 回调异常被捕获，进程�
   // 进程未崩溃：房间仍存在且可继续正常操作
   assert.ok(srv.rooms.has(room.id), '异常被捕获后进程存活、房间保留');
   assert.equal(room.timers.has('test:boom'), false, '定时器触发后已从 timers 移除');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -924,12 +918,13 @@ test('房间销毁后全局 players 清理：AI 与掉线超时真人被移除�
   assert.ok(!srv.players.has(pB.id), '掉线超时真人已从全局 players 移除');
   const pA = humanPls.find((x) => x.id === room.ownerId);
   assert.ok(srv.players.has(pA.id), '在线房主保留在全局 players 中（可重连）');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
 // ============ 心跳保活（ping/pong） ============
 test('心跳：正常连接每周期回 pong 不会被误杀', () => {
+  // 该用例断言的是「回 pong 不被误杀」，与阈值大小无关，沿用注入的极小间隔即可
   const srv = newServer();
   const wa = makeWs();
   srv.handleConnection(wa);
@@ -949,7 +944,8 @@ test('心跳：正常连接每周期回 pong 不会被误杀', () => {
 });
 
 test('心跳：连续超过 HEARTBEAT_MAX_MISS 次未回 pong 判定死连接并 terminate，走断线清理', () => {
-  const srv = newServer();
+  // 断言依赖真实 miss 阈值，覆盖回生产默认的 HEARTBEAT_MAX_MISS
+  const srv = newServer({ heartbeatMaxMiss: HEARTBEAT_MAX_MISS });
   const wa = makeWs();
   srv.handleConnection(wa);
   send(wa, { type: 'join_lobby', name: '心跳乙' });
@@ -1102,7 +1098,7 @@ test('碰后从打出者弃牌区移除被碰的牌：g.discards[discarder] 不�
   assert.equal(g.melds[seat].length, 1, '碰者明牌区新增一组');
   assert.equal(g.melds[seat][0].type, 'peng');
   assert.deepEqual(g.melds[seat][0].tiles, ['b7', 'b7', 'b7'], '碰组显示完整三张');
-  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -1121,7 +1117,7 @@ test('明杠后从打出者弃牌区移除被明杠的牌：g.discards[discarder
   assert.equal(g.melds[seat].length, 1, '明杠者明牌区新增一组');
   assert.equal(g.melds[seat][0].type, 'gang');
   assert.deepEqual(g.melds[seat][0].tiles, ['b7', 'b7', 'b7', 'b7'], '杠组显示完整四张');
-  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -1137,7 +1133,7 @@ test('暗杠不触及弃牌区：g.discards[discarder] 原样保留', async () =
 
   assert.deepEqual(g.discards.map((arr) => arr.slice()), discardsBefore, '暗杠不得改动任何弃牌区');
   assert.equal(g.melds[seat][0].type, 'angang', '暗杠组进入明牌区');
-  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -1155,7 +1151,7 @@ test('补杠不触及弃牌区：g.discards[discarder] 原样保留', async () =
   assert.deepEqual(g.discards.map((arr) => arr.slice()), discardsBefore, '补杠不得改动任何弃牌区');
   assert.equal(g.melds[seat][0].type, 'bugang', '碰组升级为补杠组');
   assert.deepEqual(g.melds[seat][0].tiles, ['b7', 'b7', 'b7', 'b7']);
-  await sleep(400); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
+  await sleep(300); // 等待 AI 托管链跑完，避免残留定时器挂住 worker
   cleanupServer(srv);
 });
 
@@ -1178,7 +1174,7 @@ test('庄底默认关闭：settings.zhuangDi 为 false，庄家胡也无庄底�
   assert.equal(room.players[1].roundScore, -56, '闲家1出 56');
   assert.equal(room.players[2].roundScore, -56, '闲家2出 56');
   assert.equal(room.players[3].roundScore, -56, '闲家3出 56');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -1187,7 +1183,7 @@ test('已去除开局扣点玩法：settings 无 enableKoupoint 字段，开局�
   const { room } = makeHuRoom(srv, {});
   assert.equal(room.settings.enableKoupoint, undefined, 'settings 不再含扣点开关');
   assert.notEqual(room.game.stage, 'koupoint', '开局直接进入摸牌阶段');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -1208,7 +1204,7 @@ test('乘算+庄底开启-庄家自摸：三家各付 基础分，庄家单边 +
   assert.equal(room.players[1].roundScore, -56, '闲家1出 56，不扣庄底');
   assert.equal(room.players[2].roundScore, -56, '闲家2出 56，不扣庄底');
   assert.equal(room.players[3].roundScore, -56, '闲家3出 56，不扣庄底');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -1228,7 +1224,7 @@ test('乘算+庄底开启-闲家点炮已报听：无庄底项，三家各付基
   assert.equal(room.players[0].roundScore, -28, '庄家出 28，无庄底扣分');
   assert.equal(room.players[2].roundScore, -28, '放炮者（已报听）出 28');
   assert.equal(room.players[3].roundScore, -28, '闲家出 28');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -1248,7 +1244,7 @@ test('乘算+庄底开启-庄家点炮胡（放炮者已报听）：三家各付
   assert.equal(room.players[1].roundScore, -28, '放炮者（已报听）出 28，不扣庄底');
   assert.equal(room.players[2].roundScore, -28, '闲家出 28，不扣庄底');
   assert.equal(room.players[3].roundScore, -28, '闲家出 28，不扣庄底');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -1265,7 +1261,7 @@ test('加算模型-平胡点炮已报听：底分=牌点，无加番无庄底', 
   assert.equal(g.winners.addPoints, 0, '平胡无加番');
   assert.equal(g.winners.score, 7, '单份 = 点数7');
   assert.equal(room.players[1].roundScore, 21, '已报听三家各付 3×7');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -1288,7 +1284,7 @@ test('加算模型-庄家七对自摸杠红中（攻略示例）：每家 底分
   assert.equal(room.players[1].roundScore, -80, '闲家1出 底分20+加番60，不扣庄底');
   assert.equal(room.players[2].roundScore, -80);
   assert.equal(room.players[3].roundScore, -80);
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 
@@ -1306,7 +1302,7 @@ test('加算模型-清一色开关开启叠加：底分+清一色20+七小对20'
   assert.deepEqual(g.winners.addNames, ['七小对', '清一色']);
   assert.equal(g.winners.score, 7 * 2 + 40, '单份 = 底分14 + 加番40');
   assert.equal(room.players[0].roundScore, (7 * 2 + 40) * 3, '胡牌者共收 3 份');
-  await sleep(400);
+  await sleep(300);
   cleanupServer(srv);
 });
 

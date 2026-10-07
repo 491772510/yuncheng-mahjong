@@ -46,6 +46,8 @@ function newServer() {
 
 // 清理服务端所有定时器，避免 node --test 因 pending timer 拖慢退出
 function cleanupServer(srv) {
+  // 优先走服务端全量清理入口：覆盖所有曾被创建的连接，避免只遍历 wsPlayers 漏掉已移除的 socket
+  if (typeof srv.stop === 'function') srv.stop();
   for (const room of srv.rooms.values()) {
     for (const t of room.timers.values()) clearTimeout(t);
     room.timers.clear();
@@ -100,7 +102,9 @@ test('voice_signal：同房间真人目标收到转发（含 from/fromName/fromS
 
   const relayed = lastOf(wb, 'voice_signal');
   assert.ok(relayed, '乙应收到转发信令');
-  assert.equal(relayed.from, idA);
+  // 安全改动（P0 重连凭据防劫持）：from 不再下发真实 playerId，改为房间内座位代称（甲在座位 0）
+  assert.equal(relayed.from, 's0');
+  assert.notEqual(relayed.from, idA, 'voice_signal 不得泄露发起者真实 playerId');
   assert.equal(relayed.fromName, '甲');
   assert.equal(typeof relayed.fromSeat, 'number');
   assert.deepEqual(relayed.sig, sig);

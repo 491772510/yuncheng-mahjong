@@ -37,29 +37,24 @@ function lastOf(ws, type) {
   return list.length ? list[list.length - 1] : null;
 }
 
+// 测试心跳参数：间隔注入极小值（10ms）避免 30s interval 挂住进程退出；
+// 丢失阈值放大——伪 ws 永不回 pong，沿用生产阈值 3 会在等待期间被误判死连接。
+const TEST_HEARTBEAT = { heartbeatIntervalMs: 10, heartbeatMaxMiss: 10000 };
+
+function newServer() {
+  return new GameServer({ gameLog: false, ...TEST_HEARTBEAT });
+}
+
+// 走服务端全量清理入口 stop()：按「所有曾创建的连接」清理，覆盖已离开房间 /
+// 已超时移除的 socket（它们不在当前 wsPlayers 里，自行遍历必然漏清其 interval）
 function cleanupServer(srv) {
-  for (const room of srv.rooms.values()) {
-    for (const t of room.timers.values()) clearTimeout(t);
-    room.timers.clear();
-  }
-  for (const ws of srv.wsPlayers.keys()) {
-    if (ws._heartbeatTimer) {
-      clearInterval(ws._heartbeatTimer);
-      ws._heartbeatTimer = null;
-    }
-  }
-  for (const p of srv.players.values()) {
-    if (p.disconnectTimer) {
-      clearTimeout(p.disconnectTimer);
-      p.disconnectTimer = null;
-    }
-  }
+  srv.stop();
 }
 
 const HONOR_TILES = ['e', 's', 'x', 'n', 'z', 'f', 'p'];
 
 test('扣点点：_hzTileTypes 返回全量 136 张（含字牌）', () => {
-  const srv = new GameServer({ gameLog: false });
+  const srv = newServer();
   const wa = makeWs();
   srv.handleConnection(wa);
   send(wa, { type: 'join_lobby', name: '房主' });
@@ -72,7 +67,7 @@ test('扣点点：_hzTileTypes 返回全量 136 张（含字牌）', () => {
 });
 
 test('红中：_hzTileTypes 仍返回红中专用牌型（不含字牌）', () => {
-  const srv = new GameServer({ gameLog: false });
+  const srv = newServer();
   const wa = makeWs();
   srv.handleConnection(wa);
   send(wa, { type: 'join_lobby', name: '红中房主' });
@@ -85,7 +80,7 @@ test('红中：_hzTileTypes 仍返回红中专用牌型（不含字牌）', () =
 });
 
 function makeKoudianGame() {
-  const srv = new GameServer({ gameLog: false });
+  const srv = newServer();
   const wa = makeWs();
   const wb = makeWs();
   srv.handleConnection(wa);
@@ -180,7 +175,12 @@ test('扣点点：报听玩家摸到低点胡（1点不能自摸）→ AI 兜底
   assert.equal(rules.canHuByPoints(rules.tilePoints('w1'), 'zimo'), false, '前置：w1 为低点胡不能自摸');
 
   srv._scheduleAutoAct(room, seat);
-  await new Promise((r) => setTimeout(r, 250));
+  // AI 托管链为 80ms/跳，失败最多重试 2 次（最坏 240ms）；原来固定 sleep(250) 在并行
+  // 负载下与最坏耗时几乎持平，会偶发断言提前执行。改为轮询等到目标动作落盘即退出，
+  // 既不 flaky，也不会因多等而让牌局继续推进到本座位再次摸牌。
+  for (let i = 0; i < 40 && !g.discards[seat].includes('w1'); i++) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
 
   assert.ok(g.discards[seat].includes('w1'), '刚摸的 w1 应被打出');
   assert.equal(g.hands[seat].length, TING_DRAW_HAND.length - 1, '摸打后手牌应减少 1 张');
