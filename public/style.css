@@ -11,6 +11,11 @@ body {
 }
 .hidden { display: none !important; }
 .view { height: 100vh; height: 100dvh; }
+/* iOS 刘海屏 / 底部 Home 指示条安全区：内容避让屏幕圆角与手势条 */
+@supports (padding: max(0px)) {
+  .room-header { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); padding-top: max(10px, env(safe-area-inset-top)); }
+  .seat-bottom { bottom: max(2px, env(safe-area-inset-bottom)); }
+}
 
 .btn {
   border: none; border-radius: 8px; padding: 10px 18px; font-size: 15px;
