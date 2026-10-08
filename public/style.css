@@ -214,6 +214,17 @@ body {
 .friend-list { max-height: 42vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .fr-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,.06); font-size: 14px; }
 .fr-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 好友弹窗内的非主按钮（忽略/删除）：浅色弹窗上用白底深字，避免与背景同色看不清 */
+.fr-row .btn:not(.primary):not(.danger) {
+  background: #ffffff;
+  color: #444;
+  border: 1px solid #cfcfcf;
+  box-shadow: 0 1px 3px rgba(0,0,0,.15);
+}
+.fr-row .btn:not(.primary):not(.danger):hover {
+  background: #f0f0ec;
+  border-color: #bdbdbd;
+}
 
 /* 邀请玩家 */
 .invite-section { margin-bottom: 12px; }

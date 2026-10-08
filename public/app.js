@@ -1553,7 +1553,7 @@
       reqBox.innerHTML = '<div class="fr-title">好友请求</div>' + requests.map((r) =>
         `<div class="fr-row">
           <span class="fr-name">${esc(r.displayName)}</span>
-          <button class="btn small" data-accept="${esc(r.username)}">接受</button>
+          <button class="btn small primary" data-accept="${esc(r.username)}">接受</button>
           <button class="btn small" data-decline="${esc(r.username)}">忽略</button>
         </div>`).join('');
     } else {
@@ -1563,7 +1563,7 @@
     listBox.innerHTML = friends.map((r) =>
       `<div class="fr-row">
         <span class="fr-name">${esc(r.displayName)}</span>
-        <button class="btn small" data-remove="${esc(r.username)}">删除</button>
+        <button class="btn small danger" data-remove="${esc(r.username)}">删除</button>
       </div>`).join('');
   }
 
