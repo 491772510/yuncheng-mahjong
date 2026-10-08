@@ -622,6 +622,11 @@ body {
   .tile.small .n { font-size: 9px; }
   .tile.small .s { font-size: 5px; }
   .tile.tiny { width: 12px; height: 18px; }
+  /* 移动端万子：数字+萬竖排在窄牌里收紧字号，避免溢出裁切显示不全 */
+  .tile.small .wan-face b { font-size: 1.25em; }
+  .tile.small .wan-face i { font-size: 0.75em; margin-top: 1px; }
+  .tile.tiny .wan-face b { font-size: 1.05em; }
+  .tile.tiny .wan-face i { font-size: 0.65em; margin-top: 0; }
   /* 报听角标：缩小字号与内边距，避免遮挡牌面图案 */
   .tile.discardable.ting-mark::after { font-size: 9px; padding: 0 3px; top: -11px; right: -5px; line-height: 1.4; animation: tingPulseSmall 1.1s ease-in-out infinite; }
   @keyframes tingPulseSmall {
@@ -672,6 +677,11 @@ body {
   .hand-tiles .tile.hand-gap { width: 10px; flex: 0 1 10px; }
   .tile.small { width: 13px; height: 19px; font-size: 7px; }
   .tile.tiny { width: 10px; height: 15px; }
+  /* 超小屏万子：进一步收紧字号，保证数字+萬完整可见 */
+  .tile.small .wan-face b { font-size: 1.15em; }
+  .tile.small .wan-face i { font-size: 0.7em; margin-top: 0; }
+  .tile.tiny .wan-face b { font-size: 1em; }
+  .tile.tiny .wan-face i { font-size: 0.6em; margin-top: 0; }
   .discard-area { max-width: 168px; }
   .seat-left .discard-area, .seat-right .discard-area { max-width: 70px; }
   .player-card { padding: 4px 6px; }
@@ -707,9 +717,14 @@ body {
   .tile.small { width: 17px; height: 24px; font-size: 8px; }
   .tile.small .n { font-size: 9px; }
   .tile.small .s { font-size: 5px; }
+  /* 横屏万子：收紧字号，保证数字+萬完整可见 */
+  .tile.small .wan-face b { font-size: 1.3em; }
+  .tile.small .wan-face i { font-size: 0.78em; margin-top: 1px; }
   /* 报听角标：横屏同样缩小，避免遮挡牌面图案 */
   .tile.discardable.ting-mark::after { font-size: 9px; padding: 0 3px; top: -11px; right: -5px; line-height: 1.4; animation: tingPulseSmall 1.1s ease-in-out infinite; }
   .tile.tiny { width: 13px; height: 19px; }
+  .tile.tiny .wan-face b { font-size: 1.1em; }
+  .tile.tiny .wan-face i { font-size: 0.68em; margin-top: 0; }
   .seat-bottom { bottom: 2px; width: 92%; }
   .seat-top { top: 2px; width: 92%; }
   .player-card { padding: 4px 7px; }
