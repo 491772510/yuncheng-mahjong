@@ -63,6 +63,37 @@ const CACHE_MAX_AGE = {
 const GZIPABLE = new Set(['.html', '.css', '.js', '.json', '.svg']);
 const GZIP_MIN_BYTES = 1024; // 小于 1KB 的文本不值得压缩
 
+// 静态资源内存缓存：按 mtime+size 校验，避免每个请求都重新读盘、重新 gzip
+// （app.js 132KB 每请求现压一次是纯浪费）。public 文件少，FIFO 上限防内存膨胀。
+const STATIC_CACHE_MAX = 64;
+const staticCache = new Map(); // filePath -> { mtimeMs, size, data, gz }
+
+function readStaticCached(filePath, cb) {
+  fs.stat(filePath, (serr, st) => {
+    if (serr || !st.isFile()) {
+      cb(serr || new Error('not a file'));
+      return;
+    }
+    const hit = staticCache.get(filePath);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+      cb(null, hit);
+      return;
+    }
+    fs.readFile(filePath, (rerr, data) => {
+      if (rerr) {
+        cb(rerr);
+        return;
+      }
+      const entry = { mtimeMs: st.mtimeMs, size: st.size, data, gz: null };
+      staticCache.set(filePath, entry);
+      if (staticCache.size > STATIC_CACHE_MAX) {
+        staticCache.delete(staticCache.keys().next().value); // FIFO 淘汰最旧项
+      }
+      cb(null, entry);
+    });
+  });
+}
+
 // 后端 TTS 预合成桥接：独立 TTS 服务合成 -> 落盘 public/tts -> 同源 URL 供前端播放
 const ttsBridge = createTtsBridge();
 
@@ -138,7 +169,15 @@ function requestHandler(req, res) {
       res.end('Not Found');
       return;
     }
-    let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+    let urlPath;
+    try {
+      urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+    } catch (e) {
+      // 畸形百分号编码（如 /%zz）：明确 400 而非落到外层 500
+      res.writeHead(400);
+      res.end('Bad Request');
+      return;
+    }
     if (urlPath === '/') urlPath = '/index.html';
     // 防路径穿越：严格边界（等于根目录或以路径分隔符开头才放行）
     const filePath = path.normalize(path.join(PUBLIC_DIR, urlPath));
@@ -148,7 +187,7 @@ function requestHandler(req, res) {
       res.end('Forbidden');
       return;
     }
-    fs.readFile(filePath, (err, data) => {
+    readStaticCached(filePath, (err, entry) => {
       if (err) {
         res.writeHead(404);
         res.end('Not Found');
@@ -160,27 +199,35 @@ function requestHandler(req, res) {
 
       // gzip：仅压缩可压缩的文本类型，且客户端声明支持、内容超过阈值
       const acceptEncoding = String(req.headers['accept-encoding'] || '');
-      if (
-        GZIPABLE.has(ext) &&
-        data.length >= GZIP_MIN_BYTES &&
-        /\bgzip\b/.test(acceptEncoding)
-      ) {
-        zlib.gzip(data, (zerr, zdata) => {
+      const gzipable = GZIPABLE.has(ext) && entry.data.length >= GZIP_MIN_BYTES;
+      if (gzipable) {
+        // 可 gzip 的资源无论本次是否压缩都必须带 Vary，避免共享缓存把压缩版发给不支持的客户端
+        headers['Vary'] = 'Accept-Encoding';
+      }
+      if (gzipable && /\bgzip\b/.test(acceptEncoding)) {
+        const sendGz = (zdata) => {
+          headers['Content-Encoding'] = 'gzip';
+          res.writeHead(200, headers);
+          res.end(zdata);
+        };
+        if (entry.gz) {
+          sendGz(entry.gz); // 命中缓存的压缩结果
+          return;
+        }
+        zlib.gzip(entry.data, (zerr, zdata) => {
           if (zerr) {
             // 压缩失败兜底：原样返回
             res.writeHead(200, headers);
-            res.end(data);
+            res.end(entry.data);
             return;
           }
-          headers['Content-Encoding'] = 'gzip';
-          headers['Vary'] = 'Accept-Encoding';
-          res.writeHead(200, headers);
-          res.end(zdata);
+          entry.gz = zdata; // 同一份内容只压一次，后续请求直接复用
+          sendGz(zdata);
         });
         return;
       }
       res.writeHead(200, headers);
-      res.end(data);
+      res.end(entry.data);
     });
   } catch (e) {
     res.writeHead(500);

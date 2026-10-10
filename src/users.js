@@ -36,13 +36,29 @@ function load() {
     users = new Map(arr.map((u) => [u.username, u]));
   } catch (e) {
     users = new Map();
+    // 文件存在但解析失败（写坏/截断）：备份留档而非静默丢弃，避免全部账号无迹可寻
+    try {
+      if (e.code !== 'ENOENT' && fs.existsSync(USERS_FILE)) {
+        const bak = USERS_FILE + '.corrupt-' + new Date().toISOString().replace(/[:.]/g, '-');
+        fs.renameSync(USERS_FILE, bak);
+        console.error('[users] users.json 解析失败，已备份到 ' + bak + '（可人工恢复）');
+      }
+    } catch (e2) { /* 备份失败不阻塞启动 */ }
   }
 }
 
 function scheduleSave() {
-  // 注册低频，直接串行落盘（无防抖），保证每次写都进 writeChain，flush() 可安全 await
-  writeChain = writeChain.then(() =>
-    fsp.writeFile(USERS_FILE, JSON.stringify([...users.values()], null, 2)).catch(() => { /* noop */ }));
+  // 注册低频，直接串行落盘（无防抖），保证每次写都进 writeChain，flush() 可安全 await。
+  // 原子写：先写 .tmp 再 rename，进程崩溃在写入中途也不会留下半个 JSON 损坏用户表。
+  writeChain = writeChain.then(async () => {
+    const tmp = USERS_FILE + '.tmp';
+    try {
+      await fsp.writeFile(tmp, JSON.stringify([...users.values()], null, 2));
+      await fsp.rename(tmp, USERS_FILE);
+    } catch (e) {
+      try { await fsp.unlink(tmp); } catch (e2) { /* 残留 tmp 清理失败忽略 */ }
+    }
+  });
 }
 
 function hashPassword(password, salt) {

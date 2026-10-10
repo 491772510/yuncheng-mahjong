@@ -74,6 +74,28 @@ test('注册后落盘，重新加载仍可校验（持久化）', async () => {
   assert.strictEqual(users2.getUserByToken('invalid-token'), null);
 });
 
+test('users.json 损坏时备份留档而非静默清空', () => {
+  // 写坏 users.json，重新加载：账号表为空、原文件被改名备份
+  fs.writeFileSync(path.join(tmpDir, 'users.json'), '{not-valid-json!!!');
+  delete require.cache[require.resolve('../src/users')];
+  const users3 = require('../src/users');
+  users3.initUsers();
+  assert.strictEqual(users3.hasUser('grace'), false, '损坏后账号表应为空');
+  assert.strictEqual(fs.existsSync(path.join(tmpDir, 'users.json')), false, '损坏文件应被改名移走');
+  const backups = fs.readdirSync(tmpDir).filter((f) => f.startsWith('users.json.corrupt-'));
+  assert.strictEqual(backups.length, 1, '应生成一个损坏备份文件');
+  assert.strictEqual(fs.readFileSync(path.join(tmpDir, backups[0]), 'utf8'), '{not-valid-json!!!', '备份内容应为原始损坏内容');
+});
+
+test('落盘为原子写：不残留 .tmp，users.json 始终完整可解析', async () => {
+  const users4 = require('../src/users');
+  users4.registerUser('henry', 'passpass1');
+  await users4.flush();
+  assert.strictEqual(fs.existsSync(path.join(tmpDir, 'users.json.tmp')), false, '原子写完成后不应残留 .tmp');
+  const arr = JSON.parse(fs.readFileSync(path.join(tmpDir, 'users.json'), 'utf8'));
+  assert.ok(arr.some((u) => u.username === 'henry'), '落盘内容应完整可解析且含新用户');
+});
+
 test.after(() => {
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* noop */ }
 });
