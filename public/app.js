@@ -231,8 +231,9 @@
         }
         break;
       case 'draw_notice':
-        // 摸牌提示：显示摸到的具体牌（含字牌）
-        toast('摸到 ' + tileText(msg.tile), false);
+        // 摸牌提示：显示摸到的具体牌（含字牌）。draw_notice 仅发给摸牌者本人，
+        // 需据此决策，故延长到 4s（默认 2.6s 一闪而过容易错过）。
+        toast('摸到 ' + tileText(msg.tile), false, 4000);
         break;
       case 'room_notice':
         // 房间级广播提示（如房主离线超时，本局结束后解散房间）
@@ -807,10 +808,11 @@
     const tjGold = game.goldMother && game.goldTile
       ? `<div class="gold-mother">金母 <b>${tileHtml(game.goldMother, 'small', 0, false, false, undefined, false, game.goldMother)}</b> · 金牌 <b>${tileHtml(game.goldTile, 'small', 0, false, false, undefined, false, game.goldTile)}</b></div>`
       : '';
+    const turnSt = turnTextState();
     html += `<div class="table-center">
       ${tjGold}
       <div class="wall-count">牌墙 <b>${game.wallCount}</b></div>
-      <div class="turn-info">${turnText()}</div>
+      <div class="turn-info${turnSt.mine ? ' my-turn' : ''}">${turnSt.text}</div>
       <div class="action-bar" id="action-bar"></div>
     </div>`;
     for (let seat = 0; seat < 4; seat++) {
@@ -886,21 +888,26 @@
     }
   }
 
-  function turnText() {
+  // 计算中央提示文案；第二个返回值标记是否「轮到本人」，供调用方加醒目样式
+  function turnTextState() {
     const game = state.game;
-    if (!game) return '';
+    if (!game) return { text: '', mine: false };
     if (game.stage === 'response' && game.pending) {
       const who = game.players[game.pending.discarder];
-      return `${who ? who.name : '?'} 打出，等待响应…`;
+      return { text: `${who ? who.name : '?'} 打出，等待响应…`, mine: false };
     }
     if (game.winners) {
-      return game.winners.type === 'draw' ? '流局' : '本局结束';
+      return { text: game.winners.type === 'draw' ? '流局' : '本局结束', mine: false };
     }
     const cur = game.players[game.turn];
-    if (!cur) return '';
+    if (!cur) return { text: '', mine: false };
     const you = game.yourSeat === game.turn;
-    if (you) return cur.ting ? '你已报听，摸牌即打（只能杠，不能碰/换牌）' : '轮到你出牌';
-    return cur.ting ? `等待 ${cur.name} 摸打（报听）…` : `等待 ${cur.name} 出牌…`;
+    if (you) return { text: cur.ting ? '你已报听，摸牌即打（只能杠，不能碰/换牌）' : '轮到你出牌', mine: true };
+    return { text: cur.ting ? `等待 ${cur.name} 摸打（报听）…` : `等待 ${cur.name} 出牌…`, mine: false };
+  }
+
+  function turnText() {
+    return turnTextState().text;
   }
 
   function hostedActionText(seat) {
@@ -1295,7 +1302,17 @@
     const cd = () => {
       const remain = Math.max(0, Math.round((state.countdownEnd - Date.now()) / 1000));
       const el = document.querySelector('.action-timer');
-      if (el && remain > 0) el.textContent = `⏱ ${remain}s`;
+      if (!el) { clearInterval(state.countdownTimer); state.countdownTimer = null; return; }
+      if (remain > 0) {
+        el.textContent = `⏱ ${remain}s`;
+        // 最后 5 秒变色告警，提醒即将超时自动托管
+        el.classList.toggle('urgent', remain <= 5);
+      } else {
+        el.textContent = '⏱ 超时，正在自动处理…';
+        el.classList.add('urgent');
+        clearInterval(state.countdownTimer);
+        state.countdownTimer = null; // 到点自停，避免空转
+      }
     };
     cd();
     state.countdownTimer = setInterval(cd, 1000);
@@ -2160,17 +2177,23 @@
     let mySeat = state.game ? state.game.yourSeat : -1;
     if (mySeat < 0) mySeat = room.players.findIndex((pl) => pl && pl.id === state.playerId);
     const players = room.players || [];
+    // 取本局得分用于确认行展示（game.players[s].roundScore 为各家本局分）
+    const gp = (state.game && state.game.players) || [];
     wrap.innerHTML =
       `<div class="settle-confirm-title">本局结算确认（全员确认后开始下一局）</div>` +
       players
-        .map((pl, s) =>
-          pl
-            ? `<div class="settle-confirm-row ${confirms[s] ? 'ok' : 'wait'}">
+        .map((pl, s) => {
+          if (!pl) return '';
+          const rs = gp[s] && typeof gp[s].roundScore === 'number' ? gp[s].roundScore : null;
+          const rsHtml = rs === null
+            ? ''
+            : `<span class="rs ${rs >= 0 ? 'up' : 'down'}">本局 ${rs >= 0 ? '+' : ''}${rs}</span>`;
+          return `<div class="settle-confirm-row ${confirms[s] ? 'ok' : 'wait'}">
                  <span class="nm">${esc(pl.name)}${s === mySeat ? '（我）' : ''}</span>
+                 ${rsHtml}
                  <span class="st">${confirms[s] ? '已确认' : '待确认'}</span>
-               </div>`
-            : ''
-        )
+               </div>`;
+        })
         .join('');
     if (mySeat >= 0 && !confirms[mySeat]) {
       btn.classList.remove('hidden');
@@ -2370,13 +2393,13 @@
 
   // ================= 其它 UI =================
   let toastTimer = null;
-  function toast(text, isError) {
+  function toast(text, isError, ms) {
     const el = $('#toast');
     el.textContent = text;
     el.classList.toggle('error', !!isError);
     el.classList.remove('hidden');
     if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.add('hidden'), 2600);
+    toastTimer = setTimeout(() => el.classList.add('hidden'), ms || 2600);
   }
 
   function showConnMask(text) {
