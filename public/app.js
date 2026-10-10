@@ -4,16 +4,35 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
+  // 存储安全封装：部分 WebView / 严格隐私模式禁用 localStorage，裸访问抛 SecurityError
+  // 会让本文件顶层初始化直接崩溃 → 整页白屏。降级为内存 Map（会话内可用，刷新即失）。
+  const store = (() => {
+    try {
+      const ls = window.localStorage;
+      const probe = '__kd_probe__';
+      ls.setItem(probe, '1');
+      ls.removeItem(probe);
+      return ls;
+    } catch (e) {
+      const mem = new Map();
+      return {
+        getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+        setItem: (k, v) => { mem.set(k, String(v)); },
+        removeItem: (k) => { mem.delete(k); },
+      };
+    }
+  })();
+
   const state = {
     ws: null,
-    playerId: localStorage.getItem('kd.playerId') || '',
+    playerId: store.getItem('kd.playerId') || '',
     // 重连凭据第二因子：由服务端 hello 下发一次并持久化，reconnect 时必须回传
-    secret: localStorage.getItem('kd.secret') || '',
-    name: localStorage.getItem('kd.name') || '',
+    secret: store.getItem('kd.secret') || '',
+    name: store.getItem('kd.name') || '',
     // 登录账户：token 由服务端登录/注册下发，join_lobby 时回传以关联账户（历史对局归因）
-    token: localStorage.getItem('kd.token') || '',
-    username: localStorage.getItem('kd.username') || '',
-    displayName: localStorage.getItem('kd.displayName') || '',
+    token: store.getItem('kd.token') || '',
+    username: store.getItem('kd.username') || '',
+    displayName: store.getItem('kd.displayName') || '',
     lobby: null,
     room: null,
     game: null,
@@ -84,10 +103,10 @@
         // 避免任何未携带 secret 的 hello 把本地凭据清空
         if (msg.secret) {
           state.secret = msg.secret;
-          localStorage.setItem('kd.secret', msg.secret);
+          store.setItem('kd.secret', msg.secret);
         }
-        localStorage.setItem('kd.playerId', state.playerId);
-        localStorage.setItem('kd.name', state.name);
+        store.setItem('kd.playerId', state.playerId);
+        store.setItem('kd.name', state.name);
         $('#nick-input').value = state.name;
         break;
       case 'lobby_state':
@@ -240,7 +259,7 @@
           // token 失效（多为服务端重启后内存会话清空）：清掉本地 token，回退游客，避免每次重连都弹错
           if (msg.code === 'AUTH_INVALID' && state.token) {
             state.token = '';
-            localStorage.removeItem('kd.token');
+            store.removeItem('kd.token');
             renderAuthBar();
           }
           showAuthError(msg.message || '操作失败');
@@ -254,10 +273,10 @@
         state.username = msg.user.username;
         state.displayName = msg.user.displayName;
         state.name = msg.user.displayName;
-        localStorage.setItem('kd.token', msg.token);
-        localStorage.setItem('kd.username', msg.user.username);
-        localStorage.setItem('kd.displayName', msg.user.displayName);
-        localStorage.setItem('kd.name', msg.user.displayName);
+        store.setItem('kd.token', msg.token);
+        store.setItem('kd.username', msg.user.username);
+        store.setItem('kd.displayName', msg.user.displayName);
+        store.setItem('kd.name', msg.user.displayName);
         hideModal('auth-modal');
         renderAuthBar();
         syncNickInput();
@@ -267,9 +286,9 @@
         state.token = '';
         state.username = '';
         state.displayName = '';
-        localStorage.removeItem('kd.token');
-        localStorage.removeItem('kd.username');
-        localStorage.removeItem('kd.displayName');
+        store.removeItem('kd.token');
+        store.removeItem('kd.username');
+        store.removeItem('kd.displayName');
         renderAuthBar();
         syncNickInput();
         break;
@@ -277,8 +296,8 @@
         if (msg.ok && msg.user) {
           state.displayName = msg.user.displayName;
           state.name = msg.user.displayName;
-          localStorage.setItem('kd.displayName', msg.user.displayName);
-          localStorage.setItem('kd.name', msg.user.displayName);
+          store.setItem('kd.displayName', msg.user.displayName);
+          store.setItem('kd.name', msg.user.displayName);
           renderAuthBar();
           syncNickInput();
           hideModal('account-modal');
@@ -302,10 +321,10 @@
           state.username = '';
           state.displayName = '';
           state.name = '';
-          localStorage.removeItem('kd.token');
-          localStorage.removeItem('kd.username');
-          localStorage.removeItem('kd.displayName');
-          localStorage.removeItem('kd.name');
+          store.removeItem('kd.token');
+          store.removeItem('kd.username');
+          store.removeItem('kd.displayName');
+          store.removeItem('kd.name');
           hideModal('account-modal');
           renderAuthBar();
           syncNickInput();
@@ -369,8 +388,8 @@
     state._selfHosted = null;
     state._hostedRequestAt = 0;
     state.reconnectAttempts = 0;
-    localStorage.removeItem('kd.playerId');
-    localStorage.removeItem('kd.secret');
+    store.removeItem('kd.playerId');
+    store.removeItem('kd.secret');
     hideConnMask();
     resetVoiceBaseline();
     voiceDisable();
@@ -1367,9 +1386,11 @@
   function renderChat(chat) {
     const box = $('#chat-messages');
     if (!box) return;
+    // 仅当用户本来就在底部附近时才自动滚底，翻看历史时不被新消息强行拽回
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     box.innerHTML = (chat || []).map((m) => `
       <div class="chat-msg"><span class="who">${esc(m.from)}</span><span class="txt">${esc(m.text)}</span></div>`).join('');
-    box.scrollTop = box.scrollHeight;
+    if (nearBottom) box.scrollTop = box.scrollHeight;
   }
 
   // ================= 账号体系 UI =================
@@ -1643,7 +1664,7 @@
 
   function loadQuickChats() {
     try {
-      const raw = localStorage.getItem(QUICK_CHATS_KEY);
+      const raw = store.getItem(QUICK_CHATS_KEY);
       if (!raw) return DEFAULT_QUICK_CHATS.slice();
       const arr = JSON.parse(raw);
       if (!Array.isArray(arr)) return DEFAULT_QUICK_CHATS.slice();
@@ -1659,7 +1680,7 @@
   let quickChatEditing = false;
 
   function saveQuickChats() {
-    localStorage.setItem(QUICK_CHATS_KEY, JSON.stringify(QUICK_CHATS));
+    store.setItem(QUICK_CHATS_KEY, JSON.stringify(QUICK_CHATS));
   }
 
   function renderQuickChat() {
@@ -2385,7 +2406,7 @@
   const VOICE_GAP_MS = 500; // 同一事件 500ms 内不重复播报
   const ttsCache = new Map(); // key: text|voice -> audio_url，同文本同性别不重复请求
   function readVoiceMode() {
-    const v = localStorage.getItem(VOICE_KEY);
+    const v = store.getItem(VOICE_KEY);
     return (v === 'male' || v === 'female' || v === 'mute') ? v : 'mute';
   }
   const voiceState = {
@@ -2431,13 +2452,15 @@
 
   function setVoiceMode(mode) {
     voiceState.mode = (mode === 'male' || mode === 'female' || mode === 'mute') ? mode : 'mute';
-    localStorage.setItem(VOICE_KEY, voiceState.mode);
+    store.setItem(VOICE_KEY, voiceState.mode);
     // 切换后立即刷新目标语音缓存，下次播报即用新声音
     voiceState.femaleVoice = pickVoice('female');
     voiceState.maleVoice = pickVoice('male');
   }
 
-  // 同源请求后端预合成缓存音频并播放；失败时抛出，由调用方降级到 Web Speech
+  // 同源请求后端预合成缓存音频并播放；失败时抛出，由调用方降级到 Web Speech。
+  // currentTtsAudio：新播报先打断上一条，避免快速连发事件（碰+杠等）声音叠加。
+  let currentTtsAudio = null;
   async function playViaTTS(text) {
     const key = text + '|' + voiceState.mode;
     let audioUrl = ttsCache.get(key);
@@ -2449,7 +2472,11 @@
       audioUrl = data.url;
       ttsCache.set(key, audioUrl);
     }
+    if (currentTtsAudio) {
+      try { currentTtsAudio.pause(); } catch (e) { /* 打断失败忽略 */ }
+    }
     const audio = new Audio(audioUrl);
+    currentTtsAudio = audio;
     audio.play().catch(() => { /* 播放失败静默 */ });
   }
 
@@ -2522,9 +2549,9 @@
   function initTapToDiscard() {
     const el = $('#opt-tap-discard');
     if (!el) return;
-    el.checked = localStorage.getItem(TAP_KEY) === '1';
+    el.checked = store.getItem(TAP_KEY) === '1';
     el.addEventListener('change', () => {
-      localStorage.setItem(TAP_KEY, el.checked ? '1' : '0');
+      store.setItem(TAP_KEY, el.checked ? '1' : '0');
       if (el.checked) {
         // 开启直接出牌：移除已有选中态并重绘
         clearTileSelection();
@@ -2626,7 +2653,7 @@
   const SFX_KEY = 'kd.sfx';
   let sfxCtx = null; // 懒初始化 AudioContext（首次用户交互后才可发声）
   function readSfxOn() {
-    const v = localStorage.getItem(SFX_KEY);
+    const v = store.getItem(SFX_KEY);
     return v !== 'off'; // 未设置或非 off 一律视为开
   }
   let sfxOn = readSfxOn();
@@ -2675,7 +2702,7 @@
   // 音效开关：仅切换标记，AudioContext 懒创建（避免自动播放策略拦截）
   function setSfxOn(on) {
     sfxOn = !!on;
-    localStorage.setItem(SFX_KEY, sfxOn ? 'on' : 'off');
+    store.setItem(SFX_KEY, sfxOn ? 'on' : 'off');
     updateSfxBtn();
   }
   function updateSfxBtn() {
@@ -2694,7 +2721,7 @@
       const name = $('#nick-input').value.trim();
       if (!name) { toast('请输入昵称', true); return; }
       state.name = name;
-      localStorage.setItem('kd.name', name);
+      store.setItem('kd.name', name);
       // 已登录则带 token 关联账户（昵称会被账户 displayName 覆盖）；游客不带
       send({ type: 'join_lobby', name, token: state.token || undefined });
     };
