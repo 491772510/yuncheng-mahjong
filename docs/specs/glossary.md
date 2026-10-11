@@ -57,7 +57,7 @@
 | **亮金** | 摸牌后、出牌前的**独立操作**：把手中 1 张金牌亮到面前亮金区（不入弃牌堆），从牌墙尾部补 1 张，手牌数不变、不轮转；未亮金者只能自摸、不能点炮。 | ✅ **已实现**：`_liangjin` `src/game.js:3208`；点炮资格 `_tieJinCanDianpao` `:3192`；金牌不可普通打出（`_chooseTieJinDiscard` `:3334` 过滤） |
 | **首金必须亮出**（原「第一张金必须上」） | 手中握有金牌、而本局**一张都未亮出**时，亮金是**唯一可选操作**：不能出牌 / 碰 / 杠 / 自摸胡，必须先亮出首金才恢复其他操作。未亮金也就没有点炮资格。 | ✅ **已实现**：手牌事实判定 `rules.isFirstGoldUnplayed` `src/rules.js`；动作限制 `_tieJinMustLiangjin` `src/game.js`＝「手握首金未亮」且「亮金可行（牌墙未到流局阈值）」。拦截出牌 `_playTile` / 自摸 `_hu` / 杠 `_gang` / 碰杠响应 `_afterDiscard` 响应人筛选，`_doPeng`、`_doAnGang`、`_doBuGang` 双保险；提示层 `_buildDrawPromptTieJin` 只下发 `actions:['liangjin']` + `needLiangjin`。**牌墙已尽（亮金无法补牌）时一律放行**，避免玩家被永久锁死 |
 | **七小对 / 豪华七小对** | 贴金的特殊牌型：14 张凑成 7 个对子；含 4 张同牌为豪华七小对。**金牌可当万能凑对**（1 张金补 1 个单张成对、2 张金自成一对）。加番 ×2 / ×4，**只放大胡牌分，金分不翻**。 | ✅ **已实现**：`rules.isQiDuiTieJin` / `isLuxuryQiDuiTieJin` / `tiejinShapeMult` `src/rules.js`；已并入 `checkHuTieJin`；仅无明牌区成立 |
-| **包胡** | 牌墙剩**最后 4 张**及以内时的点炮，由**放炮者独赔三家**（另两家不出分）；自摸不触发。牌桌在进入该阶段时会提前红条提示。 | ✅ **已实现**：判定 `_tieJinIsBaoHu` `src/game.js`（`wall.length - wallPos <= 4 且非自摸`）；阶段提示 `_tieJinInBaoHuZone` → view `baoHuZone`；结算标记 `winners.baoHu` |
+| **包胡** | 牌墙剩**最后 4 张**及以内时的点炮/抢杠，由**放炮者（被抢杠者）独赔三家**（另两家不出分）；抢杠胡算点炮，同样触发；仅自摸不触发。牌桌在进入该阶段时会提前红条提示。 | ✅ **已实现**：判定 `_tieJinIsBaoHu` `src/game.js`（`wall.length - wallPos <= 4 且非自摸`）；阶段提示 `_tieJinInBaoHuZone` → view `baoHuZone`；结算标记 `winners.baoHu` |
 | **锁金** | 某玩家累计亮金达 2 张时自动锁定**其他三家**（本家不受锁），被锁者只能自摸；被锁者累计亮金达 2 张即解锁/免疫。 | ✅ **已实现**：触发 `:3241`、解锁 `:3233-3235`。⚠️ 与 `2026-10-01` 设计文档"亮出最后一张金牌解锁"的表述不一致，**以代码为准** |
 
 ## 5. 系统 / 对局机制

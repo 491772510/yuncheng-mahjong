@@ -1703,7 +1703,7 @@ class GameServer {
     // 牌型加番（只放胡牌分/基础份，金分不变）：七小对 ×2、豪华七小对 ×4
     const winHand = info.winType === 'zimo' ? g.hands[winnerSeat].slice() : [...g.hands[winnerSeat], info.tile];
     const shape = rules.tiejinShapeMult(winHand, g.melds[winnerSeat], g.goldTile);
-    // 包胡：牌墙剩最后 4 张时点炮 → 放炮者独赔三家（自摸/抢杠不触发）
+    // 包胡：牌墙剩最后 4 张时点炮/抢杠 → 放炮者（被抢杠者）独赔三家（仅自摸不触发）
     const baoHu = this._tieJinIsBaoHu(room, info);
     const res =
       mode === 'B'
@@ -3511,7 +3511,7 @@ class GameServer {
     return !this._tieJinWallEnded(room, g);
   }
 
-  /** 包胡触发判定：牌墙剩「最后 4 张」及以内时点炮 → 放炮者独赔三家（自摸不触发；抢杠算包胡由点炮路径覆盖）。
+  /** 包胡触发判定：牌墙剩「最后 4 张」及以内时点炮/抢杠 → 放炮者（被抢杠者）独赔三家（抢杠胡算点炮，同样触发；仅自摸不触发）。
    *  注意「剩余」= wall.length - wallPos（流局阈值同口径）。 */
   _tieJinIsBaoHu(room, info) {
     if (!this._isTieJin(room) || !info || info.winType === 'zimo') return false;
