@@ -912,7 +912,7 @@ function countGold(hand, gold) {
  *  金牌可补顺子前/中/后位、补刻子、补将（复用 _tryPairAsEyeWithWild 拆牌）；
  *  另支持七小对 / 豪华七小对（金牌可当万能凑对，见 isQiDuiTieJin）；
  *  明牌区（碰/杠）为真实牌成型面子，金牌不可参与碰/杠（流程保证，此处双保险）；
- *  七对必须先「上金」（第一张金必须上）方可胡，判定由 game.js 的 _tieJinHasUnplayedGold 拦截。 */
+ *  手握首金未亮时必须先亮金方可胡，判定由 game.js 的 _tieJinMustLiangjin 拦截。 */
 function checkHuTieJin(hand, melds, gold) {
   if (!Array.isArray(hand)) return false;
   if (!gold) return checkHu(hand, melds);
@@ -943,18 +943,21 @@ function canHuTieJinWith(hand, tile, melds, gold) {
   return checkHuTieJin([...hand, tile], melds, gold);
 }
 
-/** 「第一张金必须上」：手中握有金牌、而本局一张都未亮出（未上金）时不得胡牌。
- *  仅要求「手中持有的金」已上架——已亮出的金自然不在手牌中；
- *  上金 0 张且手中无金（牌墙金母/已弃金牌等）：不构成违规，正常允许胡牌。
- *  注意：即使胡牌型未用到金牌作万能补位，只要手握金未上，同样不能胡。
+/** 「首金未亮」判定：手中握有金牌、而本局个人一张都未亮出。
+ *  仅要求「手中持有的金」已亮出——已亮出的金自然不在手牌中；
+ *  上金 0 张且手中无金（牌墙金母/已弃金牌等）：返回 false，不受任何限制。
+ *  注意：即使胡牌型未用到金牌作万能补位，只要手握金未亮，同样返回 true。
+ *  说明：本函数只回答「手牌里有没有没亮出来的金」这一事实问题，不决定能做什么动作；
+ *  「首金未亮时只能亮金、不能出牌/碰/杠/胡」的动作限制在 src/game.js `_tieJinMustLiangjin`，
+ *  且当牌墙已尽、亮金不可行时会放行所有操作以避免锁死。
  * @param {string[]} hand 当前手牌
  * @param {string|null} gold 本局金牌
- * @param {number} shangjinCount 本家本局累计亮金（上金）张数
- * @returns {boolean} true 表示存在「有金未上」违规，禁止胡牌
+ * @param {number} shangjinCount 本家本局累计亮金（亮出）张数
+ * @returns {boolean} true 表示手握首金尚未亮出
  */
 function isFirstGoldUnplayed(hand, gold, shangjinCount) {
   if (!gold) return false;
-  if ((shangjinCount || 0) > 0) return false; // 已上过金（含消耗型上金后手牌无金），不限制
+  if ((shangjinCount || 0) > 0) return false; // 已亮过金（含消耗型亮金后手牌无金），不限制
   return countGold(hand, gold) > 0;
 }
 

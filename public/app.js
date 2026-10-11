@@ -961,7 +961,11 @@
     const tH = game.tingHints ? game.tingHints[t] : undefined;
     const ting = tH === undefined ? 0 : tH;
     // 报听选牌阶段：仅进入提示列表（含 ≥6 点听口）的选项可点击，未进入置灰；绝听（tH===0）仍可报听
-    const canDiscard = state.tingPick ? tH !== undefined : true;
+    // 首金必须亮出：服务端下发 canPlay:false，此时亮金是唯一操作，手牌置为不可点
+    // （前端只是视觉禁用，真正拦截以服务端 _playTile 为准）
+    const pr = state.prompt;
+    const forcedNoPlay = !!(pr && pr.type === 'draw' && pr.canPlay === false);
+    const canDiscard = state.tingPick ? tH !== undefined : !forcedNoPlay;
     // 新摸牌标志：仅加低亮边框（样式见 .tile.new-tile），置右 + 空格占位展示见 renderSelfHand；
     // 服务端出牌后清除 newTile，自动回原位
     const isNew = game.newTile === t && p.hand.indexOf(t) === i;
@@ -1262,13 +1266,13 @@
       if (p.actions && p.actions.includes('pass')) btns += `<button class="act act-pass" data-act="pass">过</button>`;
       if (p.gangOptions && p.gangOptions.length) btns += `<button class="act act-gang" data-act="gang">杠</button>`;
       if (p.actions && p.actions.includes('liangjin')) {
-        // 「第一张金必须上」：有金未上时不能胡，亮金为首要操作 → 按钮加强制样式并写入操作说明
+        // 「首金必须亮出」：手握首金未亮时亮金是唯一可选操作 → 按钮加强制样式并写入操作说明
         const force = p.needLiangjin ? ' act-gold-forced' : '';
         btns += `<button class="act act-gold${force}" data-act="liangjin">亮金${p.needLiangjin ? '（必须）' : ''}</button>`;
-        if (p.needLiangjin) guideText = '第一张金必须上：请先点亮金，否则本局不能胡牌';
+        if (p.needLiangjin) guideText = '首金必须亮出：点亮金后才能出牌/碰/杠/胡';
       }
       if (p.canDeclareTing && !state.tingPick) btns += `<button class="act act-ting" data-act="ting">报听</button>`;
-      // 提示优先级：报听选牌 > 第一张金必须上 > 常规出牌引导
+      // 提示优先级：报听选牌 > 首金必须亮出 > 常规出牌引导
       if (state.tingPick) {
         btns += `<button class="act act-pass" data-act="ting-cancel">取消</button>`;
         guideText = '点击要扣的牌选中，再次点击报听';
@@ -2325,7 +2329,7 @@
   function initCreateModal() {
     const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：计分模型可选乘算（点数×牌型倍数）或加算（底分+固定加番，清一色/一条龙/七小对+20、豪七额外+40）；庄底默认关闭（开启后仅庄家胡牌单边加分：非自摸+5/自摸+10，输家不额外扣分；闲家胡无庄底）；报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
     const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；只能自摸或抢杠胡，不能点炮；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
-    const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），金牌亮出为「亮金」独立操作（摸牌后、出牌前亮出金牌摆面前、牌尾补一张、手牌数不变），金牌不可当普通牌打出；第一张金必须上（手握金牌未亮出则本局不能胡牌，亮金后方可胡）；亮金一次才有点炮胡资格，亮金区独立展示，三金封顶；连续亮金两张自动锁金（锁定其他三家只能自摸，被锁者累计上金两张解锁）；可碰可杠不可吃，无报听；牌型支持七小对×2、豪华七小对×4（金牌可当万能凑对，加番只放胡牌分不翻金分）；包胡：牌墙剩最后 4 张时点炮，放炮者独赔三家；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
+    const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），金牌亮出为「亮金」独立操作（摸牌后、出牌前亮出金牌摆面前、牌尾补一张、手牌数不变），金牌不可当普通牌打出；首金必须亮出（手握首金未亮时，本回合只能亮金，亮金前不能出牌/碰/杠/胡；牌墙已尽无法亮金时不受此限）；亮金一次才有点炮胡资格，亮金区独立展示，三金封顶；连续亮金两张自动锁金（锁定其他三家只能自摸，被锁者累计上金两张解锁）；可碰可杠不可吃，无报听；牌型支持七小对×2、豪华七小对×4（金牌可当万能凑对，加番只放胡牌分不翻金分）；包胡：牌墙剩最后 4 张时点炮，放炮者独赔三家；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
     buildSeg('seg-variant', ['koudian', 'hongzhong', 'tiejin'], (v) => (v === 'hongzhong' ? '红中麻将' : v === 'tiejin' ? '贴金麻将' : '扣点点'), (v) => {
       const hz = v === 'hongzhong';
       const tj = v === 'tiejin';

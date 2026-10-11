@@ -188,26 +188,26 @@ test('calcTieJinScoreB 七对加番 ×2：基础份的胡庄部分翻倍，金�
   assert.equal(qd.G, base.G, '金分不受加番影响');
 });
 
-// ============ 第一张金必须上（有金未上不能胡） ============
+// ============ 首金未亮判定 isFirstGoldUnplayed（动作限制见 game.js _tieJinMustLiangjin） ============
 
-test('isFirstGoldUnplayed：手握金牌且一张未上 → 违规禁止胡', () => {
-  // 手牌含 1 张金牌 w5、上金 0 张 → 违规
+test('isFirstGoldUnplayed：手握金牌且一张未亮 → true', () => {
+  // 手牌含 1 张金牌 w5、亮金 0 张 → true
   assert.equal(rules.isFirstGoldUnplayed(['w1', 'w2', 'w3', 'w5'], 'w5', 0), true);
-  // 手中无金 → 不违规（牌墙金母/已弃金牌等情形）
+  // 手中无金 → false（牌墙金母/已弃金牌等情形）
   assert.equal(rules.isFirstGoldUnplayed(['w1', 'w2', 'w3'], 'w5', 0), false);
-  // 已上过金（手牌已无金）→ 不违规
+  // 已亮过金（手牌已无金）→ false
   assert.equal(rules.isFirstGoldUnplayed(['w1', 'w2', 'w3'], 'w5', 1), false);
-  // 已上过金但后期又摸入金牌：允许（首金条件已满足），但要走亮金才能拿点炮资格
+  // 已亮过金但后期又摸入金牌：false（首金条件已满足），但要走亮金才能拿点炮资格
   assert.equal(rules.isFirstGoldUnplayed(['w1', 'w2', 'w3', 'w5'], 'w5', 1), false);
-  // 无金牌局 → 不违规
+  // 无金牌局 → false
   assert.equal(rules.isFirstGoldUnplayed(['w1', 'w5'], null, 0), false);
-  // 上金数为 undefined/null 视为 0
+  // 亮金数为 undefined/null 视为 0
   assert.equal(rules.isFirstGoldUnplayed(['w5'], 'w5', undefined), true);
   assert.equal(rules.isFirstGoldUnplayed(['w5'], 'w5', null), true);
-  // 即使牌型未用到金牌作万能补位，手握金未上同样禁止
+  // 即使牌型未用到金牌作万能补位，手握金未亮同样为 true（须先亮金方可胡）
   const hand = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'w5'];
   assert.equal(rules.checkHuTieJin(hand, [], 'w5'), true, '牌型本身可胡');
-  assert.equal(rules.isFirstGoldUnplayed(hand, 'w5', 0), true, '但手握金未上 → 禁止胡');
+  assert.equal(rules.isFirstGoldUnplayed(hand, 'w5', 0), true, '但手握金未亮 → 须先亮金');
 });
 
 // ============ 金牌不可碰/杠 ============

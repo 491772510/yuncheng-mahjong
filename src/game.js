@@ -1190,6 +1190,8 @@ class GameServer {
       for (let i = 1; i <= 3; i++) {
         const s = (discarder + i) % 4;
         if (!room.players[s]) continue;
+        // 首金未亮且亮金可行：只能亮金（亮金需要出牌权），本轮不提供碰/杠/胡响应
+        if (this._tieJinMustLiangjin(room, s)) continue;
         if (s === huSeat) {
           responders.push({ seat: s, canHu: true, canGang: false, canPeng: false, choice: null });
           continue;
@@ -1319,6 +1321,8 @@ class GameServer {
 
   _doPeng(room, seat, tile, discarder) {
     const g = room.game;
+    // 贴金双保险：首金未亮且亮金可行时只能亮金，不允许碰
+    if (this._isTieJin(room) && this._tieJinMustLiangjin(room, seat)) return;
     const hand = g.hands[seat];
     let removed = 0;
     for (let i = 0; i < hand.length && removed < 2; i++) {
@@ -1498,8 +1502,9 @@ class GameServer {
   /** 暗杠：普通玩法延迟统一结算；红中杠牌当场结（其余每家付 2 手）；贴金杠牌当场结（其余每家付 2 分，金牌不可杠） */
   _doAnGang(room, seat, tile) {
     const g = room.game;
-    // 贴金双保险（金牌不可杠）
+    // 贴金双保险（金牌不可杠 + 首金未亮时只能亮金）
     if (this._isTieJin(room) && !rules.canAnGangTieJin(g.hands[seat], tile, g.goldTile)) return;
+    if (this._isTieJin(room) && this._tieJinMustLiangjin(room, seat)) return;
     const hand = g.hands[seat];
     let removed = 0;
     for (let i = 0; i < hand.length && removed < 4; i++) {
@@ -1552,8 +1557,9 @@ class GameServer {
   /** 补杠：普通玩法延迟统一结算；红中杠牌当场结（其余每家付 1 手）；贴金杠牌当场结（其余每家付 1 分）。抢杠判定：普通/红中多响，贴金截胡单响 */
   _doBuGang(room, seat, tile) {
     const g = room.game;
-    // 贴金双保险（金牌不可杠）
+    // 贴金双保险（金牌不可杠 + 首金未亮时只能亮金）
     if (this._isTieJin(room) && !rules.canBuGangTieJin(g.hands[seat], g.melds[seat], tile, g.goldTile)) return;
+    if (this._isTieJin(room) && this._tieJinMustLiangjin(room, seat)) return;
     // 先检查抢杠胡（玩法判定各异）
     const grabbers = [];
     let resolveFn = null;
@@ -2292,14 +2298,14 @@ class GameServer {
     const hand = g.hands[p.seat];
     const idx = hand.indexOf(tile);
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
+    // 贴金：首金未亮且亮金可行 → 亮金是唯一合法操作，任何牌都不能出（必须先亮出首金）
+    if (this._isTieJin(room) && this._tieJinMustLiangjin(room, p.seat)) {
+      return this._err(p, '首金必须亮出：请先执行「亮金」，亮金前不能出牌/碰/杠/胡');
+    }
     // 贴金：金牌不能作为普通出牌打出，只能通过「亮金」独立操作处理（或保留在手中）
     if (this._isTieJin(room) && tile === g.goldTile) {
-      // 第一张金必须上：本家一张未上且这是手中最后一枚金牌时，不得靠弃牌甩掉首金（必须先亮金）
-      if (this._tieJinHasUnplayedGold(room, p.seat) && !hand.some((t) => t !== g.goldTile)) {
-        return this._err(p, '第一张金必须上：请先亮出手中的金牌');
-      }
       // P2 修复：当手牌除金牌外已无其他可打牌时，放行金牌作为强制出牌（与红中"只剩红中则打出"行为对齐），
-      // 避免 AI/真人全金牌手牌且亮金走不通时整局永久卡死
+      // 避免 AI/真人全金牌手牌且亮金走不通（牌墙已尽等）时整局永久卡死
       const hasOther = hand.some((t) => t !== g.goldTile);
       if (hasOther) {
         return this._err(p, '金牌不能作为普通出牌打出，请通过亮金操作处理');
@@ -2457,6 +2463,10 @@ class GameServer {
       const gangType = msg && msg.gangType === 'bugang' ? 'bugang' : 'angang';
       // 运城贴金麻将：杠不即时结算杠分，走贴金杠流程（暗杠不可抢、补杠触发抢杠）
       if (this._isTieJin(room)) {
+        // 首金未亮且亮金可行：亮金是唯一操作，不能杠（牌墙已尽时放行）
+        if (this._tieJinMustLiangjin(room, p.seat)) {
+          return this._err(p, '首金必须亮出：请先执行「亮金」，亮金前不能杠');
+        }
         if (gangType === 'angang') {
           if (!rules.canAnGangTieJin(g.hands[p.seat], tile, g.goldTile)) return this._err(p, '不能暗杠');
           this._doAnGang(room, p.seat, tile);
@@ -2518,9 +2528,9 @@ class GameServer {
         if (!rules.checkHuTieJin(g.hands[p.seat], g.melds[p.seat], g.goldTile)) {
           return this._err(p, '手牌不构成胡牌');
         }
-        // 第一张金必须上：手中握有金牌却一张未亮，本局不能胡
-        if (this._tieJinHasUnplayedGold(room, p.seat)) {
-          return this._err(p, '第一张金必须上：请先亮出手中的金牌，有金未上不能胡牌');
+        // 首金未亮且亮金可行：亮金是唯一操作，此时不能自摸胡（牌墙已尽时放行）
+        if (this._tieJinMustLiangjin(room, p.seat)) {
+          return this._err(p, '首金必须亮出：请先执行「亮金」，亮金前不能胡牌');
         }
         this._settleHu(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
         this._finishHuRound(room);
@@ -2946,8 +2956,8 @@ class GameServer {
       locked: g.locked ? g.locked.slice() : null,
       lockSeat: g.lockSeat != null ? g.lockSeat : -1,
       canLiangjin: isDrawTurn && !!g.goldTile && rules.countGold(g.hands[viewerSeat], g.goldTile) > 0 && !this._tieJinWallEnded(room, g),
-      // 第一张金必须上：手中有金且一张未亮 → 前端亮金按钮做强制提示
-      needLiangjin: isDrawTurn && this._tieJinHasUnplayedGold(room, viewerSeat),
+      // 首金必须亮出：有金未亮且亮金可行 → 前端亮金按钮做强制提示（唯一可选操作）
+      needLiangjin: isDrawTurn && this._tieJinMustLiangjin(room, viewerSeat),
       // 包胡阶段提示：牌墙剩最后 4 张，此时点炮由放炮者独赔三家
       baoHuZone: this._tieJinInBaoHuZone(room),
       wallRemain: g.wall.length - g.wallPos,
@@ -3478,13 +3488,24 @@ class GameServer {
     return true;
   }
 
-  /** 「第一张金必须上」违规判定：手中握有金牌却一张未亮 → 本局不得胡牌（自摸/点炮/抢杠通吃）。
-   *  未上金者本就无点炮资格，此判定主要拦住「手握第一张金硬要自摸」的路径。
+  /** 「首金未亮」判定：手中握有金牌、而本局个人一张都未亮出。
+   *  仅描述手牌事实，不含可用动作语义；动作层面的限制见 _tieJinMustLiangjin。
    *  杠后补牌后手牌可能暂时 >14 张，此处只看手牌中是否仍有金牌，与张数无关。 */
   _tieJinHasUnplayedGold(room, seat) {
     const g = room.game;
     if (!this._isTieJin(room) || !g || !g.goldTile) return false;
     return rules.isFirstGoldUnplayed(g.hands[seat], g.goldTile, (g.shangjinCount || [])[seat] || 0);
+  }
+
+  /** 首金强制亮金：「手握首金未亮」且「亮金可行（牌墙未到流局阈值）」→ 亮金是本回合唯一合法操作，
+   *  出牌 / 碰 / 杠 / 自摸胡一律禁止，必须先把首金亮出才能做其他操作。
+   *  牌墙已尽时亮金本身不可行（亮金要从牌尾补牌），此时返回 false —— 放行所有操作，
+   *  避免玩家既不能亮金又不能出牌而整局锁死。 */
+  _tieJinMustLiangjin(room, seat) {
+    if (!this._tieJinHasUnplayedGold(room, seat)) return false;
+    const g = room.game;
+    if (!g) return false;
+    return !this._tieJinWallEnded(room, g);
   }
 
   /** 包胡触发判定：牌墙剩「最后 4 张」及以内时点炮 → 放炮者独赔三家（自摸不触发；抢杠算包胡由点炮路径覆盖）。
@@ -3557,18 +3578,32 @@ class GameServer {
 
 
   /** 贴金行牌提示：出牌/自摸胡/杠/亮金（无报听、禁吃；锁金为自动规则）
-   *  「第一张金必须上」：手中有金未上时不给胡、且亮金为唯一出路（除亮金外只剩出牌），
-   *  前端据此把亮金按钮做成强制提示（needLiangjin）。 */
+   *  「首金必须亮出」：手握首金却一张未亮且亮金可行时，亮金是唯一合法操作 ——
+   *  提示里只给亮金（actions=['liangjin']、canHu=false、无 gangOptions），前端据 needLiangjin 强制引导。 */
   _buildDrawPromptTieJin(room, seat) {
     const g = room.game;
     const hand = g.hands[seat];
     const actions = ['play'];
     const gangOptions = [];
+    // 首金强制亮金：亮金是本回合唯一可选操作（牌墙已尽无法亮金时不进入此分支）
+    if (this._tieJinMustLiangjin(room, seat)) {
+      return {
+        type: 'draw',
+        actions: ['liangjin'],
+        gangOptions: [],
+        canHu: false,
+        canPlay: false, // 前端据此把手牌置为不可点（服务端 _playTile 同样拒绝）
+        canLiangjin: true,
+        needLiangjin: true,
+        canDeclareTing: false,
+        timeoutMs: HUMAN_TIMEOUT_MS,
+      };
+    }
     // 碰后（未摸牌）：手牌结构不允许胡/杠，但持有金牌且牌墙未结束仍可亮金
     if (g.lastAction && g.lastAction.type === 'peng') {
       const goldCountAfterPeng = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
       const canLiangjinAfterPeng = goldCountAfterPeng > 0 && !this._tieJinWallEnded(room, g);
-      const needLiangjinAfterPeng = canLiangjinAfterPeng && this._tieJinHasUnplayedGold(room, seat);
+      const needLiangjinAfterPeng = this._tieJinMustLiangjin(room, seat); // 上方已提前返回，此处恒为 false
       if (canLiangjinAfterPeng) actions.push('liangjin');
       return {
         type: 'draw',
@@ -3581,8 +3616,9 @@ class GameServer {
         timeoutMs: HUMAN_TIMEOUT_MS,
       };
     }
-    // 第一张金必须上：有金未上时本局不能胡（自摸亦不可）
-    const needLiangjin = this._tieJinHasUnplayedGold(room, seat);
+    // 首金必须亮出：有金未亮且亮金可行时已在上方提前返回；走到这里要么已亮过金，
+    // 要么牌墙已尽（亮金不可行）→ 放行出牌/杠/胡，与 _playTile/_hu 的放行口径一致
+    const needLiangjin = this._tieJinMustLiangjin(room, seat);
     const canSelfHu = !needLiangjin && rules.checkHuTieJin(hand, g.melds[seat], g.goldTile);
     if (canSelfHu) actions.push('hu');
     const cnt = rules.countTiles(hand);
@@ -3614,7 +3650,7 @@ class GameServer {
   // ---- 贴金 AI 决策（简易策略：胡/杠优先，亮金按收益判断：够 1 张就停，出牌保留金牌） ----
 
   // 亮金收益判断：跳过零收益分支，够 1 张就停（返回 true 才亮金）
-  // 例外：「第一张金必须上」——本家一张未上且手握金牌时无条件亮金（否则不能胡牌）
+  // 例外：「首金必须亮出」——本家一张未亮且手握金牌时无条件亮金（否则本回合不能出牌/碰/杠/胡）
   _shouldLiangjinTieJin(g, room, seat) {
     const gold = g.goldTile;
     if (!gold) return false;
@@ -3622,7 +3658,7 @@ class GameServer {
     if (inHand <= 0) return false;
     if (this._tieJinWallEnded(room, g)) return false;
     const done = (g.shangjinCount || [])[seat] || 0;
-    if (done === 0) return true;                                      // 第一张金必须上：唯一出路，无条件亮
+    if (done === 0) return true;                                      // 首金必须亮出：唯一可选操作，无条件亮
     if (done >= 3) return false;                                      // 三金封顶，第 4 张零增益
     if (g.locked && g.locked[seat] && done + inHand < 2) return false; // 亮完累计仍 < 2，拿不到点炮资格
     if (done >= 1 && inHand < 2) return false;                        // 够 1 张就停：保留最后一枚万能牌
@@ -3631,7 +3667,7 @@ class GameServer {
 
   _decideTieJinDrawAction(g, room, seat) {
     const hand = g.hands[seat];
-    // 第一张金必须上：有金未上属最高优先级（此时既不能胡，也谈不上保留万能牌）
+    // 首金必须亮出：有金未亮属最高优先级（此时出牌/杠/胡都不允许，也谈不上保留万能牌）
     if (this._shouldLiangjinTieJin(g, room, seat)) {
       return { type: 'liangjin' };
     }
