@@ -1691,10 +1691,15 @@ class GameServer {
     const goldCount = Math.min(g.shangjinCount[winnerSeat] || 0, 3); // 三金封顶
     const winnerDealer = winnerSeat === g.dealer;
     const mode = room.settings && room.settings.scoreMode === 'B' ? 'B' : 'A';
+    // 牌型加番（只放胡牌分/基础份，金分不变）：七小对 ×2、豪华七小对 ×4
+    const winHand = info.winType === 'zimo' ? g.hands[winnerSeat].slice() : [...g.hands[winnerSeat], info.tile];
+    const shape = rules.tiejinShapeMult(winHand, g.melds[winnerSeat], g.goldTile);
+    // 包胡：牌墙剩最后 4 张时点炮 → 放炮者独赔三家（自摸/抢杠不触发）
+    const baoHu = this._tieJinIsBaoHu(room, info);
     const res =
       mode === 'B'
-        ? rules.calcTieJinScoreB({ winType: info.winType, winnerDealer, goldCount })
-        : rules.calcTieJinScoreA({ winType: info.winType, winnerDealer, goldCount });
+        ? rules.calcTieJinScoreB({ winType: info.winType, winnerDealer, goldCount, fanMult: shape.mult })
+        : rules.calcTieJinScoreA({ winType: info.winType, winnerDealer, goldCount, fanMult: shape.mult });
     const isZimo = info.winType === 'zimo';
     const payerSeats = [];
     if (isZimo) {
@@ -1716,20 +1721,51 @@ class GameServer {
         if (s !== winnerSeat) payerSeats.push(s);
       }
     }
-    for (let i = 0; i < payerSeats.length; i++) {
-      const ps = payerSeats[i];
-      const amt = res.payers[i].amount;
-      if (room.players[ps]) {
-        room.players[ps].score -= amt;
-        room.players[ps].roundScore -= amt;
+    let payments;
+    let winnerGainTotal;
+    if (baoHu) {
+      // 包胡：放炮者一人承担三家应付总额（其余两家不出分）
+      winnerGainTotal = res.winnerGain;
+      const loser = room.players[info.discarder];
+      if (loser) {
+        loser.score -= winnerGainTotal;
+        loser.roundScore -= winnerGainTotal;
       }
+      room.players[winnerSeat].score += winnerGainTotal;
+      room.players[winnerSeat].roundScore += winnerGainTotal;
+      payments = [{
+        from: info.discarder,
+        to: winnerSeat,
+        amount: winnerGainTotal,
+        formula: res.payers.map((p) => p.formula).join(' + ') + ` = ${winnerGainTotal}（包三家）`,
+        role: info.winType === 'qianggang' ? '被抢杠者（包三家）' : '放炮者（包三家）',
+      }];
+    } else {
+      winnerGainTotal = res.winnerGain;
+      for (let i = 0; i < payerSeats.length; i++) {
+        const ps = payerSeats[i];
+        const amt = res.payers[i].amount;
+        if (room.players[ps]) {
+          room.players[ps].score -= amt;
+          room.players[ps].roundScore -= amt;
+        }
+      }
+      room.players[winnerSeat].score += res.winnerGain;
+      room.players[winnerSeat].roundScore += res.winnerGain;
+      payments = payerSeats.map((ps, i) => ({
+        from: ps,
+        to: winnerSeat,
+        amount: res.payers[i].amount,
+        formula: res.payers[i].formula,
+        role: res.payers[i].role,
+      }));
     }
-    room.players[winnerSeat].score += res.winnerGain;
-    room.players[winnerSeat].roundScore += res.winnerGain;
     const winLabel = isZimo ? '自摸' : info.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
+    const shapeLabel = shape.names.length ? `，${shape.names.join('、')}×${shape.mult}` : '';
+    const baoLabel = baoHu ? '，包胡（牌墙剩最后4张放炮者包三家）' : '';
     this._log(
       room,
-      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${mode === 'B' ? '125' : '边趣'}计分，亮金 ${goldCount} 张，金分 ${res.G}）→ +${res.winnerGain} 分`
+      `${this._pName(room, winnerSeat)} ${winLabel} ${rules.tileName(info.tile)}（${mode === 'B' ? '125' : '边趣'}计分，亮金 ${goldCount} 张，金分 ${res.G}${shapeLabel}${baoLabel}）→ +${winnerGainTotal} 分`
     );
     g.winners = {
       type: 'hu',
@@ -1744,15 +1780,12 @@ class GameServer {
       goldCount,
       goldScore: res.G,
       huGain: res.huGain || 0,
-      winnerGain: res.winnerGain,
+      winnerGain: winnerGainTotal,
       scoreMode: mode,
-      payments: payerSeats.map((ps, i) => ({
-        from: ps,
-        to: winnerSeat,
-        amount: res.payers[i].amount,
-        formula: res.payers[i].formula,
-        role: res.payers[i].role,
-      })),
+      shapeMult: shape.mult,
+      shapeNames: shape.names,
+      baoHu,
+      payments,
       shangjinCount: g.shangjinCount.slice(),
       locked: g.locked.slice(),
       lockSeat: g.lockSeat,
@@ -2915,6 +2948,9 @@ class GameServer {
       canLiangjin: isDrawTurn && !!g.goldTile && rules.countGold(g.hands[viewerSeat], g.goldTile) > 0 && !this._tieJinWallEnded(room, g),
       // 第一张金必须上：手中有金且一张未亮 → 前端亮金按钮做强制提示
       needLiangjin: isDrawTurn && this._tieJinHasUnplayedGold(room, viewerSeat),
+      // 包胡阶段提示：牌墙剩最后 4 张，此时点炮由放炮者独赔三家
+      baoHuZone: this._tieJinInBaoHuZone(room),
+      wallRemain: g.wall.length - g.wallPos,
       logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
     if (isDrawTurn && !this._isHongZhong(room) && !this._isTieJin(room) && !g.tingSeats.includes(viewerSeat)) {
@@ -3449,6 +3485,23 @@ class GameServer {
     const g = room.game;
     if (!this._isTieJin(room) || !g || !g.goldTile) return false;
     return rules.isFirstGoldUnplayed(g.hands[seat], g.goldTile, (g.shangjinCount || [])[seat] || 0);
+  }
+
+  /** 包胡触发判定：牌墙剩「最后 4 张」及以内时点炮 → 放炮者独赔三家（自摸不触发；抢杠算包胡由点炮路径覆盖）。
+   *  注意「剩余」= wall.length - wallPos（流局阈值同口径）。 */
+  _tieJinIsBaoHu(room, info) {
+    if (!this._isTieJin(room) || !info || info.winType === 'zimo') return false;
+    const g = room.game;
+    if (!g) return false;
+    return g.wall.length - g.wallPos <= 4;
+  }
+
+  /** 牌墙上是否已进入包胡阶段（剩最后 4 张）：用于牌桌阶段提示 */
+  _tieJinInBaoHuZone(room) {
+    if (!this._isTieJin(room)) return false;
+    const g = room.game;
+    if (!g || room.state !== 'playing' || g.winners) return false;
+    return g.wall.length - g.wallPos <= 4;
   }
 
 

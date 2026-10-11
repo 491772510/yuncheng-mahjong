@@ -910,8 +910,9 @@ function countGold(hand, gold) {
 
 /** 贴金胡牌判定（核心万能胡）：3+2 基本牌型（四副顺子/刻子 + 一对将），
  *  金牌可补顺子前/中/后位、补刻子、补将（复用 _tryPairAsEyeWithWild 拆牌）；
+ *  另支持七小对 / 豪华七小对（金牌可当万能凑对，见 isQiDuiTieJin）；
  *  明牌区（碰/杠）为真实牌成型面子，金牌不可参与碰/杠（流程保证，此处双保险）；
- *  仅支持平胡/碰碰胡（含金牌补刻/补将），不含七对等特殊牌型。 */
+ *  七对必须先「上金」（第一张金必须上）方可胡，判定由 game.js 的 _tieJinHasUnplayedGold 拦截。 */
 function checkHuTieJin(hand, melds, gold) {
   if (!Array.isArray(hand)) return false;
   if (!gold) return checkHu(hand, melds);
@@ -926,6 +927,8 @@ function checkHuTieJin(hand, melds, gold) {
     const c = countTiles(mm.tiles || []).get(mm.tile) || 0;
     if (c < 3) return false;
   }
+  // 七小对：须无明牌区（七对不可有碰/杠）
+  if (meldSets === 0 && hand.length === 14 && isQiDuiTieJin(hand, gold)) return true;
   const wild = countGold(hand, gold);
   const need = (4 - meldSets) * 3 + 2;
   if (hand.length !== need) return false;
@@ -953,6 +956,45 @@ function isFirstGoldUnplayed(hand, gold, shangjinCount) {
   if (!gold) return false;
   if ((shangjinCount || 0) > 0) return false; // 已上过金（含消耗型上金后手牌无金），不限制
   return countGold(hand, gold) > 0;
+}
+
+/** 贴金七小对（含金牌万能）：14 张手牌拆成 7 个对子，金牌可补任意单张凑对，
+ *  剩余金牌两两成对（与红中癞子七对同构）。仅无明牌区（melds 为空）时成立。
+ * @param {string[]} hand 14 张手牌
+ * @param {string|null} gold 本局金牌
+ */
+function isQiDuiTieJin(hand, gold) {
+  if (!Array.isArray(hand) || hand.length !== 14) return false;
+  if (!gold) return isQiDui(hand);
+  const wild = countGold(hand, gold);
+  const cnt = countTiles(hand);
+  cnt.delete(gold);
+  let need = 0;
+  for (const c of cnt.values()) need += c % 2; // 每种奇数张需 1 张金补成对
+  if (need > wild) return false;
+  return (wild - need) % 2 === 0; // 剩余金须两两成对
+}
+
+/** 贴金豪华七小对（含金牌万能）：七对成立，且存在「4 张相同真牌」，
+ *  或用金牌把某种牌补足 4 张后余下仍能成七对（与红中龙七对同构）。 */
+function isLuxuryQiDuiTieJin(hand, gold) {
+  if (!isQiDuiTieJin(hand, gold)) return false;
+  if (!gold) return isLuxuryQiDui(hand);
+  const wild = countGold(hand, gold);
+  const cnt = countTiles(hand);
+  cnt.delete(gold);
+  for (const [tile, c] of cnt) {
+    if (c >= 4) return true;
+    const useGold = 4 - c; // 用 useGold 张金把该牌补成 4 张
+    if (useGold > wild) continue;
+    const restWild = wild - useGold;
+    let need = 0;
+    for (const [t2, c2] of cnt) {
+      if (t2 !== tile) need += c2 % 2;
+    }
+    if (need <= restWild && (restWild - need) % 2 === 0) return true;
+  }
+  return false;
 }
 
 /** 贴金可碰：必须真实牌（金牌不可碰）且手牌同牌 ≥2 */
@@ -1014,17 +1056,36 @@ function tiejinGoldScoreB(goldCount) {
 }
 
 /**
+ * 贴金牌型（只加番，不改金分体系）：返回 { mult, names }。
+ *  - 七小对 ×2、豪华七小对 ×4（豪华覆盖普通，不叠加）；
+ *  - 其余（平胡/碰碰胡/万能胡）恒 ×1，加番只作用于「胡牌分 / 基础份」，金分 G 不受影响。
+ * @param {string[]} hand 胡牌时手牌（含胡牌张）
+ * @param {string[]} melds 明牌区
+ * @param {string|null} gold 本局金牌
+ */
+function tiejinShapeMult(hand, melds, gold) {
+  const m = (Array.isArray(melds) ? melds : []).filter((x) => x && typeof x === 'object' && x.tile);
+  if (m.length === 0 && Array.isArray(hand) && hand.length === 14) {
+    if (isLuxuryQiDuiTieJin(hand, gold)) return { mult: 4, names: ['豪华七小对'] };
+    if (isQiDuiTieJin(hand, gold)) return { mult: 2, names: ['七小对'] };
+  }
+  return { mult: 1, names: [] };
+}
+
+/**
  * 计分 A（边趣/大唐版）完整结算模型（支付明细由 game.js 按座位映射落地）：
  *  - 胡牌分 H：闲 1 / 庄 2（按赢家身份）；自摸每家付 2H；点炮三家各付 H（通赔）。
  *  - 金分 G：1金=1、2金=3、3金=9、4金+=27（27 封顶），金随胡走、胡后才计；
  *      自摸每家付 G；点炮三家各付 G，点炮者额外多一份（金分翻倍付 2G，通赔）。
+ *  - 牌型加番（可选）：七小对 ×2、豪华七小对 ×4，仅放大胡牌分 H，金分 G 不变。
  *  - 赢家得分 = 胡牌分收入 + 杠分（当场已结）+ 金分收入。
- * @param {object} info { winType:'zimo'|'dianpao'|'qianggang', winnerDealer:boolean, goldCount:number }
- * @returns {{ payers:[{amount,role,formula}], winnerGain, huGain, goldGain, H, G, isZimo }}
+ * @param {object} info { winType:'zimo'|'dianpao'|'qianggang', winnerDealer:boolean, goldCount:number, fanMult?:number }
+ * @returns {{ payers:[{amount,role,formula}], winnerGain, huGain, goldGain, H, G, isZimo, fanMult }}
  *   注意 payers 顺序：点炮/抢杠时第 0 项为放炮者（被抢者）。
  */
 function calcTieJinScoreA(info) {
-  const H = info.winnerDealer ? 2 : 1;
+  const fan = Math.max(1, info.fanMult || 1);
+  const H = (info.winnerDealer ? 2 : 1) * fan; // 牌型加番只放大胡牌分
   const G = tiejinGoldScoreA(info.goldCount);
   const isZimo = info.winType === 'zimo';
   const payers = [];
@@ -1035,7 +1096,7 @@ function calcTieJinScoreA(info) {
       payers.push({ amount, role: '自摸', formula: `2×${H}(胡)+${G}(金)=${amount}` });
       winnerGain += amount;
     }
-    return { payers, winnerGain, huGain: 6 * H, goldGain: 3 * G, H, G, isZimo: true };
+    return { payers, winnerGain, huGain: 6 * H, goldGain: 3 * G, H, G, isZimo: true, fanMult: fan };
   }
   // 点炮/抢杠：三家各付 H；金分三家各 G，点炮者额外多一份（2G）
   for (let i = 0; i < 3; i++) {
@@ -1048,7 +1109,7 @@ function calcTieJinScoreA(info) {
     });
     winnerGain += amount;
   }
-  return { payers, winnerGain, huGain: 3 * H, goldGain: 4 * G, H, G, isZimo: false };
+  return { payers, winnerGain, huGain: 3 * H, goldGain: 4 * G, H, G, isZimo: false, fanMult: fan };
 }
 
 /**
@@ -1059,13 +1120,15 @@ function calcTieJinScoreA(info) {
  *  - 庄家赢家：每家付 P+3（庄家身份×2 统一口径，1金时 7→10 与"庄家自摸共收 30"吻合）；
  *      点炮时点炮者再 +1 炮钱。
  *  - 杠分同 A（明杠每家 1、暗杠每家 2，当场结算，流局不计）。
- * @param {object} info { winType:'zimo'|'dianpao'|'qianggang', winnerDealer:boolean, goldCount:number }
- * @returns {{ payers:[{amount,role,formula}], winnerGain, G, base, dealerShare, isZimo, winnerIsDealer }}
+ *  - 牌型加番（可选）：七小对 ×2、豪华七小对 ×4，放大基础份 P 中的「胡1」与「庄1」，金分 G 不变。
+ * @param {object} info { winType:'zimo'|'dianpao'|'qianggang', winnerDealer:boolean, goldCount:number, fanMult?:number }
+ * @returns {{ payers:[{amount,role,formula}], winnerGain, G, base, dealerShare, isZimo, winnerIsDealer, fanMult }}
  *   注意 payers 顺序：点炮/抢杠时第 0 项为放炮者（被抢者）。
  */
 function calcTieJinScoreB(info) {
+  const fan = Math.max(1, info.fanMult || 1);
   const G = tiejinGoldScoreB(info.goldCount);
-  const base = 1 + 1 + G; // 胡1 + 庄1 + 金G
+  const base = (1 + 1) * fan + G; // 胡1 + 庄1（受牌型加番）+ 金G（不加番）
   const dealerShare = base + 3; // 庄家相关份（1金时 7→10）
   const isZimo = info.winType === 'zimo';
   const winnerIsDealer = !!info.winnerDealer;
@@ -1092,7 +1155,7 @@ function calcTieJinScoreB(info) {
     for (let i = 0; i < 2; i++) add(base, '闲家', `${base}`);
   }
   // 金分 = 三家各付一份金 G（庄家相关份含 G，点炮+1 不参与），故金分总额恒为 3G
-  return { payers, winnerGain, huGain: winnerGain - 3 * G, G, base, dealerShare, isZimo, winnerIsDealer };
+  return { payers, winnerGain, huGain: winnerGain - 3 * G, G, base, dealerShare, isZimo, winnerIsDealer, fanMult: fan };
 }
 
 module.exports = {
@@ -1159,6 +1222,9 @@ module.exports = {
   checkHuTieJin,
   canHuTieJinWith,
   isFirstGoldUnplayed,
+  isQiDuiTieJin,
+  isLuxuryQiDuiTieJin,
+  tiejinShapeMult,
   canPengTieJin,
   canGangTieJin,
   canAnGangTieJin,

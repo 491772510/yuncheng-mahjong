@@ -803,6 +803,15 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .act-gold-forced { animation: none; }
 }
+/* 包胡阶段提示：牌墙剩最后 4 张，点炮者独赔三家 */
+.bao-hu-tip { margin: 4px 0; padding: 4px 10px; font-size: 12px; font-weight: 700; color: #fff; background: linear-gradient(135deg,#c0392b,#96281b); border-radius: 8px; box-shadow: 0 1px 6px rgba(192,57,43,.45); animation: bao-hu-pulse 1.4s ease-in-out infinite; }
+@keyframes bao-hu-pulse {
+  0%, 100% { box-shadow: 0 1px 6px rgba(192,57,43,.45); }
+  50% { box-shadow: 0 1px 12px rgba(192,57,43,.85); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bao-hu-tip { animation: none; }
+}
 
 .settle-gang { margin: 8px 0; padding: 8px 10px; background: rgba(142,68,173,.08); border-radius: 8px; }
 .settle-gang .row { font-size: 13px; margin: 3px 0; color: #555; }

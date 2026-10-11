@@ -808,9 +808,14 @@
     const tjGold = game.goldMother && game.goldTile
       ? `<div class="gold-mother">金母 <b>${tileHtml(game.goldMother, 'small', 0, false, false, undefined, false, game.goldMother)}</b> · 金牌 <b>${tileHtml(game.goldTile, 'small', 0, false, false, undefined, false, game.goldTile)}</b></div>`
       : '';
+    // 包胡阶段提示：牌墙剩最后 4 张，此时点炮由放炮者独赔三家
+    const baoHuTip = game.baoHuZone
+      ? `<div class="bao-hu-tip">⚠️ 包胡阶段（牌墙剩 ${game.wallRemain} 张）：此时点炮由放炮者独赔三家，谨慎出牌</div>`
+      : '';
     const turnSt = turnTextState();
     html += `<div class="table-center">
       ${tjGold}
+      ${baoHuTip}
       <div class="wall-count">牌墙 <b>${game.wallCount}</b></div>
       <div class="turn-info${turnSt.mine ? ' my-turn' : ''}">${turnSt.text}</div>
       <div class="action-bar" id="action-bar"></div>
@@ -2031,6 +2036,13 @@
     const lockBlock = locked
       ? `<div class="settle-sub">锁金状态：${result.locked.map((v, s) => `${esc(nameOf(s))}${v ? '（锁）' : '（解）'}`).join(' ')}${result.lockSeat != null ? ' · 锁家：' + esc(nameOf(result.lockSeat)) : ''}</div>`
       : '';
+    // 牌型加番（七小对/豪华七小对）与包胡提示
+    const shapeBlock = result.shapeNames && result.shapeNames.length
+      ? `<div class="settle-sub">牌型：${esc(result.shapeNames.join('、'))}（加番 ×${result.shapeMult || 1}，仅放胡牌分，金分不翻）</div>`
+      : '';
+    const baoHuBlock = result.baoHu
+      ? `<div class="settle-sub" style="color:#c0392b;font-weight:600;">包胡：牌墙剩最后 4 张放炮，放炮者独赔三家</div>`
+      : '';
     const pays = result.payments || [];
     const payBlock = pays.length
       ? `<div class="settle-gang"><div class="settle-sub">支付明细（负数=付出，正数=收入）</div>
@@ -2062,14 +2074,16 @@
     const winLabel = result.winType === 'zimo' ? '自摸' : result.winType === 'qianggang' ? '抢杠胡' : '点炮胡';
     if (compact) {
       return `<div class="settle-head">
-        <div class="settle-sub">${prefix}${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)} · 亮金 ${result.goldCount || 0} 张 · 金分 ${result.goldScore || 0} → ${result.winnerGain >= 0 ? '+' : ''}${result.winnerGain} 分</div>
-      </div>${goldBlock}${shangjinBlock}${lockBlock}${payBlock}` + settleHands;
+        <div class="settle-sub">${prefix}${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)} · 亮金 ${result.goldCount || 0} 张 · 金分 ${result.goldScore || 0}${result.shapeNames && result.shapeNames.length ? ' · ' + esc(result.shapeNames.join('、')) + '×' + (result.shapeMult || 1) : ''}${result.baoHu ? ' · 包胡' : ''} → ${result.winnerGain >= 0 ? '+' : ''}${result.winnerGain} 分</div>
+      </div>${goldBlock}${shangjinBlock}${lockBlock}${shapeBlock}${baoHuBlock}${payBlock}` + settleHands;
     }
     return `
       <div class="settle-head">
         <div class="settle-big">${result.winnerGain >= 0 ? '+' : ''}${result.winnerGain}</div>
         <div class="settle-sub">运城贴金麻将 · ${winner ? winner.name : ''} ${winLabel} ${tileText(result.tile)}</div>
         <div class="settle-sub">亮金 ${result.goldCount || 0} 张（三金封顶）· 金分 ${result.goldScore || 0}${result.huGain ? ' · 胡分 ' + result.huGain : ''}</div>
+        ${shapeBlock}
+        ${baoHuBlock}
         ${goldBlock}
         ${shangjinBlock}
         ${lockBlock}
@@ -2311,7 +2325,7 @@
   function initCreateModal() {
     const koudianTip = '未满 4 人时由 AI 自动补位；关闭则需等满 4 名真人开局。136 张民间通用版（万条筒+东南西北中发白）：计分模型可选乘算（点数×牌型倍数）或加算（底分+固定加番，清一色/一条龙/七小对+20、豪七额外+40）；庄底默认关闭（开启后仅庄家胡牌单边加分：非自摸+5/自摸+10，输家不额外扣分；闲家胡无庄底）；报听需听牌中含 6 点及以上牌并扣一张牌上架，报听后禁碰只可杠、摸牌即打；胡牌受点数限制（1/2 点不能胡，3/4/5 点只能自摸，6/7/8/9/字牌=10 点可点炮可自摸）。';
     const hongzhongTip = '红中麻将（112 张，无风）：红中为万能癞子，可代替任意牌；只能自摸或抢杠胡，不能点炮；抢杠仅抢补杠（暗杠不可抢），被抢者按（1手底注+中码数×底注）×3包赔三家；杠牌当场结算（放杠2手、补杠每家1手、暗杠每家2手）；扎码：胡牌后从牌墙翻码，1/5/9 万筒条及红中为中码，每张中码倍数翻一倍；流局庄家连庄。';
-    const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），金牌亮出为「亮金」独立操作（摸牌后、出牌前亮出金牌摆面前、牌尾补一张、手牌数不变），金牌不可当普通牌打出；第一张金必须上（手握金牌未亮出则本局不能胡牌，亮金后方可胡）；亮金一次才有点炮胡资格，亮金区独立展示，三金封顶；连续亮金两张自动锁金（锁定其他三家只能自摸，被锁者累计上金两张解锁）；可碰可杠不可吃，无报听；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
+    const tiejinTip = '运城贴金麻将（136 张，无花）：翻牌定金母定金牌（序数牌 10-点数、发财即发财、风箭按对牌），金牌亮出为「亮金」独立操作（摸牌后、出牌前亮出金牌摆面前、牌尾补一张、手牌数不变），金牌不可当普通牌打出；第一张金必须上（手握金牌未亮出则本局不能胡牌，亮金后方可胡）；亮金一次才有点炮胡资格，亮金区独立展示，三金封顶；连续亮金两张自动锁金（锁定其他三家只能自摸，被锁者累计上金两张解锁）；可碰可杠不可吃，无报听；牌型支持七小对×2、豪华七小对×4（金牌可当万能凑对，加番只放胡牌分不翻金分）；包胡：牌墙剩最后 4 张时点炮，放炮者独赔三家；点炮可截胡，过胡在获抓牌权前不能再胡；抢杠算点炮胡（明杠可抢、暗杠不可抢）；字牌整副胡只能自摸且金牌不代；流局模式 A 摸完 / B 剩 10 墩，计分 A 边趣 / B 125，流局杠分不计；谁胡谁坐庄。';
     buildSeg('seg-variant', ['koudian', 'hongzhong', 'tiejin'], (v) => (v === 'hongzhong' ? '红中麻将' : v === 'tiejin' ? '贴金麻将' : '扣点点'), (v) => {
       const hz = v === 'hongzhong';
       const tj = v === 'tiejin';

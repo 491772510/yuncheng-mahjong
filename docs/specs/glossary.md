@@ -56,6 +56,8 @@
 | **金牌** | 由金母按对牌关系确定的万能牌（共 4 张）：序数牌翻 x → 10-x（翻 5 → 5）；发财 → 发财；东↔西、南↔北、中↔白。 | ✅ **已实现**：`rules.goldFromMother` `src/rules.js:890-898`；对牌表 `TIEJIN_HONOR_PAIR` `:887` |
 | **亮金** | 摸牌后、出牌前的**独立操作**：把手中 1 张金牌亮到面前亮金区（不入弃牌堆），从牌墙尾部补 1 张，手牌数不变、不轮转；未亮金者只能自摸、不能点炮。 | ✅ **已实现**：`_liangjin` `src/game.js:3208`；点炮资格 `_tieJinCanDianpao` `:3192`；金牌不可普通打出（`_chooseTieJinDiscard` `:3334` 过滤） |
 | **第一张金必须上** | 手中握有金牌、而本局**一张都未亮出**时不得胡牌（自摸亦禁）；必须先把首金亮到亮金区，之后才可胡。未上金也就没有点炮资格。 | ✅ **已实现**：判定 `rules.isFirstGoldUnplayed` `src/rules.js` + 服务端 `_tieJinHasUnplayedGold` `src/game.js`；拦截自摸 `_hu` / 点炮 `_afterDiscard` / 抢杠 `_doBuGang`；未上金时 `_playTile` 拒绝弃金甩首金；前端 `needLiangjin` 强制高亮亮金按钮 |
+| **七小对 / 豪华七小对** | 贴金的特殊牌型：14 张凑成 7 个对子；含 4 张同牌为豪华七小对。**金牌可当万能凑对**（1 张金补 1 个单张成对、2 张金自成一对）。加番 ×2 / ×4，**只放大胡牌分，金分不翻**。 | ✅ **已实现**：`rules.isQiDuiTieJin` / `isLuxuryQiDuiTieJin` / `tiejinShapeMult` `src/rules.js`；已并入 `checkHuTieJin`；仅无明牌区成立 |
+| **包胡** | 牌墙剩**最后 4 张**及以内时的点炮，由**放炮者独赔三家**（另两家不出分）；自摸不触发。牌桌在进入该阶段时会提前红条提示。 | ✅ **已实现**：判定 `_tieJinIsBaoHu` `src/game.js`（`wall.length - wallPos <= 4 且非自摸`）；阶段提示 `_tieJinInBaoHuZone` → view `baoHuZone`；结算标记 `winners.baoHu` |
 | **锁金** | 某玩家累计亮金达 2 张时自动锁定**其他三家**（本家不受锁），被锁者只能自摸；被锁者累计亮金达 2 张即解锁/免疫。 | ✅ **已实现**：触发 `:3241`、解锁 `:3233-3235`。⚠️ 与 `2026-10-01` 设计文档"亮出最后一张金牌解锁"的表述不一致，**以代码为准** |
 
 ## 5. 系统 / 对局机制

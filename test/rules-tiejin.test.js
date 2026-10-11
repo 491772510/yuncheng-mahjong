@@ -116,6 +116,78 @@ test('canHuTieJinWith 摸/抢某张后成胡', () => {
   assert.equal(rules.canHuTieJinWith(hand, 't3', [], 'w9'), false);
 });
 
+// ============ 贴金七小对 / 豪华七小对（金牌可当万能凑对） ============
+
+test('isQiDuiTieJin：7 个真对成立，含金（万能）亦可凑对', () => {
+  const hand = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'b8'];
+  assert.equal(rules.isQiDuiTieJin(hand, 'w9'), true, '7 个真对');
+  // 含 1 张金牌 w9 作万能：1 真 + 金 成对
+  const hand2 = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'w9'];
+  assert.equal(rules.isQiDuiTieJin(hand2, 'w9'), true, '1 张金补最后一张成对');
+  // 2 张金牌自成一对
+  const hand3 = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'w9', 'w9', 'b8'];
+  assert.equal(rules.isQiDuiTieJin(hand3, 'w9'), true, '2 张金两两成对');
+  // 1 张金无法补成（需要 2 张补齐不同花色，金只有 1 张）
+  const hand4 = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b8', 'b9', 'w9'];
+  assert.equal(rules.isQiDuiTieJin(hand4, 'w9'), false, '3 张散牌 + 1 金不足以补成 7 对');
+  // 牌数不符
+  assert.equal(rules.isQiDuiTieJin(hand.slice(0, 13), 'w9'), false);
+});
+
+test('isLuxuryQiDuiTieJin：含 4 张同牌为豪华七对；金补成 4 张亦成立', () => {
+  const hand = ['w1', 'w1', 'w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7'];
+  assert.equal(rules.isLuxuryQiDuiTieJin(hand, 'w9'), true, '含 4 张 w1');
+  // 3 张真牌 + 1 张金补成 4 张，其余成对
+  const hand2 = ['w1', 'w1', 'w1', 'w9', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7'];
+  assert.equal(rules.isLuxuryQiDuiTieJin(hand2, 'w9'), true, '3 真 + 1 金补足 4 张');
+  // 普通七对（无 4 张）→ 非豪华
+  const hand3 = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'b8'];
+  assert.equal(rules.isLuxuryQiDuiTieJin(hand3, 'w9'), false);
+});
+
+test('checkHuTieJin 支持七小对（无金与含金两种）', () => {
+  const hand = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'b8'];
+  assert.equal(rules.checkHuTieJin(hand, [], 'w9'), true, '七小对无明牌区可胡');
+  const hand2 = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'w9'];
+  assert.equal(rules.checkHuTieJin(hand2, [], 'w9'), true, '含金补对的七小对可胡');
+  // 有明牌区时七对不成立
+  const melds = [{ type: 'peng', tile: 'b1', tiles: ['b1', 'b1', 'b1'] }];
+  assert.equal(rules.checkHuTieJin(hand, melds, 'w9'), false, '有碰/杠时不算七对');
+});
+
+test('tiejinShapeMult：七小对 ×2、豪华七小对 ×4，普通牌型 ×1', () => {
+  const qd = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'b8'];
+  assert.deepEqual(rules.tiejinShapeMult(qd, [], 'w9'), { mult: 2, names: ['七小对'] });
+  const lq = ['w1', 'w1', 'w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7'];
+  assert.deepEqual(rules.tiejinShapeMult(lq, [], 'w9'), { mult: 4, names: ['豪华七小对'] });
+  // 平胡
+  const ph = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't2', 't2', 't2', 't5', 't5'];
+  assert.deepEqual(rules.tiejinShapeMult(ph, [], 'w9'), { mult: 1, names: [] });
+  // 有明牌区 → 不判七对
+  const melds = [{ type: 'peng', tile: 'b1', tiles: ['b1', 'b1', 'b1'] }];
+  assert.equal(rules.tiejinShapeMult(qd, melds, 'w9').mult, 1);
+});
+
+// ============ 计分加番（七对只放大胡牌分，金分不变） ============
+
+test('calcTieJinScoreA 七对加番 ×2：胡牌分翻倍，金分不变', () => {
+  const base = rules.calcTieJinScoreA({ winType: 'zimo', winnerDealer: false, goldCount: 2 });
+  const qd = rules.calcTieJinScoreA({ winType: 'zimo', winnerDealer: false, goldCount: 2, fanMult: 2 });
+  assert.equal(base.H, 1);
+  assert.equal(qd.H, 2, '七对 H = 1×2');
+  assert.equal(qd.G, base.G, '金分不受加番影响');
+  // 自摸每家 = 2H + G = 2×2 + 3 = 7
+  assert.equal(qd.payers[0].amount, 2 * 2 + 3);
+});
+
+test('calcTieJinScoreB 七对加番 ×2：基础份的胡庄部分翻倍，金分不变', () => {
+  const base = rules.calcTieJinScoreB({ winType: 'dianpao', winnerDealer: false, goldCount: 1 });
+  const qd = rules.calcTieJinScoreB({ winType: 'dianpao', winnerDealer: false, goldCount: 1, fanMult: 2 });
+  assert.equal(base.base, 7, '普通：胡1+庄1+金1=3... 实为 1+1+5=7（125体系 G=5）');
+  assert.equal(qd.base, (1 + 1) * 2 + 5, '七对：(1+1)×2 + 5 = 9');
+  assert.equal(qd.G, base.G, '金分不受加番影响');
+});
+
 // ============ 第一张金必须上（有金未上不能胡） ============
 
 test('isFirstGoldUnplayed：手握金牌且一张未上 → 违规禁止胡', () => {

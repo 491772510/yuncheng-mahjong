@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>运城麻将 · 扣点点 / 红中 / 贴金</title>
-  <link rel="stylesheet" href="style.css?v=28">
+  <link rel="stylesheet" href="style.css?v=29">
 </head>
 <body>
 <div id="app">
@@ -134,12 +134,20 @@
         </div>
         <div class="setting-row">
           <label>亮金</label>
-          <span class="hz-badge">摸牌后出牌前独立亮出金牌（摆面前、牌尾补一张、手牌数不变）；金牌不可普通打出；亮金一次才有点炮胡资格</span>
+          <span class="hz-badge">摸牌后出牌前独立亮出金牌（摆面前、牌尾补一张、手牌数不变）；金牌不可普通打出；第一张金必须上（有金未上不能胡）；亮金一次才有点炮胡资格</span>
         </div>
         <div class="setting-divider">玩法规则</div>
         <div class="setting-row">
           <label>锁金</label>
-          <span class="hz-badge">连续亮金两张后自动锁定其他三家，被锁者只能自摸（亮出最后金牌解锁）</span>
+          <span class="hz-badge">连续亮金两张后自动锁定其他三家，被锁者只能自摸（累计上金两张解锁）</span>
+        </div>
+        <div class="setting-row">
+          <label>牌型</label>
+          <span class="hz-badge">支持七小对（×2）、豪华七小对（×4），金牌可当万能凑对；加番只放胡牌分，金分不翻</span>
+        </div>
+        <div class="setting-row">
+          <label>包胡</label>
+          <span class="hz-badge">牌墙剩最后 4 张时点炮，放炮者独赔三家（牌桌会提前提示）</span>
         </div>
         <div class="setting-divider">流局规则</div>
         <div class="setting-row">
@@ -354,6 +362,6 @@
     </div>
   </div>
 </div>
-<script src="app.js?v=33"></script>
+<script src="app.js?v=34"></script>
 </body>
 </html>

@@ -581,6 +581,205 @@ test('三金封顶：亮金数超过 3 按 3 金计（计分 A：G=9）', () => 
   cleanupServer(srv);
 });
 
+// ============ 七小对 / 豪华七小对（贴金） ============
+
+test('贴金七小对：14 张 7 对可自摸胡，加番 ×2（胡牌分翻倍、金分不变）', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 7 个真对（不含金牌 w5），已上金 1 张（满足第一张金必须上）
+  g.hands[0] = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'b8'];
+  g.melds[0] = [];
+  g.shangjinCount = [1, 0, 0, 0];
+  g.shangjinTiles = [['w5'], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'b8';
+  g.lastAction = null;
+  send(wss[0], { type: 'hu' });
+  const w = g.winners;
+  assert.ok(w, '七小对应可胡');
+  assert.equal(w.winType, 'zimo');
+  assert.equal(w.shapeMult, 2, '七小对加番 ×2');
+  assert.deepEqual(w.shapeNames, ['七小对']);
+  // 计分 A：本用例 seat0 恰为庄家（H 基准 2），加番后 H=4；G(1金)=1
+  // 自摸每家 = 2×4+1 = 9，共 27
+  assert.equal(w.goldScore, 1, '金分不受加番影响（1金=1）');
+  assert.equal(w.winnerGain, 27, '七对庄家自摸：每家 (2×2×2+1)=9，共 27');
+  cleanupServer(srv);
+});
+
+test('贴金豪华七小对：含 4 张同牌加番 ×4', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  g.hands[0] = ['w1', 'w1', 'w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7'];
+  g.melds[0] = [];
+  g.shangjinCount = [1, 0, 0, 0];
+  g.shangjinTiles = [['w5'], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'b7';
+  g.lastAction = null;
+  send(wss[0], { type: 'hu' });
+  const w = g.winners;
+  assert.ok(w, '豪华七小对应可胡');
+  assert.equal(w.shapeMult, 4, '豪华七小对加番 ×4');
+  assert.deepEqual(w.shapeNames, ['豪华七小对']);
+  // 庄家自摸：H 基准 2 × 4 = 8，G=1 → 每家 2×8+1=17，共 51
+  assert.equal(w.winnerGain, 51, '豪华七对庄家自摸：每家 (2×2×4+1)=17，共 51');
+  cleanupServer(srv);
+});
+
+test('贴金七小对：含金牌万能凑对可胡；有明牌区时不算七对', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 6 对 + 1 真牌 + 1 金牌 w5 补对
+  g.hands[0] = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'w5'];
+  g.melds[0] = [];
+  g.shangjinCount = [1, 0, 0, 0];
+  g.shangjinTiles = [['w5'], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w5';
+  g.lastAction = null;
+  send(wss[0], { type: 'hu' });
+  assert.ok(g.winners, '金牌补对的七小对可胡');
+  assert.equal(g.winners.shapeMult, 2, '判定为七小对');
+  cleanupServer(srv);
+});
+
+// ============ 包胡（牌墙剩最后 4 张点炮 → 放炮者包三家） ============
+
+test('包胡判定：牌墙剩 ≤4 张时点炮为包胡，放炮者独赔三家', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // seat1 听 w9（已上金，无金牌手牌）；seat0 打出 w9
+  g.hands[1] = TING_W9_13.slice();
+  g.hands[2] = PLAIN13.slice();
+  g.hands[3] = PLAIN13.slice();
+  g.melds = [[], [], [], []];
+  g.shangjinCount = [0, 1, 0, 0];
+  g.shangjinTiles = [[], ['w5'], [], []];
+  g.locked = [false, false, false, false];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w9';
+  g.lastAction = null;
+  g.pending = null;
+  g.huPassed = [false, false, false, false];
+  // 关键：牌墙剩余压到 4 张（进入包胡阶段）
+  g.wallPos = g.wall.length - 4;
+  g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'b1', 'b2', 'b3', 't2', 'b3'];
+
+  const inZone = srv._tieJinInBaoHuZone(room);
+  assert.equal(inZone, true, '牌墙剩 4 张：应判定处于包胡阶段');
+
+  send(wss[0], { type: 'play_tile', tile: 'w9' });
+  assert.ok(g.pending, '点炮产生胡响应');
+  const r1 = g.pending.responders.find((r) => r.seat === 1);
+  assert.ok(r1 && r1.canHu, 'seat1 可胡');
+
+  // seat1 胡 → 结算：包胡（放炮者 seat0 独赔三家总额）
+  const before0 = room.players[0].roundScore;
+  const before1 = room.players[1].roundScore;
+  const before2 = room.players[2].roundScore;
+  send(wss[1], { type: 'hu' });
+  const w = g.winners;
+  assert.ok(w, '应产生胡牌结算');
+  assert.equal(w.baoHu, true, '结算标记包胡');
+  assert.equal(w.payments.length, 1, '包胡只有一条支付记录（放炮者→赢家）');
+  assert.equal(w.payments[0].from, 0, '由放炮者 seat0 支付');
+  assert.equal(w.payments[0].amount, w.winnerGain, '放炮者独赔赢家总额');
+  assert.equal(room.players[2].roundScore, before2, '第三家不出分（包胡）');
+  assert.equal(room.players[0].roundScore, before0 - w.winnerGain, '放炮者扣全部');
+  assert.equal(room.players[1].roundScore, before1 + w.winnerGain, '赢家收全部');
+  cleanupServer(srv);
+});
+
+test('包胡不触发：牌墙剩 5 张（未进入阶段）时按正常点炮通赔', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  g.hands[1] = TING_W9_13.slice();
+  g.hands[2] = PLAIN13.slice();
+  g.hands[3] = PLAIN13.slice();
+  g.melds = [[], [], [], []];
+  g.shangjinCount = [0, 1, 0, 0];
+  g.shangjinTiles = [[], ['w5'], [], []];
+  g.locked = [false, false, false, false];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w9';
+  g.lastAction = null;
+  g.pending = null;
+  g.huPassed = [false, false, false, false];
+  g.wallPos = g.wall.length - 5; // 剩 5 张：未进包胡阶段
+  g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'b1', 'b2', 'b3', 't2', 'b3'];
+
+  assert.equal(srv._tieJinInBaoHuZone(room), false, '剩 5 张：未进包胡阶段');
+  send(wss[0], { type: 'play_tile', tile: 'w9' });
+  send(wss[1], { type: 'hu' });
+  const w = g.winners;
+  assert.equal(w.baoHu, false, '未进阶段：不是包胡');
+  assert.equal(w.payments.length, 3, '正常点炮：三家各付一条');
+  cleanupServer(srv);
+});
+
+test('包胡不触发：自摸不收包胡限制（点炮才触发）', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  g.hands[0] = SELFHU_NOGOLD_14.slice();
+  g.melds[0] = [];
+  g.shangjinCount = [1, 0, 0, 0];
+  g.shangjinTiles = [['w5'], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 't2';
+  g.lastAction = null;
+  g.wallPos = g.wall.length - 2; // 牌墙剩 2 张，已在包胡数值区间内
+  send(wss[0], { type: 'hu' });
+  const w = g.winners;
+  assert.ok(w && w.winType === 'zimo', '自摸可胡');
+  assert.equal(w.baoHu, false, '自摸不触发包胡');
+  assert.equal(w.payments.length, 3, '自摸仍三家各付');
+  cleanupServer(srv);
+});
+
+test('包胡阶段提示：牌墙剩 ≤4 张时 game_state 下发 baoHuZone=true', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w1';
+  g.lastAction = null;
+  g.pending = null;
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 'w9', 'b1', 'b2', 'b3', 't1', 't2', 'w1'];
+  g.wallPos = g.wall.length - 4;
+
+  srv._broadcastGameState(room);
+  const v = lastOf(wss[0], 'game_state');
+  assert.equal(v.game.baoHuZone, true, '进入包胡阶段：下发 baoHuZone=true');
+  assert.equal(v.game.wallRemain, 4, '下发牌墙剩余数');
+  // 剩 6 张时应为 false
+  g.wallPos = g.wall.length - 6;
+  srv._broadcastGameState(room);
+  const v2 = lastOf(wss[0], 'game_state');
+  assert.equal(v2.game.baoHuZone, false, '未进阶段：baoHuZone=false');
+  cleanupServer(srv);
+});
+
 // ============ 计分 A（边趣版） ============
 
 test('计分A 自摸：闲家胡1翻倍、金分3倍递增（2金=3），每家付 2×1+3=5', () => {
@@ -1041,8 +1240,9 @@ test('P0 贴金庄家起手即胡可胡（drawnTile 应放行为起手第 14 张
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   const dealer = g.dealer;
-  // 4 组刻子 + 将（用非金牌真牌构造，避开「第一张金必须上」）
-  // 注意：本场景要验的是"起手即胡可胡"，若牌型含金牌则不应能胡（另见首金规则用例）
+  // 固定金牌为 w9（不在 SELFHU_NOGOLD_14 牌型内），确保不触发「第一张金必须上」
+  g.goldTile = 'w9';
+  g.goldMother = 'w9';
   g.hands[dealer] = SELFHU_NOGOLD_14.slice();
   g.melds = [[], [], [], []];
   g.shangjinCount = [0, 0, 0, 0];
