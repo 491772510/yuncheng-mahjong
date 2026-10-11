@@ -94,6 +94,9 @@ function makeRoom4(settings) {
 const TING_W9_13 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2'];
 // h2：14 张自摸胡 w9（摸到 w9 自摸）
 const SELFHU_W9_14 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
+// h2b：14 张自摸胡、且不含金牌 w5 的自摸型（用于「首金必须上」之外的常规自摸验证）
+//   4 刻子 + 将：w1w1w1 / w2w2w2 / b1b1b1 / t1t1t1 / t2t2
+const SELFHU_NOGOLD_14 = ['w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'b1', 'b1', 'b1', 't1', 't1', 't1', 't2', 't2'];
 // h3：13 张听 w9，含 1 张金牌 w5（万能）：w1w2w3 / w4w5w6 / w7w8+金(当w9) / t1t1t1 / t2t2
 const TING_W9_GOLD_13 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w5', 't1', 't1', 't1', 't2'];
 // h4：14 张全字牌自摸胡：e/s/x/z 各3 + n 将2
@@ -167,18 +170,83 @@ test('点炮胡资格：未亮金不能点炮（无胡响应），亮过金才�
   cleanupServer(srv);
 });
 
-test('未亮金只能自摸：自摸胡不受亮金限制', () => {
+test('未亮金只能自摸：自摸胡不受亮金限制（手中无金时）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   g.goldTile = 'w5';
   g.goldMother = 'w5';
-  g.hands[0] = SELFHU_W9_14.slice();
+  g.hands[0] = SELFHU_NOGOLD_14.slice(); // 不含金牌 w5 的自摸胡型
+  g.melds[0] = [];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 't2';
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
+  send(wss[0], { type: 'hu' });
+  assert.equal(g.winners.winType, 'zimo', '未亮金也应可自摸胡');
+  cleanupServer(srv);
+});
+
+test('第一张金必须上：手握金牌未亮则自摸胡被拒，亮金后即可胡', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 14 张自摸胡型，含 1 张金牌 w5（牌型本身不依赖金牌，但金未上 → 不得胡）
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
   g.melds[0] = [];
   g.turn = 0;
   g.stage = 'draw';
   g.drawnTile = 'w9';
+  g.lastAction = null;
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
+  g.locked = [false, false, false, false];
+
   send(wss[0], { type: 'hu' });
-  assert.equal(g.winners.winType, 'zimo', '未亮金也应可自摸胡');
+  assert.equal(g.winners, null, '手握第一张金未上：自摸胡被拒');
+  const err = lastOf(wss[0], 'error');
+  assert.ok(err && /第一张金必须上/.test(err.message), '应返回「第一张金必须上」错误提示');
+
+  // 亮金后：手中金已上架（补牌回调一张），此时可正常自摸胡
+  send(wss[0], { type: 'liangjin' });
+  assert.equal(g.shangjinCount[0], 1, '亮金成功');
+  // 亮金后手牌 14 张（去掉 1 金补回 1 张），重新构造为可胡牌型并保留上金记录
+  g.shangjinCount[0] = 1;
+  g.hands[0] = SELFHU_W9_14.slice();
+  send(wss[0], { type: 'hu' });
+  assert.ok(g.winners, '已上金后可自摸胡');
+  assert.equal(g.winners.winType, 'zimo');
+  cleanupServer(srv);
+});
+
+test('第一张金必须上：未上金时出牌提示不给胡、标记需要亮金', () => {
+  const { srv, room } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
+  g.melds[0] = [];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w9';
+  g.lastAction = null;
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
+
+  const prompt = srv._buildDrawPromptTieJin(room, 0);
+  assert.equal(prompt.canHu, false, '有金未上：提示不列胡');
+  assert.ok(!prompt.actions.includes('hu'), 'actions 不含 hu');
+  assert.equal(prompt.needLiangjin, true, '应标记 needLiangjin');
+  assert.ok(prompt.actions.includes('liangjin'), 'actions 含亮金');
+  // AI 必须先亮金而非胡
+  assert.equal(srv._decideTieJinDrawAction(g, room, 0).type, 'liangjin', 'AI 有金未上先亮金');
+
+  // 已上金后：提示恢复可胡
+  g.shangjinCount[0] = 1;
+  const prompt2 = srv._buildDrawPromptTieJin(room, 0);
+  assert.equal(prompt2.canHu, true, '已上金：恢复可胡');
+  assert.equal(prompt2.needLiangjin, false, '不再标记需要亮金');
   cleanupServer(srv);
 });
 
@@ -363,23 +431,25 @@ test('贴金 AI 亮金策略：已有1张但手上还有第2张金时继续亮�
   cleanupServer(srv);
 });
 
-test('贴金 AI 亮金策略：被锁且亮完累计仍不足 2 张时不再亮金', () => {
+test('贴金 AI 亮金策略：被锁且已亮≥1张、亮完累计仍不足 2 张时不再亮金', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   g.goldTile = 'w5';
   g.goldMother = 'w5';
-  // 已被锁金、已亮 0 张、手上仅 1 张金牌 w5 → 亮完累计仍 < 2，拿不到点炮资格，保留不亮
+  // 已被锁金、已亮 1 张、手上仅 1 张金牌 w5 → 亮完累计 2 张其实已够点炮资格，但此局被锁未解除前
+  // 仍按收益判断；改构造：已亮 1 张、手上 2 张金 → 亮完累计 3 张但锁未解 → 保守停手
+  // 这里验证「被锁且 done>=1 且 inHand<2」的保留分支：done=1、inHand=1 → 保留万能牌不亮
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
   g.melds[0] = [];
-  g.shangjinCount = [0, 0, 0, 0];
-  g.shangjinTiles = [[], [], [], []];
+  g.shangjinCount = [1, 0, 0, 0];
+  g.shangjinTiles = [['w5'], [], [], []];
   g.locked = [true, false, false, false];
   g.lockSeat = 0;
   g.turn = 0;
   g.stage = 'draw';
   g.drawnTile = 'w5';
   g.lastAction = null;
-  assert.equal(srv._decideTieJinDrawAction(g, room, 0).type, 'play', '被锁且亮完仍 < 2：保留万能牌，回 play');
+  assert.equal(srv._decideTieJinDrawAction(g, room, 0).type, 'play', '已亮1张且仅剩1张金：保留万能牌，回 play');
   cleanupServer(srv);
 });
 
@@ -895,11 +965,14 @@ test('谁胡谁坐庄：本局胡牌者下局坐庄，庄家胡牌连庄', () =>
   const g = room.game;
   g.goldTile = 'w5';
   g.goldMother = 'w5';
-  g.hands[0] = SELFHU_W9_14.slice();
+  // 自摸胡型须避开金牌 w5，否则触发「第一张金必须上」被拒
+  g.hands[0] = SELFHU_NOGOLD_14.slice();
   g.melds[0] = [];
   g.turn = 0;
   g.stage = 'draw';
-  g.drawnTile = 'w9';
+  g.drawnTile = 't2';
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
   send(wss[0], { type: 'hu' });
   assert.equal(room.lastWinner, 0);
   const d0 = g.dealer;
@@ -968,10 +1041,12 @@ test('P0 贴金庄家起手即胡可胡（drawnTile 应放行为起手第 14 张
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   const dealer = g.dealer;
-  // 4 组刻子 + 将（将用金牌双张），无论金牌牌面为何均可成胡
-  const gt = g.goldTile;
-  g.hands[dealer] = [gt, gt, 'w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'b1', 'b1', 'b1', 't1', 't1', 't1'];
+  // 4 组刻子 + 将（用非金牌真牌构造，避开「第一张金必须上」）
+  // 注意：本场景要验的是"起手即胡可胡"，若牌型含金牌则不应能胡（另见首金规则用例）
+  g.hands[dealer] = SELFHU_NOGOLD_14.slice();
   g.melds = [[], [], [], []];
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
   g.turn = dealer;
   g.stage = 'draw';
   send(wss[dealer], { type: 'hu' });
@@ -980,6 +1055,25 @@ test('P0 贴金庄家起手即胡可胡（drawnTile 应放行为起手第 14 张
   assert.ok(w, '应产生胡牌结算');
   assert.equal(w.winType, 'zimo');
   assert.equal(w.winner, dealer);
+  cleanupServer(srv);
+});
+
+test('P0 贴金庄家起手含金牌且未上金时不能胡（第一张金必须上）', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  const dealer = g.dealer;
+  const gt = g.goldTile;
+  // 牌型含 2 张金牌作将，本身可胡；但一张未上 → 拒绝
+  g.hands[dealer] = [gt, gt, 'w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'b1', 'b1', 'b1', 't1', 't1', 't1'];
+  g.melds = [[], [], [], []];
+  g.shangjinCount = [0, 0, 0, 0];
+  g.shangjinTiles = [[], [], [], []];
+  g.turn = dealer;
+  g.stage = 'draw';
+  send(wss[dealer], { type: 'hu' });
+  const err = lastOf(wss[dealer], 'error');
+  assert.ok(err && /第一张金必须上/.test(err.message), '起手含金未上：胡牌被拒并给出首金提示');
+  assert.equal(g.winners, null, '不应产生胡牌结算');
   cleanupServer(srv);
 });
 
@@ -1062,12 +1156,37 @@ test('P1 守卫：当前回合动作被拒（状态未推进）仍触发重试�
 // ============ P2 修复：_chooseTieJinDiscard 末级兜底在全金牌时返回金牌，_playTile 拒收导致整局卡死 ============
 // 修复方案：_playTile 在"手牌除金牌外已无牌"时放行金牌（与红中"只剩红中则打出"行为对齐）。
 
-test('P2 放行：手牌全金牌时 _playTile 放行打出金牌，不再拒收卡死', () => {
+test('P2 放行：手牌全金牌且已上金（首金已亮）时 _playTile 放行打出金牌，不再拒收卡死', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   g.goldTile = 'w5';
   g.goldMother = 'w5';
   // 摸牌后 14 张全金牌：无任何非金牌可打，亮金走不通时必须能强制打出
+  // 前提：首金已亮（shangjinCount>=1），否则属「第一张金必须上」需先亮金（另见对应用例）
+  g.hands[0] = new Array(14).fill('w5');
+  g.melds = [[], [], [], []];
+  g.turn = 0;
+  g.stage = 'draw';
+  g.drawnTile = 'w5';
+  g.lastAction = null;
+  g.pending = null;
+  g.shangjinCount = [1, 0, 0, 0];
+  g.shangjinTiles = [['w5'], [], [], []];
+
+  send(wss[0], { type: 'play_tile', tile: 'w5' });
+  assert.equal(lastOf(wss[0], 'error'), null, '全金牌手牌打出金牌不应被拒（原缺陷：拒收后状态零变化→重试耗尽→整局卡死）');
+  assert.equal(g.hands[0].length, 13, '全金牌手牌时金牌被放行打出（手牌-1）');
+  assert.deepEqual(g.discards[0], ['w5'], '金牌进入弃牌堆');
+  assert.notEqual(g.turn, 0, '出牌后应轮转');
+  cleanupServer(srv);
+});
+
+test('第一张金必须上：未上金且手中仅剩金牌时 _playTile 拒绝弃金甩首金', () => {
+  const { srv, room, wss } = makeRoom4({});
+  const g = room.game;
+  g.goldTile = 'w5';
+  g.goldMother = 'w5';
+  // 14 张全金牌、首金未上：不能靠弃牌甩掉首金，必须先亮金
   g.hands[0] = new Array(14).fill('w5');
   g.melds = [[], [], [], []];
   g.turn = 0;
@@ -1079,10 +1198,9 @@ test('P2 放行：手牌全金牌时 _playTile 放行打出金牌，不再拒收
   g.shangjinTiles = [[], [], [], []];
 
   send(wss[0], { type: 'play_tile', tile: 'w5' });
-  assert.equal(lastOf(wss[0], 'error'), null, '全金牌手牌打出金牌不应被拒（原缺陷：拒收后状态零变化→重试耗尽→整局卡死）');
-  assert.equal(g.hands[0].length, 13, '全金牌手牌时金牌被放行打出（手牌-1）');
-  assert.deepEqual(g.discards[0], ['w5'], '金牌进入弃牌堆');
-  assert.notEqual(g.turn, 0, '出牌后应轮转');
+  const err = lastOf(wss[0], 'error');
+  assert.ok(err && /第一张金必须上/.test(err.message), '未上金弃金被拒并提示首金规则');
+  assert.equal(g.hands[0].length, 14, '手牌不变');
   cleanupServer(srv);
 });
 

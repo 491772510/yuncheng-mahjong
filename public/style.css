@@ -794,6 +794,15 @@ body {
 .gold-mother b { display: inline-block; vertical-align: middle; margin-left: 4px; }
 .act-gold { background: linear-gradient(135deg,#d4a017,#a9760b); color: #fff; border-color: #8a6d0b; }
 .act-gold:hover { filter: brightness(1.1); }
+/* 第一张金必须上：有金未上时亮金是唯一出路，按钮呼吸高亮做强制引导 */
+.act-gold-forced { animation: gold-forced 1.1s ease-in-out infinite; box-shadow: 0 0 0 2px rgba(255,231,150,.9), 0 0 10px rgba(212,160,23,.75); }
+@keyframes gold-forced {
+  0%, 100% { filter: brightness(1); transform: scale(1); }
+  50% { filter: brightness(1.25); transform: scale(1.05); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .act-gold-forced { animation: none; }
+}
 
 .settle-gang { margin: 8px 0; padding: 8px 10px; background: rgba(142,68,173,.08); border-radius: 8px; }
 .settle-gang .row { font-size: 13px; margin: 3px 0; color: #555; }

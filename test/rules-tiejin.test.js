@@ -116,6 +116,28 @@ test('canHuTieJinWith 摸/抢某张后成胡', () => {
   assert.equal(rules.canHuTieJinWith(hand, 't3', [], 'w9'), false);
 });
 
+// ============ 第一张金必须上（有金未上不能胡） ============
+
+test('isFirstGoldUnplayed：手握金牌且一张未上 → 违规禁止胡', () => {
+  // 手牌含 1 张金牌 w5、上金 0 张 → 违规
+  assert.equal(rules.isFirstGoldUnplayed(['w1', 'w2', 'w3', 'w5'], 'w5', 0), true);
+  // 手中无金 → 不违规（牌墙金母/已弃金牌等情形）
+  assert.equal(rules.isFirstGoldUnplayed(['w1', 'w2', 'w3'], 'w5', 0), false);
+  // 已上过金（手牌已无金）→ 不违规
+  assert.equal(rules.isFirstGoldUnplayed(['w1', 'w2', 'w3'], 'w5', 1), false);
+  // 已上过金但后期又摸入金牌：允许（首金条件已满足），但要走亮金才能拿点炮资格
+  assert.equal(rules.isFirstGoldUnplayed(['w1', 'w2', 'w3', 'w5'], 'w5', 1), false);
+  // 无金牌局 → 不违规
+  assert.equal(rules.isFirstGoldUnplayed(['w1', 'w5'], null, 0), false);
+  // 上金数为 undefined/null 视为 0
+  assert.equal(rules.isFirstGoldUnplayed(['w5'], 'w5', undefined), true);
+  assert.equal(rules.isFirstGoldUnplayed(['w5'], 'w5', null), true);
+  // 即使牌型未用到金牌作万能补位，手握金未上同样禁止
+  const hand = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'w5'];
+  assert.equal(rules.checkHuTieJin(hand, [], 'w5'), true, '牌型本身可胡');
+  assert.equal(rules.isFirstGoldUnplayed(hand, 'w5', 0), true, '但手握金未上 → 禁止胡');
+});
+
 // ============ 金牌不可碰/杠 ============
 
 test('canPengTieJin / canGangTieJin / canAnGangTieJin 金牌牌面不可碰杠', () => {

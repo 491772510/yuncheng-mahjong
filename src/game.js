@@ -1181,6 +1181,7 @@ class GameServer {
         if (!room.players[s]) continue;
         if (g.huPassed[s]) continue;
         if (!this._tieJinCanDianpao(room, s)) continue;
+        if (rules.isFirstGoldUnplayed([...g.hands[s], tile], gold, (g.shangjinCount || [])[s] || 0)) continue; // 有金未上：不能胡
         if (!rules.canHuTieJinWith(g.hands[s], tile, g.melds[s], gold)) continue;
         if (rules.isAllHonorShape([...g.hands[s], tile], g.melds[s], gold)) continue; // 字牌整副胡只能自摸
         huSeat = s;
@@ -1564,6 +1565,7 @@ class GameServer {
         if (!room.players[s]) continue;
         if (g.huPassed[s]) continue;
         if (!this._tieJinCanDianpao(room, s)) continue;
+        if (rules.isFirstGoldUnplayed([...g.hands[s], tile], g.goldTile, (g.shangjinCount || [])[s] || 0)) continue; // 有金未上：不能胡
         if (!rules.canHuTieJinWith(g.hands[s], tile, g.melds[s], g.goldTile)) continue;
         if (rules.isAllHonorShape([...g.hands[s], tile], g.melds[s], g.goldTile)) continue;
         grabbers.push(s);
@@ -2259,6 +2261,10 @@ class GameServer {
     if (idx < 0) return this._err(p, '手牌中没有这张牌');
     // 贴金：金牌不能作为普通出牌打出，只能通过「亮金」独立操作处理（或保留在手中）
     if (this._isTieJin(room) && tile === g.goldTile) {
+      // 第一张金必须上：本家一张未上且这是手中最后一枚金牌时，不得靠弃牌甩掉首金（必须先亮金）
+      if (this._tieJinHasUnplayedGold(room, p.seat) && !hand.some((t) => t !== g.goldTile)) {
+        return this._err(p, '第一张金必须上：请先亮出手中的金牌');
+      }
       // P2 修复：当手牌除金牌外已无其他可打牌时，放行金牌作为强制出牌（与红中"只剩红中则打出"行为对齐），
       // 避免 AI/真人全金牌手牌且亮金走不通时整局永久卡死
       const hasOther = hand.some((t) => t !== g.goldTile);
@@ -2478,6 +2484,10 @@ class GameServer {
       if (this._isTieJin(room)) {
         if (!rules.checkHuTieJin(g.hands[p.seat], g.melds[p.seat], g.goldTile)) {
           return this._err(p, '手牌不构成胡牌');
+        }
+        // 第一张金必须上：手中握有金牌却一张未亮，本局不能胡
+        if (this._tieJinHasUnplayedGold(room, p.seat)) {
+          return this._err(p, '第一张金必须上：请先亮出手中的金牌，有金未上不能胡牌');
         }
         this._settleHu(room, p.seat, { winType: 'zimo', tile: g.drawnTile });
         this._finishHuRound(room);
@@ -2903,6 +2913,8 @@ class GameServer {
       locked: g.locked ? g.locked.slice() : null,
       lockSeat: g.lockSeat != null ? g.lockSeat : -1,
       canLiangjin: isDrawTurn && !!g.goldTile && rules.countGold(g.hands[viewerSeat], g.goldTile) > 0 && !this._tieJinWallEnded(room, g),
+      // 第一张金必须上：手中有金且一张未亮 → 前端亮金按钮做强制提示
+      needLiangjin: isDrawTurn && this._tieJinHasUnplayedGold(room, viewerSeat),
       logs: this._maskLogsForViewer(room.logs, viewerSeat),
     };
     if (isDrawTurn && !this._isHongZhong(room) && !this._isTieJin(room) && !g.tingSeats.includes(viewerSeat)) {
@@ -3430,6 +3442,15 @@ class GameServer {
     return true;
   }
 
+  /** 「第一张金必须上」违规判定：手中握有金牌却一张未亮 → 本局不得胡牌（自摸/点炮/抢杠通吃）。
+   *  未上金者本就无点炮资格，此判定主要拦住「手握第一张金硬要自摸」的路径。
+   *  杠后补牌后手牌可能暂时 >14 张，此处只看手牌中是否仍有金牌，与张数无关。 */
+  _tieJinHasUnplayedGold(room, seat) {
+    const g = room.game;
+    if (!this._isTieJin(room) || !g || !g.goldTile) return false;
+    return rules.isFirstGoldUnplayed(g.hands[seat], g.goldTile, (g.shangjinCount || [])[seat] || 0);
+  }
+
 
 
 
@@ -3482,7 +3503,9 @@ class GameServer {
   }
 
 
-  /** 贴金行牌提示：出牌/自摸胡/杠/亮金（无报听、禁吃；锁金为自动规则） */
+  /** 贴金行牌提示：出牌/自摸胡/杠/亮金（无报听、禁吃；锁金为自动规则）
+   *  「第一张金必须上」：手中有金未上时不给胡、且亮金为唯一出路（除亮金外只剩出牌），
+   *  前端据此把亮金按钮做成强制提示（needLiangjin）。 */
   _buildDrawPromptTieJin(room, seat) {
     const g = room.game;
     const hand = g.hands[seat];
@@ -3492,10 +3515,22 @@ class GameServer {
     if (g.lastAction && g.lastAction.type === 'peng') {
       const goldCountAfterPeng = g.goldTile ? rules.countGold(hand, g.goldTile) : 0;
       const canLiangjinAfterPeng = goldCountAfterPeng > 0 && !this._tieJinWallEnded(room, g);
+      const needLiangjinAfterPeng = canLiangjinAfterPeng && this._tieJinHasUnplayedGold(room, seat);
       if (canLiangjinAfterPeng) actions.push('liangjin');
-      return { type: 'draw', actions, gangOptions, canHu: false, canLiangjin: canLiangjinAfterPeng, canDeclareTing: false, timeoutMs: HUMAN_TIMEOUT_MS };
+      return {
+        type: 'draw',
+        actions,
+        gangOptions,
+        canHu: false,
+        canLiangjin: canLiangjinAfterPeng,
+        needLiangjin: needLiangjinAfterPeng,
+        canDeclareTing: false,
+        timeoutMs: HUMAN_TIMEOUT_MS,
+      };
     }
-    const canSelfHu = rules.checkHuTieJin(hand, g.melds[seat], g.goldTile);
+    // 第一张金必须上：有金未上时本局不能胡（自摸亦不可）
+    const needLiangjin = this._tieJinHasUnplayedGold(room, seat);
+    const canSelfHu = !needLiangjin && rules.checkHuTieJin(hand, g.melds[seat], g.goldTile);
     if (canSelfHu) actions.push('hu');
     const cnt = rules.countTiles(hand);
     for (const [t, c] of cnt) {
@@ -3517,6 +3552,7 @@ class GameServer {
       gangOptions,
       canHu: canSelfHu,
       canLiangjin,
+      needLiangjin: needLiangjin && canLiangjin,
       canDeclareTing: false,
       timeoutMs: HUMAN_TIMEOUT_MS,
     };
@@ -3525,6 +3561,7 @@ class GameServer {
   // ---- 贴金 AI 决策（简易策略：胡/杠优先，亮金按收益判断：够 1 张就停，出牌保留金牌） ----
 
   // 亮金收益判断：跳过零收益分支，够 1 张就停（返回 true 才亮金）
+  // 例外：「第一张金必须上」——本家一张未上且手握金牌时无条件亮金（否则不能胡牌）
   _shouldLiangjinTieJin(g, room, seat) {
     const gold = g.goldTile;
     if (!gold) return false;
@@ -3532,6 +3569,7 @@ class GameServer {
     if (inHand <= 0) return false;
     if (this._tieJinWallEnded(room, g)) return false;
     const done = (g.shangjinCount || [])[seat] || 0;
+    if (done === 0) return true;                                      // 第一张金必须上：唯一出路，无条件亮
     if (done >= 3) return false;                                      // 三金封顶，第 4 张零增益
     if (g.locked && g.locked[seat] && done + inHand < 2) return false; // 亮完累计仍 < 2，拿不到点炮资格
     if (done >= 1 && inHand < 2) return false;                        // 够 1 张就停：保留最后一枚万能牌
@@ -3540,10 +3578,11 @@ class GameServer {
 
   _decideTieJinDrawAction(g, room, seat) {
     const hand = g.hands[seat];
+    // 第一张金必须上：有金未上属最高优先级（此时既不能胡，也谈不上保留万能牌）
+    if (this._shouldLiangjinTieJin(g, room, seat)) {
+      return { type: 'liangjin' };
+    }
     if (g.lastAction && g.lastAction.type === 'peng') {
-      if (this._shouldLiangjinTieJin(g, room, seat)) {
-        return { type: 'liangjin' };
-      }
       return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };
     }
     if (rules.checkHuTieJin(hand, g.melds[seat], g.goldTile)) {
@@ -3557,10 +3596,6 @@ class GameServer {
       if ((m.type === 'peng' || m.type === 'bugang') && (cnt.get(m.tile) || 0) >= 1 && !rules.isGold(m.tile, g.goldTile)) {
         return { type: 'gang', tile: m.tile, gangType: 'bugang' };
       }
-    }
-    // 亮金策略：够 1 张就停（先拿点炮资格；已有 1 张且这是最后一枚万能牌时保留），并跳过零收益分支
-    if (this._shouldLiangjinTieJin(g, room, seat)) {
-      return { type: 'liangjin' };
     }
     return { type: 'play', tile: this._chooseTieJinDiscard(g, room, seat) };
   }

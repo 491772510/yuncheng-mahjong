@@ -940,6 +940,21 @@ function canHuTieJinWith(hand, tile, melds, gold) {
   return checkHuTieJin([...hand, tile], melds, gold);
 }
 
+/** 「第一张金必须上」：手中握有金牌、而本局一张都未亮出（未上金）时不得胡牌。
+ *  仅要求「手中持有的金」已上架——已亮出的金自然不在手牌中；
+ *  上金 0 张且手中无金（牌墙金母/已弃金牌等）：不构成违规，正常允许胡牌。
+ *  注意：即使胡牌型未用到金牌作万能补位，只要手握金未上，同样不能胡。
+ * @param {string[]} hand 当前手牌
+ * @param {string|null} gold 本局金牌
+ * @param {number} shangjinCount 本家本局累计亮金（上金）张数
+ * @returns {boolean} true 表示存在「有金未上」违规，禁止胡牌
+ */
+function isFirstGoldUnplayed(hand, gold, shangjinCount) {
+  if (!gold) return false;
+  if ((shangjinCount || 0) > 0) return false; // 已上过金（含消耗型上金后手牌无金），不限制
+  return countGold(hand, gold) > 0;
+}
+
 /** 贴金可碰：必须真实牌（金牌不可碰）且手牌同牌 ≥2 */
 function canPengTieJin(hand, tile, gold) {
   if (isGold(tile, gold)) return false;
@@ -1143,6 +1158,7 @@ module.exports = {
   countGold,
   checkHuTieJin,
   canHuTieJinWith,
+  isFirstGoldUnplayed,
   canPengTieJin,
   canGangTieJin,
   canAnGangTieJin,
