@@ -10,46 +10,8 @@
 // 修复：_hzTileTypes 按玩法分流，非红中房间返回全量 136 张牌型。
 
 const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { GameServer } = require('../src/game');
 const rules = require('../src/rules');
-
-function makeWs() {
-  const ws = { readyState: 1, sent: [], handlers: {}, pingCount: 0, terminated: false };
-  ws.on = (type, cb) => { ws.handlers[type] = cb; };
-  ws.send = (data) => { ws.sent.push(JSON.parse(data)); };
-  ws.ping = () => { ws.pingCount += 1; };
-  ws.terminate = () => {
-    if (ws.terminated) return;
-    ws.terminated = true;
-    ws.readyState = 3;
-    if (ws.handlers.close) ws.handlers.close();
-  };
-  return ws;
-}
-
-function send(ws, obj) {
-  ws.handlers.message(JSON.stringify(obj));
-}
-
-function lastOf(ws, type) {
-  const list = ws.sent.filter((m) => m.type === type);
-  return list.length ? list[list.length - 1] : null;
-}
-
-// 测试心跳参数：间隔注入极小值（10ms）避免 30s interval 挂住进程退出；
-// 丢失阈值放大——伪 ws 永不回 pong，沿用生产阈值 3 会在等待期间被误判死连接。
-const TEST_HEARTBEAT = { heartbeatIntervalMs: 10, heartbeatMaxMiss: 10000 };
-
-function newServer() {
-  return new GameServer({ gameLog: false, ...TEST_HEARTBEAT });
-}
-
-// 走服务端全量清理入口 stop()：按「所有曾创建的连接」清理，覆盖已离开房间 /
-// 已超时移除的 socket（它们不在当前 wsPlayers 里，自行遍历必然漏清其 interval）
-function cleanupServer(srv) {
-  srv.stop();
-}
+const { makeWs, send, lastOf, newServer, cleanupServer, assert } = require('../lib/testutils');
 
 const HONOR_TILES = ['e', 's', 'x', 'n', 'z', 'f', 'p'];
 

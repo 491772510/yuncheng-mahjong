@@ -10,62 +10,8 @@
 // 字牌整副胡只能自摸（金牌不代）、流局双开关（A摸完/B硬10墩）、流局杠分不计、
 // 结算字段完整性（金母/金牌/亮金数/金分/分项计算式/锁金状态）。
 const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { GameServer } = require('../src/game');
 const rules = require('../src/rules');
-
-// ---------- 测试工具（与 game-hongzhong.test.js 同构） ----------
-function makeWs() {
-  const ws = { readyState: 1, sent: [], handlers: {}, pingCount: 0, terminated: false };
-  ws.on = (type, cb) => { ws.handlers[type] = cb; };
-  ws.send = (data) => { ws.sent.push(JSON.parse(data)); };
-  ws.ping = () => { ws.pingCount += 1; };
-  ws.terminate = () => {
-    if (ws.terminated) return;
-    ws.terminated = true;
-    ws.readyState = 3;
-    if (ws.handlers.close) ws.handlers.close();
-  };
-  return ws;
-}
-
-function send(ws, obj) {
-  ws.handlers.message(JSON.stringify(obj));
-}
-
-function lastOf(ws, type) {
-  const list = ws.sent.filter((m) => m.type === type);
-  return list.length ? list[list.length - 1] : null;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function newServer() {
-  return new GameServer({ gameLog: false });
-}
-
-function cleanupServer(srv) {
-  // 优先走服务端全量清理入口：覆盖所有曾被创建的连接，避免只遍历 wsPlayers 漏掉已移除的 socket
-  if (typeof srv.stop === 'function') srv.stop();
-  for (const room of srv.rooms.values()) {
-    for (const t of room.timers.values()) clearTimeout(t);
-    room.timers.clear();
-  }
-  for (const ws of srv.wsPlayers.keys()) {
-    if (ws._heartbeatTimer) {
-      clearInterval(ws._heartbeatTimer);
-      ws._heartbeatTimer = null;
-    }
-  }
-  for (const p of srv.players.values()) {
-    if (p.disconnectTimer) {
-      clearTimeout(p.disconnectTimer);
-      p.disconnectTimer = null;
-    }
-  }
-}
+const { makeWs, send, lastOf, sleep, newServer, cleanupServer, assert, seededRng } = require('../lib/testutils');
 
 const BASE = {
   variant: 'tiejin',
@@ -73,9 +19,15 @@ const BASE = {
   totalRounds: 4,
 };
 
+// 固定随机种子，使金母确定性翻出 w5（金牌 = w5、庄家 = seat0）。
+// 这样下方所有硬编码手牌里用 w5 充当金牌的构造语义稳定，无需再逐用例覆盖 g.goldTile。
+// 注意：若未来 shuffle/发牌逻辑改动导致该 seed 不再翻 w5，优先重新选一个能翻 w5 的 seed，
+// 而非回到「事后覆盖 goldTile」的老路。
+const ROOM_SEED = 51;
+
 // 4 个真人满员自动开局（无 AI 干扰，测试全手动驱动）
 function makeRoom4(settings) {
-  const srv = newServer();
+  const srv = newServer({ rng: seededRng(ROOM_SEED) });
   const wss = [makeWs(), makeWs(), makeWs(), makeWs()];
   wss.forEach((ws, i) => {
     srv.handleConnection(ws);
@@ -88,9 +40,9 @@ function makeRoom4(settings) {
   return { srv, room, wss };
 }
 
-// ---------- 常用构造牌型（goldTile 统一固定为 w5，翻5→5，合法） ----------
+// ---------- 常用构造牌型（makeRoom4 用 seed=51 固定金母，金牌恒为 w5） ----------
 
-// h1：13 张听 w9（点炮/抢杠目标；含 1 张 w5——在 goldTile=w5 的用例里它就是手中金牌，
+// h1：13 张听 w9（点炮/抢杠目标；含 1 张 w5——金牌恒为 w5 时它就是手中金牌，
 //   因此使用它的用例必须把该家 shangjinCount 设为 ≥1，否则「首金必须亮出」会让其无法响应）
 const TING_W9_13 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2'];
 // h2：14 张自摸胡 w9（摸到 w9 自摸；同样含 w5，用它的用例需 shangjinCount ≥1）
@@ -98,7 +50,7 @@ const SELFHU_W9_14 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1'
 // h2b：14 张自摸胡、且不含金牌 w5 的自摸型（用于「首金必须上」之外的常规自摸验证）
 //   4 刻子 + 将：w1w1w1 / w2w2w2 / b1b1b1 / t1t1t1 / t2t2
 const SELFHU_NOGOLD_14 = ['w1', 'w1', 'w1', 'w2', 'w2', 'w2', 'b1', 'b1', 'b1', 't1', 't1', 't1', 't2', 't2'];
-// h3：13 张听 w9，含 1 张金牌 w5（万能）：w1w2w3 / w4w5w6 / w7w8+金(当w9) / t1t1t1 / t2t2
+// h3：13 张听 w9，含 2 张金牌 w5（一张当万能凑 w9，一张为手中剩余金牌）：w1w2w3 / w4w5w6 / w7w8+金(当w9) / t1t1t1 / t2t2
 const TING_W9_GOLD_13 = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w5', 't1', 't1', 't1', 't2'];
 // h4：14 张全字牌自摸胡：e/s/x/z 各3 + n 将2
 const ALL_HONOR_SELFHU = ['e', 'e', 'e', 's', 's', 's', 'x', 'x', 'x', 'z', 'z', 'z', 'n', 'n'];
@@ -139,8 +91,6 @@ test('贴金开局：136张、庄14闲13、翻金母定金牌、view含金牌/�
 test('点炮胡资格：未亮金不能点炮（无胡响应），亮过金才能点炮', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'b4', 'w6', 'w7', 'b1', 'b2', 'b3', 't2']; // 弃牌家不含金牌：首金未亮时任何牌都不能出，含金会让弃牌被拒
   g.hands[1] = TING_W9_13.slice(); // 未亮金
   g.hands[2] = PLAIN13.slice();
@@ -174,8 +124,6 @@ test('点炮胡资格：未亮金不能点炮（无胡响应），亮过金才�
 test('未亮金只能自摸：自摸胡不受亮金限制（手中无金时）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = SELFHU_NOGOLD_14.slice(); // 不含金牌 w5 的自摸胡型
   g.melds[0] = [];
   g.turn = 0;
@@ -191,8 +139,6 @@ test('未亮金只能自摸：自摸胡不受亮金限制（手中无金时）',
 test('首金必须亮出：手握金牌未亮则自摸胡被拒，亮金后即可胡', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 14 张自摸胡型，含 1 张金牌 w5（牌型本身不依赖金牌，但金未上 → 不得胡）
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
   g.melds[0] = [];
@@ -224,8 +170,6 @@ test('首金必须亮出：手握金牌未亮则自摸胡被拒，亮金后即�
 test('首金必须亮出：未上金时出牌提示不给胡、标记需要亮金', () => {
   const { srv, room } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
   g.melds[0] = [];
   g.turn = 0;
@@ -260,8 +204,6 @@ test('首金必须亮出：未上金时出牌提示不给胡、标记需要亮�
 test('首金必须亮出：有金未亮时任何牌都不能出（非金牌也拒），亮金后恢复出牌', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 手牌含 1 张未亮金牌 w5 + 13 张普通牌（含非金牌 b4 可打）
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 'b4'];
   g.melds = [[], [], [], []];
@@ -297,8 +239,6 @@ test('首金必须亮出：有金未亮时任何牌都不能出（非金牌也�
 test('首金必须亮出：有金未亮时即使能碰也不产生响应（seat 直接跳过）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // seat0 打 w9（自身不含金）
   g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'b3', 'w6', 'w7', 'b1', 'b2', 'b4', 't2'];
   // seat1 有 w9×2 可碰，但同时手握 1 张未亮金牌 w5 → 首金未亮，不能碰
@@ -338,8 +278,6 @@ test('首金必须亮出：有金未亮时即使能碰也不产生响应（seat 
 test('首金必须亮出：有金未亮时不能杠（暗杠/补杠均被拒）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 手牌含 w1×4（可暗杠）+ 未亮金牌 w5
   g.hands[0] = ['w1', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'b1', 'b2', 't1'];
   g.melds = [[], [], [], []];
@@ -371,8 +309,6 @@ test('首金必须亮出：有金未亮时不能杠（暗杠/补杠均被拒）'
 test('首金必须亮出：牌墙已尽无法亮金时放行出牌（不锁死）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'b1', 'b2', 'b3', 't1', 't2', 'b4'];
   g.melds = [[], [], [], []];
   g.shangjinCount = [0, 0, 0, 0];
@@ -396,8 +332,6 @@ test('首金必须亮出：牌墙已尽无法亮金时放行出牌（不锁死�
 test('首金必须亮出：牌墙已尽无法亮金时放行自摸胡（不锁死）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 含金牌 w5 的可胡型（w5 作牌型内真牌），但首金未亮
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
   g.melds = [[], [], [], []];
@@ -421,8 +355,6 @@ test('首金必须亮出：牌墙已尽无法亮金时放行自摸胡（不锁�
 test('亮金动作：摸牌后出牌前亮出 1 张金牌摆面前、牌尾补一张、手牌数不变、不轮转', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 14 张（摸牌后）含 2 张金牌 w5（1 真 1 金同码），亮金亮出 1 张后从牌尾补 1 张，手牌仍 14
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w5', 't1', 't1', 't1', 't2', 't2'];
   g.melds[0] = [];
@@ -447,8 +379,6 @@ test('亮金动作：摸牌后出牌前亮出 1 张金牌摆面前、牌尾补�
 test('金牌不能普通打出：_playTile 拒绝打出金牌', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 14 张含 2 张金牌 w5：尝试作为普通弃牌打出 w5 应被拒绝
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w5', 't1', 't1', 't1', 't2', 't2'];
   g.melds[0] = [];
@@ -469,8 +399,6 @@ test('金牌不能普通打出：_playTile 拒绝打出金牌', () => {
 test('规则锁金：连续亮金两张后自动锁定其他三家（本家不受锁）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 已亮金 1 张，手牌 14 张仍含 1 张金牌 w5；再亮金第 2 张即自动锁金
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
   g.melds[0] = [];
@@ -498,8 +426,6 @@ test('规则锁金：连续亮金两张后自动锁定其他三家（本家不�
 test('亮金数不足 2 不触发锁金（亮金 1 张保持未锁）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 手牌 14 张含 1 张金牌 w5，首次亮金仅达 1 张
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
   g.melds[0] = [];
@@ -520,8 +446,6 @@ test('亮金数不足 2 不触发锁金（亮金 1 张保持未锁）', () => {
 test('亮金条件放宽：碰后/13张手牌持有金牌即可亮金（不再要求手牌>=14）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 碰后未摸牌：手牌 13 张（碰后已打出牌），含 1 张金牌 w5
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'w5'];
   g.melds[0] = [{ type: 'peng', tile: 'b1', tiles: ['b1', 'b1', 'b1'] }];
@@ -555,8 +479,6 @@ test('亮金条件放宽：碰后/13张手牌持有金牌即可亮金（不再�
 test('贴金 AI 亮金策略：够 1 张就停（已有1张且这是最后一枚万能牌时保留不亮）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 已亮金 1 张，手上只剩 1 张金牌 w5（最后一枚万能牌）→ 应保留，不再亮金
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
   g.melds[0] = [];
@@ -575,8 +497,6 @@ test('贴金 AI 亮金策略：够 1 张就停（已有1张且这是最后一枚
 test('贴金 AI 亮金策略：已有1张但手上还有第2张金时继续亮；三金封顶后不再亮', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 已亮金 1 张，手上还有 2 张金牌 w5 → 亮完仍留 1 张万能牌，值得继续亮
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 'w5', 'w5'];
   g.melds[0] = [];
@@ -601,8 +521,6 @@ test('贴金 AI 亮金策略：已有1张但手上还有第2张金时继续亮�
 test('贴金 AI 亮金策略：被锁且已亮≥1张、亮完累计仍不足 2 张时不再亮金', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 已被锁金、已亮 1 张、手上仅 1 张金牌 w5 → 亮完累计 2 张其实已够点炮资格，但此局被锁未解除前
   // 仍按收益判断；改构造：已亮 1 张、手上 2 张金 → 亮完累计 3 张但锁未解 → 保守停手
   // 这里验证「被锁且 done>=1 且 inHand<2」的保留分支：done=1、inHand=1 → 保留万能牌不亮
@@ -623,8 +541,6 @@ test('贴金 AI 亮金策略：被锁且已亮≥1张、亮完累计仍不足 2 
 test('贴金 AI 亮金策略：碰后分支已亮1张且仅剩1张金时停手不亮', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 刚碰牌（碰后分支），已亮 1 张、手上仅剩 1 张金牌 w5 → 够 1 张就停，不再亮
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'w5'];
   g.melds[0] = [];
@@ -642,8 +558,6 @@ test('贴金 AI 亮金策略：碰后分支已亮1张且仅剩1张金时停手�
 test('被锁者只能自摸：被锁时点炮无胡响应；解锁后可点炮', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'b4', 'w6', 'w7', 'b1', 'b2', 'b3', 't2']; // 弃牌家不含金牌：首金未亮时任何牌都不能出，含金会让弃牌被拒
   g.hands[1] = TING_W9_GOLD_13.slice(); // 已上过金（设置），但被锁
   g.hands[2] = PLAIN13.slice();
@@ -683,8 +597,6 @@ test('被锁者只能自摸：被锁时点炮无胡响应；解锁后可点炮',
 test('锁金免疫：已上金两张的玩家触发锁金时不受锁，未上金两张者被锁', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // seat0 已亮 1 张，再亮第 2 张触发锁金；seat2 已累计上金 2 张（免疫），seat1/seat3 未满 2 张
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
   g.melds[0] = [];
@@ -707,8 +619,6 @@ test('锁金免疫：已上金两张的玩家触发锁金时不受锁，未上�
 test('锁金免疫：其余三家均已上金两张时触发锁金，无人被锁', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2', 'b1', 'w5'];
   g.melds[0] = [];
   g.shangjinCount = [1, 2, 2, 2]; // 其余三家均已上金两张 → 全免疫
@@ -732,8 +642,6 @@ test('锁金免疫：其余三家均已上金两张时触发锁金，无人被�
 test('三金封顶：亮金数超过 3 按 3 金计（计分 A：G=9）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = SELFHU_W9_14.slice();
   g.melds[0] = [];
   g.shangjinCount[0] = 5; // 超 3
@@ -753,8 +661,6 @@ test('三金封顶：亮金数超过 3 按 3 金计（计分 A：G=9）', () => 
 test('贴金七小对：14 张 7 对可自摸胡，加番 ×2（胡牌分翻倍、金分不变）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 7 个真对（不含金牌 w5），已上金 1 张（满足首金必须亮出）
   g.hands[0] = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'b8'];
   g.melds[0] = [];
@@ -780,8 +686,6 @@ test('贴金七小对：14 张 7 对可自摸胡，加番 ×2（胡牌分翻倍�
 test('贴金豪华七小对：含 4 张同牌加番 ×4', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w1', 'w1', 'w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7'];
   g.melds[0] = [];
   g.shangjinCount = [1, 0, 0, 0];
@@ -803,8 +707,6 @@ test('贴金豪华七小对：含 4 张同牌加番 ×4', () => {
 test('贴金七小对：含金牌万能凑对可胡；有明牌区时不算七对', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 6 对 + 1 真牌 + 1 金牌 w5 补对
   g.hands[0] = ['w1', 'w1', 'w2', 'w2', 'w3', 'w3', 't4', 't4', 't5', 't5', 'b7', 'b7', 'b8', 'w5'];
   g.melds[0] = [];
@@ -825,8 +727,6 @@ test('贴金七小对：含金牌万能凑对可胡；有明牌区时不算七�
 test('包胡判定：牌墙剩 ≤4 张时点炮为包胡，放炮者独赔三家', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // seat1 听 w9（已上金，无金牌手牌）；seat0 打出 w9
   g.hands[1] = TING_W9_13.slice();
   g.hands[2] = PLAIN13.slice();
@@ -873,8 +773,6 @@ test('包胡判定：牌墙剩 ≤4 张时点炮为包胡，放炮者独赔三�
 test('包胡不触发：牌墙剩 5 张（未进入阶段）时按正常点炮通赔', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[1] = TING_W9_13.slice();
   g.hands[2] = PLAIN13.slice();
   g.hands[3] = PLAIN13.slice();
@@ -903,8 +801,6 @@ test('包胡不触发：牌墙剩 5 张（未进入阶段）时按正常点炮�
 test('包胡不触发：自摸不收包胡限制（点炮才触发）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = SELFHU_NOGOLD_14.slice();
   g.melds[0] = [];
   g.shangjinCount = [1, 0, 0, 0];
@@ -925,8 +821,6 @@ test('包胡不触发：自摸不收包胡限制（点炮才触发）', () => {
 test('包胡阶段提示：牌墙剩 ≤4 张时 game_state 下发 baoHuZone=true', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.turn = 0;
   g.stage = 'draw';
   g.drawnTile = 'w1';
@@ -952,8 +846,6 @@ test('包胡阶段提示：牌墙剩 ≤4 张时 game_state 下发 baoHuZone=tru
 test('计分A 自摸：闲家胡1翻倍、金分3倍递增（2金=3），每家付 2×1+3=5', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.dealer = 1; // 胡家 seat0 为闲家
   g.hands[0] = SELFHU_W9_14.slice();
   g.melds[0] = [];
@@ -977,8 +869,6 @@ test('计分A 自摸：闲家胡1翻倍、金分3倍递增（2金=3），每家�
 test('计分A 点炮通赔：闲胡1、点炮者金分翻倍，另两闲各付 1+金', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'b4', 'w6', 'w7', 'b1', 'b2', 'b3', 't2']; // 弃牌家不含金牌：首金未亮时任何牌都不能出，含金会让弃牌被拒
   g.hands[1] = TING_W9_13.slice();
   g.hands[2] = PLAIN13.slice();
@@ -1008,8 +898,6 @@ test('计分A 点炮通赔：闲胡1、点炮者金分翻倍，另两闲各付 1
 test('计分A 庄家身份：庄家自摸胡2翻倍，2金时每家付 2×2+3=7', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.dealer = 0;
   g.hands[0] = SELFHU_W9_14.slice();
   g.melds[0] = [];
@@ -1028,8 +916,6 @@ test('计分A 庄家身份：庄家自摸胡2翻倍，2金时每家付 2×2+3=7'
 test('计分B 点炮：1金=5，base=胡1+庄1+金5=7，点炮付8、另两闲各7', () => {
   const { srv, room, wss } = makeRoom4({ scoreMode: 'B' });
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'b4', 'w6', 'w7', 'b1', 'b2', 'b3', 't2']; // 弃牌家不含金牌：首金未亮时任何牌都不能出，含金会让弃牌被拒
   g.hands[1] = TING_W9_13.slice();
   g.hands[2] = PLAIN13.slice();
@@ -1054,8 +940,6 @@ test('计分B 点炮：1金=5，base=胡1+庄1+金5=7，点炮付8、另两闲�
 test('计分B 庄家自摸共收 30（2金=15：每家 7+8? 口径为庄家身份×2 → dealerShare=base+3）', () => {
   const { srv, room, wss } = makeRoom4({ scoreMode: 'B' });
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.dealer = 0;
   g.hands[0] = SELFHU_W9_14.slice();
   g.melds[0] = [];
@@ -1075,8 +959,6 @@ test('计分B 庄家自摸共收 30（2金=15：每家 7+8? 口径为庄家身�
 test('计分B 偏家自摸：庄家份必须落到实际庄家座位（N1 庄家份额错配回归）', () => {
   const { srv, room, wss } = makeRoom4({ scoreMode: 'B' });
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.dealer = 2; // 庄家不是胡家下家（seat0 下家为 seat1），验证错配修复
   g.hands[0] = SELFHU_W9_14.slice();
   g.melds[0] = [];
@@ -1108,8 +990,6 @@ test('计分B 偏家自摸：庄家份必须落到实际庄家座位（N1 庄家
 test('截胡单响：多个玩家同时可胡时仅逆时针离点炮者最近者胡', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'b4', 'w6', 'w7', 'b1', 'b2', 'b3', 't2']; // 弃牌家不含金牌：首金未亮时任何牌都不能出，含金会让弃牌被拒
   g.hands[1] = TING_W9_13.slice();
   g.hands[2] = TING_W9_13.slice(); // seat2 也可胡
@@ -1137,8 +1017,6 @@ test('截胡单响：多个玩家同时可胡时仅逆时针离点炮者最近�
 test('过胡限制：点炮响应期内过胡后，获抓牌权前不能再胡', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w9', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'b4', 'w6', 'w7', 'b1', 'b2', 'b3', 't2']; // 弃牌家不含金牌：首金未亮时任何牌都不能出，含金会让弃牌被拒
   g.hands[1] = TING_W9_13.slice();
   g.hands[2] = ['w9', 'w9', 'w9', 'b5', 'b6', 'b7', 't3', 't3', 't3', 'b8', 'b9', 't4', 't4'];
@@ -1196,8 +1074,6 @@ test('过胡限制：点炮响应期内过胡后，获抓牌权前不能再胡',
 test('抢杠胡：补杠触发抢杠判定（截胡单响），被抢者当放炮者', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.melds[0] = [{ type: 'peng', tile: 'w6', tiles: ['w6', 'w6', 'w6'] }];
   g.hands[0] = ['w6', 'w1', 'w2', 'w3', 'w4', 'w7', 'w8', 't1', 't1', 't1', 't2', 't2'];
   g.hands[1] = ['w5', 'w5', 'w6', 'w7', 'w8', 'w9', 't3', 't3', 't3', 't4', 't5', 'b1', 'b2'];
@@ -1222,8 +1098,6 @@ test('抢杠胡：补杠触发抢杠判定（截胡单响），被抢者当放�
 test('暗杠不可抢：暗杠不进入抢杠响应', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w6', 'w6', 'w6', 'w6', 'w1', 'w2', 'w3', 'w4', 'w7', 'w8', 't1', 't1', 't2'];
   g.melds = [[], [], [], []];
   g.turn = 0;
@@ -1241,8 +1115,6 @@ test('暗杠不可抢：暗杠不进入抢杠响应', () => {
 test('字牌胡限制：全字牌胡只能自摸，不能点炮胡（金牌不代）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 点炮：seat1 全字牌听 n（13 张，真实字牌无金牌）
   g.hands[0] = ['n', 'w1', 'w1', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'b1', 'b2', 'b3', 't2'];
   g.hands[1] = ALL_HONOR_TING_N_13.slice();
@@ -1301,8 +1173,6 @@ test('流局开关B：剩10墩（20张）即黄庄；A模式下剩20张不流局
 test('流局杠分不计：本局杠分当场结算后在流局时全部回滚', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = ['w6', 'w6', 'w6', 'w6', 'w1', 'w2', 'w3', 'w4', 'w7', 'w8', 't1', 't1', 't2'];
   g.melds = [[], [], [], []];
   g.turn = 0;
@@ -1329,8 +1199,6 @@ test('流局杠分不计：本局杠分当场结算后在流局时全部回滚',
 test('谁胡谁坐庄：本局胡牌者下局坐庄，庄家胡牌连庄', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 自摸胡型须避开金牌 w5，否则触发「首金必须亮出」被拒
   g.hands[0] = SELFHU_NOGOLD_14.slice();
   g.melds[0] = [];
@@ -1352,8 +1220,6 @@ test('谁胡谁坐庄：本局胡牌者下局坐庄，庄家胡牌连庄', () =>
 test('结算字段完整：金母/金牌/亮金数/金分/分项计算式/锁金状态/各家手牌齐全', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   g.hands[0] = SELFHU_W9_14.slice();
   g.melds[0] = [];
   g.shangjinCount[0] = 2;
@@ -1388,7 +1254,8 @@ test('P0 贴金庄家起手含 4 张同牌可暗杠（drawnTile 应放行为起�
   const g = room.game;
   const dealer = g.dealer;
   assert.equal(g.hands[dealer].length, 14, '庄家起手 14 张');
-  // 固定金牌为 w9（不在本用例手牌内）：金母随机时若命中手牌，会触发「首金必须亮出」而拒绝暗杠
+  // 本用例手牌含 w5，seed 固定后金牌=w5，若不改金牌会因「首金必须亮出」拒绝暗杠；
+  // 故仅此一处覆盖为 w9（不在手牌内），验证「非金牌的 4 张同牌」可正常暗杠。
   g.goldTile = 'w9';
   g.goldMother = 'w9';
   // 起手 14 张：4 张 X 可暗杠（避开金牌，金牌不可杠），其余不成胡
@@ -1410,9 +1277,7 @@ test('P0 贴金庄家起手即胡可胡（drawnTile 应放行为起手第 14 张
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
   const dealer = g.dealer;
-  // 固定金牌为 w9（不在 SELFHU_NOGOLD_14 牌型内），确保不触发「首金必须亮出」
-  g.goldTile = 'w9';
-  g.goldMother = 'w9';
+  // SELFHU_NOGOLD_14 不含金牌 w5，seed 固定后金牌恒为 w5，不触发「首金必须亮出」
   g.hands[dealer] = SELFHU_NOGOLD_14.slice();
   g.melds = [[], [], [], []];
   g.shangjinCount = [0, 0, 0, 0];
@@ -1454,8 +1319,6 @@ test('P0 贴金庄家起手含金牌且未上金时不能胡（首金必须亮�
 test('P1 守卫：非当前回合座位的代打回调直接退出，不产生 AI stuck 误报', async () => {
   const { srv, room } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 静态构造：座位 0 当前出牌，座位 1 托管但并非动作点（非其回合、无待响应）
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w9', 't1', 't1', 't1', 't2', 't2'];
   g.hands[1] = PLAIN13.slice();
@@ -1488,8 +1351,6 @@ test('P1 守卫：非当前回合座位的代打回调直接退出，不产生 A
 test('P1 守卫：当前回合动作被拒（状态未推进）仍触发重试与 AI stuck 真信号', async () => {
   const { srv, room } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 座位 0 当前出牌且托管；stub _playTile 模拟"该动却被拒"（不推进任何状态）。
   // 手牌避开金牌且不成胡/无杠，确保决策分支稳定走 play
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w6', 'w7', 'w8', 'w9', 'b1', 'b2', 'b3', 't1', 't2', 't3'];
@@ -1529,8 +1390,6 @@ test('P1 守卫：当前回合动作被拒（状态未推进）仍触发重试�
 test('P2 放行：手牌全金牌且已上金（首金已亮）时 _playTile 放行打出金牌，不再拒收卡死', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 摸牌后 14 张全金牌：无任何非金牌可打，亮金走不通时必须能强制打出
   // 前提：首金已亮（shangjinCount>=1），否则属「首金必须亮出」需先亮金（另见对应用例）
   g.hands[0] = new Array(14).fill('w5');
@@ -1554,8 +1413,6 @@ test('P2 放行：手牌全金牌且已上金（首金已亮）时 _playTile 放
 test('首金必须亮出：未上金且手中仅剩金牌时 _playTile 拒绝弃金甩首金', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 14 张全金牌、首金未上：不能靠弃牌甩掉首金，必须先亮金
   g.hands[0] = new Array(14).fill('w5');
   g.melds = [[], [], [], []];
@@ -1577,8 +1434,6 @@ test('首金必须亮出：未上金且手中仅剩金牌时 _playTile 拒绝弃
 test('P2 仍有替代时拒绝：手牌含非金牌时打金牌仍被拒（保留规则保护）', () => {
   const { srv, room, wss } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   // 14 张含 2 张金牌 w5 + 12 张普通牌：有替代可打，金牌仍不得作为普通出牌
   g.hands[0] = ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8', 'w5', 't1', 't1', 't1', 't2', 't2'];
   g.melds = [[], [], [], []];
@@ -1599,8 +1454,6 @@ test('P2 仍有替代时拒绝：手牌含非金牌时打金牌仍被拒（保�
 test('P2 AI 全链路：AI 碰后手牌全金牌且亮金走不通（三金封顶）时自动出牌放行金牌，整局不再卡死', async () => {
   const { srv, room } = makeRoom4({});
   const g = room.game;
-  g.goldTile = 'w5';
-  g.goldMother = 'w5';
   const seat = 1;
   const pl1 = room.players[seat];
   pl1.isAI = true; // AI 座位

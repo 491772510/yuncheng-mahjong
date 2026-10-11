@@ -6,6 +6,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { GameServer } = require('../src/game');
+// 复用共享 helper 的 newServer（注入极小心跳间隔 + 可复现 rng），此处保留本地 makeWs / countOf / helloId 辅助。
+const { newServer } = require('../lib/testutils');
 
 // ---------- 测试工具：伪 WebSocket 客户端 ----------
 function makeWs() {
@@ -40,30 +42,10 @@ function helloId(ws) {
   return hello.playerId;
 }
 
-function newServer() {
-  return new GameServer({ gameLog: false });
-}
-
 // 清理服务端所有定时器，避免 node --test 因 pending timer 拖慢退出
 function cleanupServer(srv) {
-  // 优先走服务端全量清理入口：覆盖所有曾被创建的连接，避免只遍历 wsPlayers 漏掉已移除的 socket
+  // stop() 以「句柄集合 + 全量登记」为准，覆盖已离开房间 / 已超时移除 / 从未 join 的连接
   if (typeof srv.stop === 'function') srv.stop();
-  for (const room of srv.rooms.values()) {
-    for (const t of room.timers.values()) clearTimeout(t);
-    room.timers.clear();
-  }
-  for (const ws of srv.wsPlayers.keys()) {
-    if (ws._heartbeatTimer) {
-      clearInterval(ws._heartbeatTimer);
-      ws._heartbeatTimer = null;
-    }
-  }
-  for (const p of srv.players.values()) {
-    if (p.disconnectTimer) {
-      clearTimeout(p.disconnectTimer);
-      p.disconnectTimer = null;
-    }
-  }
 }
 
 const BASE_SETTINGS = { aiFill: false, totalRounds: 4 };

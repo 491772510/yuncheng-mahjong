@@ -71,6 +71,9 @@ class GameServer {
     // 心跳参数可按实例注入（测试注入极小间隔便于快速收敛），缺省沿用模块级生产默认值
     this.heartbeatIntervalMs = positiveInt(opts.heartbeatIntervalMs, HEARTBEAT_INTERVAL_MS);
     this.heartbeatMaxMiss = positiveInt(opts.heartbeatMaxMiss, HEARTBEAT_MAX_MISS);
+    // 随机源可注入（测试注入可复现种子，消除牌墙/金母/庄家的随机抖动），缺省用 Math.random。
+    // 覆盖的业务随机点：洗牌 shuffle、庄家随机 dealer；crypto 生成的 roomId/userId/secret 属标识符，不参与规则判定，不种子化。
+    this.rng = typeof opts.rng === 'function' ? opts.rng : Math.random;
     // 全局登记「所有曾创建」的心跳定时器（ws -> interval）。wsPlayers 只含当前在册连接，
     // 已离开房间/已超时移除/从未 join 的连接不在其中，仅遍历 wsPlayers 会漏清其 interval。
     this._heartbeatTimers = new Map();
@@ -971,7 +974,7 @@ class GameServer {
     room.roundNo = (room.roundNo || 0) + 1;
     const isHz = this._isHongZhong(room);
     const isTj = this._isTieJin(room);
-    const wall = rules.shuffle(isHz ? rules.createTiles112() : rules.createTiles());
+    const wall = rules.shuffle(isHz ? rules.createTiles112() : rules.createTiles(), this.rng);
     // 贴金：翻金母，从牌墙末翻一张作为金母（不参与摸牌），按对牌关系确定本局金牌
     const goldMother = isTj ? wall[wall.length - 1] : null;
     if (isTj) wall.pop();
@@ -1015,9 +1018,9 @@ class GameServer {
     } else if (room.dealer == null || !room.players[room.dealer]) {
       if (isTj) {
         const ownerSeat = room.players.findIndex((pl) => pl && pl.id === room.ownerId);
-        room.dealer = ownerSeat >= 0 ? ownerSeat : Math.floor(Math.random() * 4);
+        room.dealer = ownerSeat >= 0 ? ownerSeat : Math.floor(this.rng() * 4);
       } else {
-        room.dealer = Math.floor(Math.random() * 4);
+        room.dealer = Math.floor(this.rng() * 4);
       }
     } else if (isTj && room.lastFlowHadGang) {
       room.dealer = (room.dealer + 1) % 4; // 贴金流局有杠：下家坐庄

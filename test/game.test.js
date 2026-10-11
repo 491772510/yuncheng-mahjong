@@ -6,54 +6,9 @@
 // 3) 房主离线超 60 秒 AI 托管，本局结束后自动解散房间
 
 const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { GameServer, HEARTBEAT_MAX_MISS } = require('../src/game');
+const { HEARTBEAT_MAX_MISS } = require('../src/game');
 const rules = require('../src/rules');
-
-// ---------- 测试工具：伪 WebSocket 客户端 ----------
-function makeWs() {
-  const ws = { readyState: 1, sent: [], handlers: {}, pingCount: 0, terminated: false };
-  ws.on = (type, cb) => { ws.handlers[type] = cb; };
-  ws.send = (data) => { ws.sent.push(JSON.parse(data)); };
-  ws.ping = () => { ws.pingCount += 1; };
-  ws.terminate = () => {
-    if (ws.terminated) return;
-    ws.terminated = true;
-    ws.readyState = 3;
-    if (ws.handlers.close) ws.handlers.close();
-  };
-  return ws;
-}
-
-function send(ws, obj) {
-  ws.handlers.message(JSON.stringify(obj));
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function lastOf(ws, type) {
-  const list = ws.sent.filter((m) => m.type === type);
-  return list.length ? list[list.length - 1] : null;
-}
-
-// 测试心跳参数：间隔注入极小值（10ms），让挂在事件循环上的 interval 不再按生产
-// 的 30s 拖延进程退出；同时把「最大丢失次数」放大——伪 ws 永不回 pong，若沿用生产
-// 阈值 3，任何一次 sleep 都会被误判死连接而 terminate，污染其余用例的断言。
-// 需要真实 miss 语义的心跳用例自行用 newServer({ heartbeatMaxMiss: HEARTBEAT_MAX_MISS }) 覆盖。
-const TEST_HEARTBEAT = { heartbeatIntervalMs: 10, heartbeatMaxMiss: 10000 };
-
-function newServer(opts = {}) {
-  return new GameServer({ gameLog: false, ...TEST_HEARTBEAT, ...opts });
-}
-
-// 清理服务端所有定时器，避免 node --test 因 pending timer 拖慢退出。
-// 走服务端全量清理入口 stop()：它按「所有曾创建的连接」清理，覆盖已离开房间 /
-// 已超时移除 / 从未 join 的 socket —— 这些都不在当前 wsPlayers 里，自行遍历必然漏清。
-function cleanupServer(srv) {
-  srv.stop();
-}
+const { makeWs, send, sleep, lastOf, newServer, cleanupServer, assert } = require('../lib/testutils');
 
 const BASE_SETTINGS = { aiFill: true, totalRounds: 4, zhuangDi: false };
 

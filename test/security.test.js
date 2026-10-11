@@ -8,6 +8,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { GameServer } = require('../src/game');
+// 复用共享 helper 的 newServer（注入极小心跳间隔 + 可复现 rng），此处保留本地 makeWs 变体
+// （额外带 closed 字段 / close() 方法 / wsPool 池，用于重连与护栏断言）。
+const { newServer } = require('../lib/testutils');
 
 // ---------- 测试工具：伪 WebSocket 客户端（与 game.test.js 一致） ----------
 // 所有创建的 ws 入池，cleanupServer 统一清心跳定时器，避免 pending interval 挂住 worker
@@ -36,10 +39,6 @@ function send(ws, obj) {
 function lastOf(ws, type) {
   const list = ws.sent.filter((m) => m.type === type);
   return list.length ? list[list.length - 1] : null;
-}
-
-function newServer() {
-  return new GameServer({ gameLog: false });
 }
 
 const BASE_SETTINGS = { aiFill: true, totalRounds: 4 };

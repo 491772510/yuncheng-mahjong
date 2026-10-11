@@ -6,58 +6,8 @@
 // 无番制结算（自摸=2手底注+中码数×底注，抢杠/点炮=被抢者/放炮者包三家）、扎码中码翻倍、
 // 谁胡谁坐庄/流局连庄、无将牌限制、结算字段完整性。
 const { test } = require('node:test');
-const assert = require('node:assert/strict');
-const { GameServer } = require('../src/game');
 const rules = require('../src/rules');
-
-// ---------- 测试工具：伪 WebSocket 客户端 ----------
-function makeWs() {
-  const ws = { readyState: 1, sent: [], handlers: {}, pingCount: 0, terminated: false };
-  ws.on = (type, cb) => { ws.handlers[type] = cb; };
-  ws.send = (data) => { ws.sent.push(JSON.parse(data)); };
-  ws.ping = () => { ws.pingCount += 1; };
-  ws.terminate = () => {
-    if (ws.terminated) return;
-    ws.terminated = true;
-    ws.readyState = 3;
-    if (ws.handlers.close) ws.handlers.close();
-  };
-  return ws;
-}
-
-function send(ws, obj) {
-  ws.handlers.message(JSON.stringify(obj));
-}
-
-function lastOf(ws, type) {
-  const list = ws.sent.filter((m) => m.type === type);
-  return list.length ? list[list.length - 1] : null;
-}
-
-function newServer() {
-  return new GameServer({ gameLog: false });
-}
-
-function cleanupServer(srv) {
-  // 优先走服务端全量清理入口：覆盖所有曾被创建的连接，避免只遍历 wsPlayers 漏掉已移除的 socket
-  if (typeof srv.stop === 'function') srv.stop();
-  for (const room of srv.rooms.values()) {
-    for (const t of room.timers.values()) clearTimeout(t);
-    room.timers.clear();
-  }
-  for (const ws of srv.wsPlayers.keys()) {
-    if (ws._heartbeatTimer) {
-      clearInterval(ws._heartbeatTimer);
-      ws._heartbeatTimer = null;
-    }
-  }
-  for (const p of srv.players.values()) {
-    if (p.disconnectTimer) {
-      clearTimeout(p.disconnectTimer);
-      p.disconnectTimer = null;
-    }
-  }
-}
+const { makeWs, send, lastOf, newServer, cleanupServer, assert } = require('../lib/testutils');
 
 const BASE = {
   variant: 'hongzhong',

@@ -34,7 +34,7 @@
 | **测试覆盖** | `test/rules.test.js`(31) + `test/game.test.js`(51) + `test/ai.test.js`(10) + `test/koudian-zipai.test.js`(6) ≈ **98** | `test/rules-hongzhong.test.js`(36) + `test/game-hongzhong.test.js`(15) ≈ **51** | `test/rules-tiejin.test.js`(38) + `test/game-tiejin.test.js`(56) ≈ **94** |
 | **未实现 / 已移除** | 「开局扣点 1-4 点」**已移除**（`src/game.js:797`） | ① 番数表 / 2^番 ② 下炮子（`paoGain` 硬编码 0 `:1578`）③ 二五八将 ④ 胡牌模式 A/B **开关**（固定为 B） | 无（设计条目均已落地） |
 
-> 测试文件用例数为按文件统计的近似值；全量以 `npm test` 汇总为准：**350 pass / 0 fail**（19 个测试文件，2026-10-11 实测）。
+> 测试文件用例数为按文件统计的近似值；全量以 `npm test` 汇总为准：**351 pass / 0 fail**（21 个测试文件，2026-10-11 实测）。
 > 另有跨玩法测试：`game-logger.test.js`(5)、`security.test.js`(14)、`tts-bridge.test.js`(8)、`voice-signal.test.js`(5)、
 > `frontend-voice.test.js`(22)、`frontend-hand-interact.test.js`(16)。
 
